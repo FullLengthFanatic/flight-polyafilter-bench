@@ -4,7 +4,7 @@
 
 | Step | Wall time (h) | Max RSS (GB) | Exit |
 |---|---|---|---|
-| createTRANS_i | 0.00 | 0.0 | None |
+| createTRANS_i | running | running | running |
 | createDB | 5.74 | 0.2 | 0 |
 
 ## Exact match, 1417

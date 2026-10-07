@@ -2,7 +2,7 @@
 import json
 
 from pafbench.config import OUT, REPO
-from pafbench.report import parse_gnu_time
+from pafbench.report import parse_gnu_time, time_row
 
 
 def _j(p):
@@ -15,7 +15,7 @@ def main():
     for p in sorted((OUT / "1417" / "original").glob("*.time.txt")) + [OUT / "ref" / "createDB.time.txt"]:
         if p.exists():
             t = parse_gnu_time(p)
-            lines.append(f"| {p.name.replace('.time.txt', '')} | {t.get('elapsed_s', 0) / 3600:.2f} | {t.get('max_rss_gb', 0):.1f} | {t.get('exit_status')} |")
+            lines.append(time_row(p.name.replace('.time.txt', ''), t))
     em = _j(OUT / "1417" / "exact_match.json") or {}
     lines += ["", "## Exact match, 1417", "", "| Setting | Original removed | Reimpl removed | Only original | Only reimpl | Identical |", "|---|---|---|---|---|---|"]
     for tag, r in em.items():

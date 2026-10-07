@@ -13,3 +13,9 @@ def parse_gnu_time(path):
         elif line.startswith("Exit status"):
             out["exit_status"] = int(line.rsplit(" ", 1)[1])
     return out
+
+
+def time_row(name, parsed):
+    if "elapsed_s" not in parsed:
+        return f"| {name} | running | running | running |"
+    return f"| {name} | {parsed.get('elapsed_s', 0) / 3600:.2f} | {parsed.get('max_rss_gb', 0):.1f} | {parsed.get('exit_status')} |"
