@@ -22,13 +22,15 @@ All libraries: Cell Ranger 9.0.1, Single Cell 3' v4 (polyA) GEM-X, reference ref
 
 | Library | Material | Reads | Cells | Exonic | Intronic | Intergenic | Antisense | Mapped to genome | Spike-ins | include-introns | Local path |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 1417_HsRetina_D28_3k | adult retina nuclei | 97.4M | 5,571 | 33.9% | 41.1% | 5.3% | 12.2% | 85.4% | SIRV Set 4 | true | `/data/element_runs/1417_HsRetina_D28_3k/outs` |
-| 1419_HsRetina_D29_3k | adult retina nuclei | 90.1M | 5,114 | 32.6% | 42.7% | 5.4% | 13.3% | 85.2% | SIRV Set 4 | true | `/data/element_runs/1419_HsRetina_D29_3k/outs` |
+| 1417_HsRetina_D28_3k | adult retina nuclei, donor 28 | 97.4M | 5,571 | 33.9% | 41.1% | 5.3% | 12.2% | 85.4% | SIRV Set 4 | true | `/data/element_runs/1417_HsRetina_D28_3k/outs` |
+| 1419_HsRetina_D29_3k | adult retina nuclei, donor 29 | 90.1M | 5,114 | 32.6% | 42.7% | 5.4% | 13.3% | 85.2% | SIRV Set 4 | true | `/data/element_runs/1419_HsRetina_D29_3k/outs` |
 | 1179 | retinal organoid week 26, whole cells | 580.6M | 24,378 | 68.5% | 22.2% | 4.1% | 2.1% | 98.8% | none | false | `/data/element_runs/1179_organoid_wk26_10xv4/outs` |
 
 The 3k aliquots stand in for the 20k libraries of the same samples. The user states the chemistry is identical, so the priming bias should match. 1416_HsRetina_D28_20k is already local and was used for the pilot probes below; milestone 1 compares its chr1 templated fraction with 1417 as a cheap check of that assumption.
 
 SIRV Set 4 went into the RT master mix, so spike-ins are free RNA in every GEM. They test the chemistry, not nuclear context. In the 3k libraries, about 85% of a 200k sample of unplaced unmapped reads aligned to SIRV Set 4 (ERCC, SIRV E0, long SIRVs). Combined with the 14.6% to 14.8% unmapped rate, spike-ins are roughly 12% of reads (estimate).
+
+BD67 is a FLIGHT-seq library (BD Rhapsody Enhanced beads, PacBio long reads) made from the same organoid cell pool as 1179 after dissociation (user). Files in `gs://sc-ptf/FLIGHT_seq/Long_read/BD67/`; the aligned FLNC BAM is already local at `/data/element_runs/BD67/BD67_2x_RT.fltnc.aligned.bam` (35.9 GB). Reads carry no CB tag; read name to cell barcode (three 9-nt cell labels) and 8-nt UMI is in `BD67_strict_barcodes.tsv`. The gene matrix lists 200,894 barcodes and 26.7M molecules, so cell calling still has to be applied (knee data in `BD67_knee_plot_knee_data.tsv`). Observation on 2,000 reads: the bead sequence sits as soft clip directly next to the aligned cDNA at the transcript 3' end, with no poly(A) left, so the alignment end appears to mark the priming site. Milestone 1 confirms this before it is used.
 
 Other inputs:
 - Reference: `~/Documents/Genome_ref/refdata-gex-GRCh38-2024-A` (contigs identical to the BAM headers).
@@ -68,7 +70,11 @@ Pilot numbers (1416, chr1; molecule key without gene): 103,708 `pa` reads; 85,13
 
 Unplaced unmapped reads are pulled with CB, UB, `pa` and `ts`, clipped where tagged, and realigned splice-aware to SIRV Set 4 with STAR 2.7.10a, keeping tags with `--readFilesSAMattrKeep All` (present in this STAR build per `STAR --help`). In 20,000 unmapped 1416 records, CB was present on 97%, UB on 78%, `ts` on 727 and `pa` on 61. A spot check confirms tags survive realignment. ERCC and SIRV 3' ends are known, so `pa` sites are labeled by distance to the annotated end. The molecule logic of 4.1 then labels member reads exactly. ERCC UMI counts versus input amount give a count-accuracy check like the paper's ERCC analysis (r 0.91 to 0.94 after filtering). Lexogen concentrations and tail lengths are taken from the vendor documentation and cited.
 
-### 4.3 Not used as truth
+### 4.3 Long reads from the same cell pool (organoid only)
+
+BD67 gives priming sites for millions of molecules from the same cells, primed by a different oligo(dT) on different beads. Each read's 3' end is labeled with the same downstream A-count rule and hexamer check as in 4.1. Uses: (1) a sample-matched catalogue of 3' ends for 1179, including whole-isoform context (does the end sit in a 3' UTR, CDS or intron of an otherwise complete isoform); (2) a cross-chemistry comparison of which sites attract internal priming in both libraries; (3) cell-type labels for 1179, transferred by expression from annotated BD67 cells. Long-read support is not truth by itself, because the BD oligo(dT) can also prime on genomic A's; it is reported next to the 10x labels, not used to define them.
+
+### 4.4 Not used as truth
 
 Unfiltered clusters, PolyASite on its own, and filtered gene counts. They appear only in the descriptive analysis (section 8).
 
@@ -97,13 +103,13 @@ Positives are templated molecules, negatives are non-templated. Ambiguous molecu
 - Label-free check: hexamer rate in removed versus kept labeled molecules.
 - Uncertainty: bootstrap by gene, 1,000 resamples.
 
-**Selection rule, fixed before results:** on 1417, in each mode, take the setting with the highest molecule-level sensitivity subject to specificity of at least 0.95; break ties by fewer total reads removed. Report that setting, plus the published settings, on 1419 and on 1179 without retuning. If no setting reaches 0.95, report the frontier and do not pick one.
+**Selection rule, fixed before results:** on 1417 (donor 28), in each mode, take the setting with the highest molecule-level sensitivity subject to specificity of at least 0.95; break ties by fewer total reads removed. Report that setting, plus the published settings, on 1419 (donor 29, a donor-level hold-out) and on 1179 without retuning. If no setting reaches 0.95, report the frontier and do not pick one.
 
 ## 8. Nuclei versus cells, and downstream impact
 
 **Burden comparison.** Templated share among labeled molecules by region, in 1417, 1419 and 1179. Where possible, compare the same gene and the same site (site sequence, hexamer, distance to the annotated end). Tissue, maturity, cell-type mix and the cell/nucleus difference are confounded, so this stays descriptive.
 
-**Impact (descriptive only).** First, a BAM recount must reproduce the Cell Ranger filtered matrix within a stated tolerance. Starting definition: unique (CB, UB, GX) among reads with `xf` bit 1 set and bit 2 unset (10x BAM docs), adjusted until it matches, since how intronic reads are flagged under include-introns is not yet checked. Then, for the chosen settings and the published ones: per-cell UMI loss, intronic share, per-cell-type loss, cluster preservation and marker genes. The check is whether any cell type collapses, as the endothelial cluster did in the paper. Cell types are assigned with retinal marker genes unless annotations exist.
+**Impact (descriptive only).** First, a BAM recount must reproduce the Cell Ranger filtered matrix within a stated tolerance. Starting definition: unique (CB, UB, GX) among reads with `xf` bit 1 set and bit 2 unset (10x BAM docs), adjusted until it matches, since how intronic reads are flagged under include-introns is not yet checked. Then, for the chosen settings and the published ones: per-cell UMI loss, intronic share, per-cell-type loss, cluster preservation and marker genes. The check is whether any cell type collapses, as the endothelial cluster did in the paper. Cell types for 1179 come from BD67 annotations by label transfer; for 1417 and 1419 from retinal marker genes unless annotations exist.
 
 ## 9. Outputs and layout
 
@@ -133,6 +139,6 @@ Exit: a one-page note with these results and any change to this design.
 
 ## 12. Open questions
 
-1. What D28 and D29 denote. The hold-out (tune on 1417, test on 1419 and 1179) works either way, but the interpretation of transfer differs between two donors and two time points.
-2. Whether long-read data exists from the same cDNA. It would add a truth set independent of R2 structure.
-3. Whether cell-type annotations exist for these libraries.
+1. Location of the BD67 cell annotation (barcode to cell type). Not found under `gs://sc-ptf/FLIGHT_seq/` or `gs://sc-ptf/irina/`.
+2. Which BD library shares the cell pool with 1179: the user names BD67, while `10x_quick_analysis.R` next to the 1179 data compares it with `BD_45_Lib1182`.
+3. Whether annotations exist for the nuclei libraries 1417 and 1419.
