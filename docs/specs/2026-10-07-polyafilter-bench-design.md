@@ -30,7 +30,7 @@ The 3k aliquots stand in for the 20k libraries of the same samples. The user sta
 
 SIRV Set 4 went into the RT master mix, so spike-ins are free RNA in every GEM. They test the chemistry, not nuclear context. In the 3k libraries, about 85% of a 200k sample of unplaced unmapped reads aligned to SIRV Set 4 (ERCC, SIRV E0, long SIRVs). Combined with the 14.6% to 14.8% unmapped rate, spike-ins are roughly 12% of reads (estimate).
 
-BD67 is a FLIGHT-seq library (BD Rhapsody Enhanced beads, PacBio long reads) made from the same organoid cell pool as 1179 after dissociation (user). Files in `gs://sc-ptf/FLIGHT_seq/Long_read/BD67/`; the aligned FLNC BAM is already local at `/data/element_runs/BD67/BD67_2x_RT.fltnc.aligned.bam` (35.9 GB). Reads carry no CB tag; read name to cell barcode (three 9-nt cell labels) and 8-nt UMI is in `BD67_strict_barcodes.tsv`. The gene matrix lists 200,894 barcodes and 26.7M molecules, so cell calling still has to be applied (knee data in `BD67_knee_plot_knee_data.tsv`). Observation on 3,000 reads (chr12:6.53 to 6.54 Mb): the soft clip after the aligned 3' end starts with the bead poly(A) (the first 15 clipped bases are all A in 2,827 reads), followed by UMI and cell label. The poly(A) is not trimmed, so the aligner can absorb genome-encoded A's into the alignment. The priming site is therefore taken as the start of the read's terminal A run mapped back to the genome, which matches how Cell Ranger's pre-alignment trimming defines the `pa` site. Milestone 1 confirms this before it is used.
+BD67 and BD70 are FLIGHT-seq libraries (BD Rhapsody Enhanced beads, PacBio long reads) made from the same organoid cell pool as 1179 after dissociation; they are two slightly different, comparable versions of the FLIGHT-seq chemistry (user). Their aligned FLNC BAMs are local: `/data/element_runs/BD67/BD67_2x_RT.fltnc.aligned.bam` (35.9 GB) and `/data/element_runs/BD70/BD70.fltnc.aligned.bam` (42.7 GB). Details below were checked on BD67. Files in `gs://sc-ptf/FLIGHT_seq/Long_read/BD67/`; the aligned FLNC BAM is already local at `/data/element_runs/BD67/BD67_2x_RT.fltnc.aligned.bam` (35.9 GB). Reads carry no CB tag; read name to cell barcode (three 9-nt cell labels) and 8-nt UMI is in `BD67_strict_barcodes.tsv`. The gene matrix lists 200,894 barcodes and 26.7M molecules, so cell calling still has to be applied (knee data in `BD67_knee_plot_knee_data.tsv`). Observation on 3,000 reads (chr12:6.53 to 6.54 Mb): the soft clip after the aligned 3' end starts with the bead poly(A) (the first 15 clipped bases are all A in 2,827 reads), followed by UMI and cell label. The poly(A) is not trimmed, so the aligner can absorb genome-encoded A's into the alignment. The priming site is therefore taken as the start of the read's terminal A run mapped back to the genome, which matches how Cell Ranger's pre-alignment trimming defines the `pa` site. Milestone 1 confirms this before it is used.
 
 Other inputs:
 - Reference: `~/Documents/Genome_ref/refdata-gex-GRCh38-2024-A` (contigs identical to the BAM headers).
@@ -72,7 +72,7 @@ Unplaced unmapped reads are pulled with CB, UB, `pa` and `ts`, clipped where tag
 
 ### 4.3 Long reads from the same cell pool (organoid only)
 
-BD67 gives priming sites for millions of molecules from the same cells, primed by a different oligo(dT) on different beads. Each read's 3' end is labeled with the same downstream A-count rule and hexamer check as in 4.1. Uses: (1) a sample-matched catalogue of 3' ends for 1179, including whole-isoform context (does the end sit in a 3' UTR, CDS or intron of an otherwise complete isoform); (2) a cross-chemistry comparison of which sites attract internal priming in both libraries; (3) cell-type labels for 1179, transferred by expression from annotated BD67 cells. Long-read support is not truth by itself, because the BD oligo(dT) can also prime on genomic A's; it is reported next to the 10x labels, not used to define them.
+BD67 and BD70 give priming sites for millions of molecules from the same cells, primed by a different oligo(dT) on different beads. Each read's 3' end is labeled with the same downstream A-count rule and hexamer check as in 4.1. Uses: (1) a sample-matched catalogue of 3' ends for 1179, including whole-isoform context (does the end sit in a 3' UTR, CDS or intron of an otherwise complete isoform); (2) a cross-chemistry comparison of which sites attract internal priming in both libraries; Long-read support is not truth by itself, because the BD oligo(dT) can also prime on genomic A's; it is reported next to the 10x labels, not used to define them.
 
 ### 4.4 Not used as truth
 
@@ -109,12 +109,12 @@ Positives are templated molecules, negatives are non-templated. Ambiguous molecu
 
 **Burden comparison.** Templated share among labeled molecules by region, in 1417, 1419 and 1179. Where possible, compare the same gene and the same site (site sequence, hexamer, distance to the annotated end). Tissue, maturity, cell-type mix and the cell/nucleus difference are confounded, so this stays descriptive.
 
-**Impact (descriptive only).** First, a BAM recount must reproduce the Cell Ranger filtered matrix within a stated tolerance. Starting definition: unique (CB, UB, GX) among reads with `xf` bit 1 set and bit 2 unset (10x BAM docs), adjusted until it matches, since how intronic reads are flagged under include-introns is not yet checked. Then, for the chosen settings and the published ones: per-cell UMI loss, intronic share, per-cell-type loss, cluster preservation and marker genes. The check is whether any cell type collapses, as the endothelial cluster did in the paper. Cell types for 1179 come from BD67 annotations by label transfer; for 1417 and 1419 from retinal marker genes unless annotations exist.
+**Impact (descriptive only).** First, a BAM recount must reproduce the Cell Ranger filtered matrix within a stated tolerance. Starting definition: unique (CB, UB, GX) among reads with `xf` bit 1 set and bit 2 unset (10x BAM docs), adjusted until it matches, since how intronic reads are flagged under include-introns is not yet checked. Then, for the chosen settings and the published ones: per-cell UMI loss, intronic share, per-cell-type loss, cluster preservation and marker genes. The check is whether any cell type collapses, as the endothelial cluster did in the paper. No annotations exist for any of the libraries (user), so cell types are assigned from retinal marker genes in all three.
 
 ## 9. Outputs and layout
 
 - Code: `~/polyafilter_bench/`, numbered stage scripts as in `~/kinnex_concat_qc`, Python with pysam, pyranges, pandas and plotly.
-- Results: `/data/element_runs/polyafilter_bench/<library>/` (per-read and per-molecule tables as Parquet, JSON metrics) and a self-contained HTML report.
+- Results: `/data/element_runs/polyafilter_bench/<library>/` (per-read and per-molecule tables as Parquet, JSON metrics) and the final report published as an Artifact page that explains each step in plain terms next to its numbers.
 - Draft figure list: truth-set construction; label validation; burden by region in nuclei and cells; read-to-site distance (endogenous versus ERCC) against COVLEN; PR/ROC across the grid with published settings marked, on held-out libraries; impact per cell and per cell type; spike-in results.
 
 ## 10. Milestone 1 (about a day)
@@ -139,6 +139,4 @@ Exit: a one-page note with these results and any change to this design.
 
 ## 12. Open questions
 
-1. Location of the BD67 cell annotation (barcode to cell type). Not found under `gs://sc-ptf/FLIGHT_seq/` or `gs://sc-ptf/irina/`.
-2. Which BD library shares the cell pool with 1179: the user names BD67, while `10x_quick_analysis.R` next to the 1179 data compares it with `BD_45_Lib1182`.
-3. Whether annotations exist for the nuclei libraries 1417 and 1419.
+None open. Answered by the user on 2026-10-07: no cell annotations exist; BD67 and BD70 share the 1179 cell pool (BD45 appears in `10x_quick_analysis.R` only because it was the long-read data available at the time); D28 and D29 are donors.
