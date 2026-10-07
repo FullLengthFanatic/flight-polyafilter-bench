@@ -33,10 +33,12 @@ def gene_match(site_genes, member_genes):
     return bool(set(filter(None, site_genes.split(";"))) & set(filter(None, member_genes.split(";"))))
 
 
-def member_density(members, n_molecules, edges=EDGES):
-    """Unspliced members (dist3 >= -25) per bp per molecule, by dist5 bin."""
-    m = members[(~members.spliced) & (members.dist3 >= -25)]
-    counts, _ = np.histogram(m.dist5, bins=edges)
+def member_density(members, n_molecules, edges=EDGES, d5="dist5", d3="dist3", include_spliced=False):
+    """Members (d3 >= -25; unspliced only unless include_spliced) per bp per molecule, by d5 bin."""
+    m = members[members[d3] >= -25]
+    if not include_spliced:
+        m = m[~m.spliced]
+    counts, _ = np.histogram(m[d5], bins=edges)
     widths = np.diff(edges)
     return pd.DataFrame({"lo": edges[:-1], "hi": edges[1:], "n": counts, "density": counts / (widths * n_molecules)})
 

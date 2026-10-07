@@ -29,6 +29,7 @@ def main():
     lines += ["", "## Truth set, 1417", "",
               f"- Molecules: {coll.get('molecules')}; member reads: {coll.get('members')}; member cap: {coll.get('cap')} nt",
               f"- Collision background per bp: other chromosomes {coll.get('background_other_refs_per_bp')}, far same chromosome {coll.get('background_far_same_ref_per_bp')}",
+              f"- Exon-aware member distance: cap {coll.get('exon_aware', {}).get('cap')} nt; members by distance mode {coll.get('exon_aware', {}).get('mode_counts')}",
               f"- Label cut-offs: templated at A >= {cut.get('templated_min')}, non-templated at A <= {cut.get('nontemplated_max')} (tail rate {cut.get('tail_rate')}, background {cut.get('background_rate')})",
               "", "## Scope check (1416 vs 1417, chr1)", "", f"- go: {scope.get('go')}; molecules: {scope.get('molecules')}",
               "", "## Spike-in tags (1417)", "", f"- {json.dumps(tags.get('survival'))}; modules: {tags.get('modules')}",

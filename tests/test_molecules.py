@@ -44,3 +44,12 @@ def test_choose_cap():
     curve = member_density(members, n_molecules=100)
     background = curve[curve.lo == 100000].density.iloc[0]
     assert choose_cap(curve, background) == 750
+
+
+def test_member_density_columns_and_spliced():
+    members = pd.DataFrame({"dist5": [150, 4000], "dist3": [0, 0], "dist5_exon": [150, 250], "dist3_exon": [0, 0],
+                            "spliced": [False, True]})
+    default = member_density(members, n_molecules=1)
+    assert default.n.sum() == 1
+    exon = member_density(members, n_molecules=1, d5="dist5_exon", d3="dist3_exon", include_spliced=True)
+    assert exon.loc[exon.lo == 100, "n"].iloc[0] == 1 and exon.loc[exon.lo == 200, "n"].iloc[0] == 1

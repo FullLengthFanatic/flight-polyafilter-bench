@@ -4,6 +4,7 @@
 
 | Step | Wall time (h) | Max RSS (GB) | Exit |
 |---|---|---|---|
+| createTRANS_e | running | running | running |
 | createTRANS_i | running | running | running |
 | createDB | 5.74 | 0.2 | 0 |
 
@@ -16,6 +17,7 @@
 
 - Molecules: 144474; member reads: 83317; member cap: None nt
 - Collision background per bp: other chromosomes 7.548826882080716e-12, far same chromosome 2.0688074593967697e-09
+- Exon-aware member distance: cap None nt; members by distance mode {'genome': 46374, 'exon': 36943}
 - Label cut-offs: templated at A >= 8, non-templated at A <= 4 (tail rate 0.7715764184069488, background 0.020326367019753794)
 
 ## Scope check (1416 vs 1417, chr1)
