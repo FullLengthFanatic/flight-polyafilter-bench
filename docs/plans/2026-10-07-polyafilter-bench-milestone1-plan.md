@@ -2417,3 +2417,228 @@ git commit -m "Milestone 1 results table"
 ```
 
 The milestone exit note (one page, in the user's voice, interpreting `docs/m1_results.md` and listing any change to the spec) is written after this task and reviewed with the user before milestone 2 is planned.
+
+---
+
+### Task 14: Exon-aware member distance and member cap (added 2026-10-07 after the user's decision)
+
+The genomic member cap came out null on 1417: members 1 to 50 kb away in the genome were mostly reads in upstream exons of spliced molecules, about 300 nt from the site along the exons. The user decided: measure member distance along the gene's collapsed exons when both the read and the site lie in exons, and in the genome otherwise; then apply the same cap rule.
+
+**Files:**
+- Create: `pafbench/exons.py`, `tests/test_exons.py`
+- Modify: `pafbench/molecules.py` (`member_density` gains column and spliced options; default behavior unchanged), `tests/test_molecules.py` (one new test), `scripts/06_molecules.py` (exon-aware columns and cap), `scripts/11_m1_summary.py` (one line)
+
+**Interfaces:**
+- Consumes: `molecules.parquet` keys and `genes` labels (Task 8); `load_gene_segments`-style GTF parsing; `member_distances(a, site) -> (dist5, dist3)`; `choose_cap(curve, background)`.
+- Produces: `load_collapsed_exons(gtf) -> {gene_id: (starts, ends)}`; `exonic_bases(exons, a, b) -> int`; `inside_exons(exons, a, b) -> bool`; `exon_distances(blocks, is_reverse, site, exons) -> (d5, d3) | None`; `member_distance(blocks, is_reverse, site, site_genes, exons_by_gene, genomic) -> (d5, d3, mode)`; `member_density(members, n_molecules, edges=EDGES, d5="dist5", d3="dist3", include_spliced=False)`; members.parquet gains `dist5_exon, dist3_exon, dist_mode`; collisions.json gains an `exon_aware` block with `background_far_same_ref_per_bp, background_used, cap, mode_counts, curve`.
+
+Distances keep the sign convention of `member_distances`: forward reads `dist5 = site - read start`, `dist3 = site - read end`; reverse reads `dist5 = read end - site`, `dist3 = read start - site`; along exons the same intervals are measured in collapsed-exon bases, negative when the read passes the site. The site counts as exonic when its last cDNA base (site - 1 on the plus strand, site on the minus strand) lies in a collapsed exon; the read counts as exonic when every aligned block lies inside one collapsed exon. With several gene labels at the site, the smallest exon-aware dist5 wins.
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_exons.py`:
+```python
+import numpy as np
+
+from pafbench.exons import exon_distances, exonic_bases, inside_exons, member_distance
+
+EX = (np.array([100, 1000, 5000], np.int64), np.array([200, 1100, 5300], np.int64))
+
+
+def test_exonic_bases_and_inside():
+    assert exonic_bases(EX, 150, 1050) == 50 + 50
+    assert exonic_bases(EX, 300, 900) == 0
+    assert inside_exons(EX, 1010, 1090) and not inside_exons(EX, 1090, 1110) and not inside_exons(EX, 2000, 2090)
+
+
+def test_forward_upstream_exon_read():
+    # site 5200 (+): last cDNA base 5199 in exon 3; read wholly in exon 2
+    assert exon_distances([(1010, 1090)], False, 5200, EX) == (90 + 200, 10 + 200)
+
+
+def test_forward_spliced_read():
+    assert exon_distances([(1050, 1100), (5000, 5040)], False, 5200, EX) == (50 + 200, 160)
+
+
+def test_reverse_read():
+    # site 120 (-): last cDNA base 120 in exon 1; read in exon 2 lies upstream in transcript sense
+    assert exon_distances([(1010, 1090)], True, 120, EX) == (80 + 90, 80 + 10)
+
+
+def test_not_exonic_falls_back_to_genome():
+    assert exon_distances([(2000, 2090)], False, 5200, EX) is None      # intronic read
+    assert exon_distances([(1010, 1090)], False, 3000, EX) is None      # intronic site
+    d5, d3, mode = member_distance([(2000, 2090)], False, 5200, "g1", {"g1": EX}, (3200, 3110))
+    assert (d5, d3, mode) == (3200, 3110, "genome")
+
+
+def test_member_distance_picks_smallest_gene():
+    other = (np.array([900], np.int64), np.array([5300], np.int64))      # one long exon
+    d5, d3, mode = member_distance([(1010, 1090)], False, 5200, "g1;g2", {"g1": EX, "g2": other}, (4190, 4110))
+    assert (d5, mode) == (290, "exon")
+
+
+def test_read_passing_site_is_negative():
+    assert exon_distances([(5150, 5240)], False, 5200, EX) == (50, -40)
+```
+
+Append to `tests/test_molecules.py`:
+```python
+def test_member_density_columns_and_spliced():
+    members = pd.DataFrame({"dist5": [150, 4000], "dist3": [0, 0], "dist5_exon": [150, 250], "dist3_exon": [0, 0],
+                            "spliced": [False, True]})
+    default = member_density(members, n_molecules=1)
+    assert default.n.sum() == 1
+    exon = member_density(members, n_molecules=1, d5="dist5_exon", d3="dist3_exon", include_spliced=True)
+    assert exon.loc[exon.lo == 100, "n"].iloc[0] == 1 and exon.loc[exon.lo == 200, "n"].iloc[0] == 1
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/python -m pytest tests/test_exons.py tests/test_molecules.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'pafbench.exons'` and a `TypeError` for the new `member_density` arguments.
+
+- [ ] **Step 3: Write `pafbench/exons.py`**
+
+```python
+from collections import defaultdict
+
+import numpy as np
+
+
+def load_collapsed_exons(gtf):
+    """{gene_id: (starts, ends)}: union of the exons of all the gene's transcripts, sorted, 0-based half-open."""
+    ex = defaultdict(list)
+    with open(gtf) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            f = line.split("\t")
+            if f[2] != "exon":
+                continue
+            gid = f[8].split('gene_id "', 1)[1].split('"', 1)[0]
+            ex[gid].append((int(f[3]) - 1, int(f[4])))
+    out = {}
+    for gid, lst in ex.items():
+        lst.sort()
+        merged = []
+        for s, e in lst:
+            if merged and s <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+        arr = np.asarray(merged, np.int64)
+        out[gid] = (arr[:, 0].copy(), arr[:, 1].copy())
+    return out
+
+
+def exonic_bases(exons, a, b):
+    """Collapsed-exon bases in [a, b)."""
+    if b <= a:
+        return 0
+    s, e = exons
+    return int((np.clip(e, a, b) - np.clip(s, a, b)).sum())
+
+
+def _signed(exons, a, b):
+    return exonic_bases(exons, a, b) if a <= b else -exonic_bases(exons, b, a)
+
+
+def inside_exons(exons, a, b):
+    """True if [a, b) lies inside one collapsed exon."""
+    s, e = exons
+    i = int(np.searchsorted(s, a, side="right")) - 1
+    return i >= 0 and bool(e[i] >= b)
+
+
+def exon_distances(blocks, is_reverse, site, exons):
+    """(dist5, dist3) in collapsed-exon bases, or None if the site or any read block is not exonic."""
+    last_cdna = site if is_reverse else site - 1
+    if not inside_exons(exons, last_cdna, last_cdna + 1):
+        return None
+    if not all(inside_exons(exons, s, e) for s, e in blocks):
+        return None
+    r0, r1 = blocks[0][0], blocks[-1][1]
+    if is_reverse:
+        return _signed(exons, site, r1), _signed(exons, site, r0)
+    return _signed(exons, r0, site), _signed(exons, r1, site)
+
+
+def member_distance(blocks, is_reverse, site, site_genes, exons_by_gene, genomic):
+    """Exon-aware (dist5, dist3, mode): smallest exon distance over the site's genes, else the genomic pair."""
+    best = None
+    for g in filter(None, site_genes.split(";")):
+        ex = exons_by_gene.get(g)
+        if ex is None:
+            continue
+        d = exon_distances(blocks, is_reverse, site, ex)
+        if d is not None and (best is None or d[0] < best[0]):
+            best = d
+    if best is None:
+        return genomic[0], genomic[1], "genome"
+    return best[0], best[1], "exon"
+```
+
+- [ ] **Step 4: Change `member_density` in `pafbench/molecules.py`**
+
+Replace the function with:
+```python
+def member_density(members, n_molecules, edges=EDGES, d5="dist5", d3="dist3", include_spliced=False):
+    """Members (d3 >= -25; unspliced only unless include_spliced) per bp per molecule, by d5 bin."""
+    m = members[members[d3] >= -25]
+    if not include_spliced:
+        m = m[~m.spliced]
+    counts, _ = np.histogram(m[d5], bins=edges)
+    widths = np.diff(edges)
+    return pd.DataFrame({"lo": edges[:-1], "hi": edges[1:], "n": counts, "density": counts / (widths * n_molecules)})
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `.venv/bin/python -m pytest tests/test_exons.py tests/test_molecules.py -v`
+Expected: all pass (7 in test_exons.py, 5 in test_molecules.py).
+
+- [ ] **Step 6: Extend `scripts/06_molecules.py`**
+
+Add `from pafbench.exons import load_collapsed_exons, member_distance` to the imports and a module global `_EXONS = None`. In `_init`, add `global _EXONS` and `_EXONS = load_collapsed_exons(GTF)`. In `_work`, replace the member row with:
+```python
+                d5, d3 = member_distances(a, site)
+                e5, e3, mode = member_distance(a.get_blocks(), a.is_reverse, site, sgenes, _EXONS, (d5, d3))
+                mg = genes_at(_SEG, ref, not a.is_reverse, last_aligned_base(a))
+                rows.append([mol, a.query_name, d5, d3, "N" in a.cigarstring, a.is_duplicate, mg, gene_match(sgenes, mg), e5, e3, mode])
+    cols = ["mol", "qname", "dist5", "dist3", "spliced", "dup", "genes", "gene_match", "dist5_exon", "dist3_exon", "dist_mode"]
+```
+In `main`, after `out = {...}` is built and before it is written, add:
+```python
+    curve_x = member_density(members, len(mol), d5="dist5_exon", d3="dist3_exon", include_spliced=True)
+    bg_far_x = float(curve_x[curve_x.lo == 100000].density.iloc[0])
+    background_x = max(bg_other, bg_far_x)
+    out["exon_aware"] = {"background_far_same_ref_per_bp": bg_far_x, "background_used": background_x,
+                         "cap": choose_cap(curve_x, background_x),
+                         "mode_counts": members.dist_mode.value_counts().to_dict(),
+                         "curve": curve_x.to_dict(orient="records")}
+```
+and print `out["exon_aware"]["cap"]` with the other summary values.
+
+- [ ] **Step 7: Add the exon-aware cap to `scripts/11_m1_summary.py`**
+
+After the line printing the collision background, add:
+```python
+              f"- Exon-aware member distance: cap {coll.get('exon_aware', {}).get('cap')} nt; members by distance mode {coll.get('exon_aware', {}).get('mode_counts')}",
+```
+
+- [ ] **Step 8: Rerun on 1417 and regenerate the results table**
+
+```bash
+.venv/bin/python scripts/06_molecules.py 1417 --workers 12
+.venv/bin/python scripts/11_m1_summary.py
+```
+Expected: the genomic `cap` is still null; `exon_aware.cap` is one of the candidates (500 to 5,000). If the exon-aware cap is also null, record its curve and stop: the member rule goes back to the user.
+
+- [ ] **Step 9: Run the full suite and commit**
+
+```bash
+.venv/bin/python -m pytest -q
+git add pafbench/exons.py tests/test_exons.py pafbench/molecules.py tests/test_molecules.py scripts/06_molecules.py scripts/11_m1_summary.py docs/m1_results.md
+git commit -m "Exon-aware member distance and cap"
+```
