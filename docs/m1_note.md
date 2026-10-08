@@ -47,3 +47,4 @@ Recommendation: keep 8/4 as the primary labels, since they were fixed before any
 - More exact-match settings before the grid is trusted: MISM 0, COVLEN 600, the remove-all-non-terminal control (in-process, since the CLI cannot express it), and the published 275/9/1 and 180/11/2 in both modes, on 1417 and 1419.
 - Member filter applies `gene_match` and the 1,000 nt cap; molecules carry MAPQ; `parse_setting` rejects an integer 0.
 - Memory measured for the whole process tree, not the largest process.
+- Long-read acceptance (decided 2026-10-08): terminal A run of 10 or more (aligned plus clipped, one non-A allowed) followed by at least 30 nt of bead sequence; site at the run start; genome-wide sampling with read deduplication; per-site statistics; BD67/BD70 used once tail-primed sites carry the hexamer at least 3 times as often as internally primed sites.
