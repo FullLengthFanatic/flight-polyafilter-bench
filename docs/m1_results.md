@@ -4,14 +4,20 @@
 
 | Step | Wall time (h) | Max RSS (GB) | Exit |
 |---|---|---|---|
-| createTRANS_e | running | running | running |
-| createTRANS_i | running | running | running |
+| c300_l10_m1_e | 1.64 | 4.4 | 0 |
+| c300_l10_m1_i | 1.95 | 15.5 | 0 |
+| c375_l3_m2_i | 2.08 | 43.9 | 0 |
+| createTRANS_e | 5.89 | 0.7 | 0 |
+| createTRANS_i | 3.36 | 0.8 | 0 |
 | createDB | 5.74 | 0.2 | 0 |
 
 ## Exact match, 1417
 
 | Setting | Original removed | Reimpl removed | Only original | Only reimpl | Identical |
 |---|---|---|---|---|---|
+| c300_l10_m1_i | 17,068,514 | 17,068,514 | 0 | 0 | True |
+| c375_l3_m2_i | 46,808,565 | 46,808,565 | 0 | 0 | True |
+| c300_l10_m1_e | 3,729,928 | 3,729,928 | 0 | 0 | True |
 
 ## Truth set, 1417
 
