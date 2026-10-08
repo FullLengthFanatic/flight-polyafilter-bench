@@ -2,7 +2,7 @@
 
 ## Original polyAfilter on 1417
 
-| Step | Wall time (h) | Max RSS (GB) | Exit |
+| Step | Wall time (h) | Max RSS (GiB, largest single process) | Exit |
 |---|---|---|---|
 | c300_l10_m1_e | 1.64 | 4.4 | 0 |
 | c300_l10_m1_i | 1.95 | 15.5 | 0 |
@@ -10,6 +10,8 @@
 | createTRANS_e | 5.89 | 0.7 | 0 |
 | createTRANS_i | 3.36 | 0.8 | 0 |
 | createDB | 5.74 | 0.2 | 0 |
+
+Peak RSS is the largest single process; runs with -p 8 used more memory in total.
 
 ## Exact match, 1417
 
@@ -21,9 +23,12 @@
 
 ## Truth set, 1417
 
-- Molecules: 144474; member reads: 83317; member cap: None nt
+- Molecules: 144474; member reads: 83317
+- Member cap: fixed 1,000 nt of exon-aware distance (user decision); sensitivity at 500 and 2,000 nt
+- Members beyond the cap (population of 81004 candidate members with dist3_exon >= -25): 500 nt: 7467 members in 5159 molecules; 1,000 nt: 4406 members in 3160 molecules; 2,000 nt: 2665 members in 1976 molecules
+- Density-based cap rule (dropped): genomic None, exon-aware None
 - Collision background per bp: other chromosomes 7.548826882080716e-12, far same chromosome 2.0688074593967697e-09
-- Exon-aware member distance: cap None nt; members by distance mode {'genome': 46374, 'exon': 36943}
+- Exon-aware member distance: members by distance mode {'genome': 46374, 'exon': 36943}
 - Label cut-offs: templated at A >= 8, non-templated at A <= 4 (tail rate 0.7715764184069488, background 0.020326367019753794)
 
 ## Scope check (1416 vs 1417, chr1)
@@ -36,8 +41,8 @@
 
 ## Long-read ends (BD67, BD70)
 
-- BD67: {"reads": 50000, "frac_clip_a_ge10": 0.87376, "ratio_nontempl_templ": 545.2866228646518, "accept": true}
-- BD70: {"reads": 50000, "frac_clip_a_ge10": 0.86688, "ratio_nontempl_templ": 1184.7883065920541, "accept": true}
+- BD67: {"reads": 44274, "frac_clip_a_ge10": 0.6168631702579392, "ratio_nontempl_templ": 9.347270775720007, "accept": false}
+- BD70: {"reads": 44062, "frac_clip_a_ge10": 0.6226453633516409, "ratio_nontempl_templ": 8.665359380680455, "accept": false}
 
 ## UB on reads in 1179 (chr1)
 

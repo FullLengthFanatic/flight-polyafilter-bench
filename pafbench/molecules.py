@@ -50,3 +50,13 @@ def choose_cap(curve, background, candidates=(500, 750, 1000, 1500, 2000, 3000, 
         if len(sel) and bool((sel.density <= factor * background).all()):
             return d
     return None
+
+
+def beyond_cap(members, caps=(500, 1000, 2000), d5="dist5_exon", d3="dist3_exon"):
+    """For each cap: members (d3 >= -25) with d5 above the cap, and the molecules they belong to."""
+    m = members[members[d3] >= -25]
+    out = {"population": int(len(m))}
+    for c in caps:
+        far = m[m[d5] > c]
+        out[str(c)] = {"members": int(len(far)), "molecules": int(far.mol.nunique())}
+    return out

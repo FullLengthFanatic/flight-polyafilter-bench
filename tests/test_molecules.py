@@ -1,7 +1,7 @@
 import pandas as pd
 import pysam
 
-from pafbench.molecules import choose_cap, consolidate_sites, gene_match, member_density, member_distances
+from pafbench.molecules import beyond_cap, choose_cap, consolidate_sites, gene_match, member_density, member_distances
 
 
 def _pa(rows):
@@ -53,3 +53,11 @@ def test_member_density_columns_and_spliced():
     assert default.n.sum() == 1
     exon = member_density(members, n_molecules=1, d5="dist5_exon", d3="dist3_exon", include_spliced=True)
     assert exon.loc[exon.lo == 100, "n"].iloc[0] == 1 and exon.loc[exon.lo == 200, "n"].iloc[0] == 1
+
+
+def test_beyond_cap():
+    members = pd.DataFrame({"mol": [1, 1, 2, 3], "dist5_exon": [300, 1500, 2500, -5], "dist3_exon": [0, 0, 0, -30]})
+    r = beyond_cap(members)
+    assert r["population"] == 3
+    assert r["500"] == {"members": 2, "molecules": 2} and r["1000"] == {"members": 2, "molecules": 2}
+    assert r["2000"] == {"members": 1, "molecules": 1}
