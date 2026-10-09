@@ -27,6 +27,13 @@ def sense_context(fa, ref, site, is_reverse, down=20, up=40):
     return d, u
 
 
+def context_from_seq(seq, site, is_reverse, down=20, up=40):
+    """sense_context on a preloaded uppercase chromosome sequence (seq = fa.fetch(ref).upper())."""
+    if is_reverse:
+        return seq[max(0, site - down):site].translate(COMP)[::-1], seq[site:site + up].translate(COMP)[::-1]
+    return seq[site:site + down], seq[max(0, site - up):site]
+
+
 def has_hexamer(up40, lo=5, hi=35):
     """AATAAA or ATTAAA fully inside the window lo..hi nt upstream of the site."""
     n = len(up40)
