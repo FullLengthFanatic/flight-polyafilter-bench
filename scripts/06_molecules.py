@@ -8,10 +8,9 @@ import pandas as pd
 import pysam
 
 from pafbench.config import GTF, LIBRARIES, OUT
-from pafbench.exons import load_collapsed_exons, member_distance
-from pafbench.genes import genes_at, load_gene_segments
-from pafbench.molecules import choose_cap, consolidate_sites, gene_match, member_density, member_distances
-from pafbench.sites import last_aligned_base
+from pafbench.exons import load_collapsed_exons
+from pafbench.genes import load_gene_segments
+from pafbench.molecules import MEMBER_COLUMNS, choose_cap, consolidate_sites, member_density, member_rows
 
 _SEG = None
 _BY_K3 = None
@@ -27,24 +26,10 @@ def _init(by_k3):
 
 def _work(job):
     bam_path, ref = job
-    rows, coll = [], defaultdict(int)
+    coll = {}
     with pysam.AlignmentFile(str(bam_path)) as bam:
-        for a in bam.fetch(ref):
-            if a.is_secondary or a.is_supplementary or a.has_tag("pa") or not a.has_tag("CB") or not a.has_tag("UB"):
-                continue
-            hits = _BY_K3.get((a.get_tag("CB"), a.get_tag("UB"), "-" if a.is_reverse else "+"))
-            if not hits:
-                continue
-            for mol, mref, site, sgenes in hits:
-                if mref != ref:
-                    coll[mol] += 1
-                    continue
-                d5, d3 = member_distances(a, site)
-                e5, e3, mode = member_distance(a.get_blocks(), a.is_reverse, site, sgenes, _EXONS, (d5, d3))
-                mg = genes_at(_SEG, ref, not a.is_reverse, last_aligned_base(a))
-                rows.append([mol, a.query_name, d5, d3, "N" in a.cigarstring, a.is_duplicate, mg, gene_match(sgenes, mg), e5, e3, mode])
-    cols = ["mol", "qname", "dist5", "dist3", "spliced", "dup", "genes", "gene_match", "dist5_exon", "dist3_exon", "dist_mode"]
-    return pd.DataFrame(rows, columns=cols), dict(coll)
+        rows = member_rows(bam.fetch(ref), ref, _BY_K3, _SEG, _EXONS, coll)
+    return pd.DataFrame(rows, columns=MEMBER_COLUMNS), coll
 
 
 def main():

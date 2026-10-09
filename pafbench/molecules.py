@@ -2,9 +2,13 @@ import numpy as np
 import pandas as pd
 
 from .config import MEMBER_CAP
+from .exons import member_distance
+from .genes import genes_at
+from .sites import last_aligned_base
 
 EDGES = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000, 20000, 50000, 100000, 1000000]
 MOL_COLUMNS = ["mol", "cb", "ub", "strand", "ref", "site", "n_pa", "spread", "a20", "down20", "up40", "hexamer", "genes", "re", "mapq_min"]
+MEMBER_COLUMNS = ["mol", "qname", "dist5", "dist3", "spliced", "dup", "genes", "gene_match", "dist5_exon", "dist3_exon", "dist_mode"]
 
 
 def consolidate_sites(pa, max_spread=10):
@@ -34,6 +38,29 @@ def gene_match(site_genes, member_genes):
     if site_genes == "" and member_genes == "":
         return True
     return bool(set(filter(None, site_genes.split(";"))) & set(filter(None, member_genes.split(";"))))
+
+
+def member_rows(records, ref, by_k3, gene_segments, exons_by_gene, collisions=None):
+    """Member candidate rows (MEMBER_COLUMNS) from the records of one reference: primary, no pa tag, CB and UB matching a
+    molecule's (cb, ub, strand) key in by_k3 {key: [(mol, ref, site, genes)]}. Hits on molecules of another reference
+    give no row; they are counted per mol in collisions when a dict is passed."""
+    rows = []
+    for a in records:
+        if a.is_secondary or a.is_supplementary or a.has_tag("pa") or not a.has_tag("CB") or not a.has_tag("UB"):
+            continue
+        hits = by_k3.get((a.get_tag("CB"), a.get_tag("UB"), "-" if a.is_reverse else "+"))
+        if not hits:
+            continue
+        for mol, mref, site, sgenes in hits:
+            if mref != ref:
+                if collisions is not None:
+                    collisions[mol] = collisions.get(mol, 0) + 1
+                continue
+            d5, d3 = member_distances(a, site)
+            e5, e3, mode = member_distance(a.get_blocks(), a.is_reverse, site, sgenes, exons_by_gene, (d5, d3))
+            mg = genes_at(gene_segments, ref, not a.is_reverse, last_aligned_base(a))
+            rows.append([mol, a.query_name, d5, d3, "N" in a.cigarstring, a.is_duplicate, mg, gene_match(sgenes, mg), e5, e3, mode])
+    return rows
 
 
 def member_density(members, n_molecules, edges=EDGES, d5="dist5", d3="dist3", include_spliced=False):
