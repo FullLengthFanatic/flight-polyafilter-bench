@@ -1,26 +1,26 @@
 import pandas as pd
 import pysam
 
-from pafbench.molecules import beyond_cap, choose_cap, consolidate_sites, gene_match, member_density, member_distances
+from pafbench.molecules import beyond_cap, choose_cap, consolidate_sites, gene_match, member_density, member_distances, select_members
 
 
 def _pa(rows):
-    cols = ["cb", "ub", "strand", "ref", "site", "a20", "down20", "up40", "hexamer", "genes", "re"]
+    cols = ["cb", "ub", "strand", "ref", "site", "a20", "down20", "up40", "hexamer", "genes", "re", "mapq"]
     return pd.DataFrame(rows, columns=cols)
 
 
 def test_consolidate_drops_spread_and_missing_umi():
     pa = _pa([
-        ["c1", "u1", "+", "chr1", 100, 15, "A" * 20, "C" * 40, False, "g", "E"],
-        ["c1", "u1", "+", "chr1", 104, 15, "A" * 20, "C" * 40, False, "g", "E"],
-        ["c1", "u1", "+", "chr1", 109, 15, "A" * 20, "C" * 40, False, "g", "E"],
-        ["c2", "u2", "+", "chr1", 100, 3, "C" * 20, "C" * 40, True, "g", "E"],
-        ["c2", "u2", "+", "chr1", 200, 3, "C" * 20, "C" * 40, True, "g", "E"],
-        ["c3", None, "+", "chr1", 300, 3, "C" * 20, "C" * 40, True, "g", "E"],
+        ["c1", "u1", "+", "chr1", 100, 15, "A" * 20, "C" * 40, False, "g", "E", 255],
+        ["c1", "u1", "+", "chr1", 104, 15, "A" * 20, "C" * 40, False, "g", "E", 3],
+        ["c1", "u1", "+", "chr1", 109, 15, "A" * 20, "C" * 40, False, "g", "E", 255],
+        ["c2", "u2", "+", "chr1", 100, 3, "C" * 20, "C" * 40, True, "g", "E", 255],
+        ["c2", "u2", "+", "chr1", 200, 3, "C" * 20, "C" * 40, True, "g", "E", 255],
+        ["c3", None, "+", "chr1", 300, 3, "C" * 20, "C" * 40, True, "g", "E", 255],
     ])
     mol = consolidate_sites(pa)
     assert len(mol) == 1
-    assert mol.iloc[0].site == 104 and mol.iloc[0].n_pa == 3
+    assert mol.iloc[0].site == 104 and mol.iloc[0].n_pa == 3 and mol.iloc[0].mapq_min == 3
 
 
 def test_member_distances():
@@ -61,3 +61,10 @@ def test_beyond_cap():
     assert r["population"] == 3
     assert r["500"] == {"members": 2, "molecules": 2} and r["1000"] == {"members": 2, "molecules": 2}
     assert r["2000"] == {"members": 1, "molecules": 1}
+
+
+def test_select_members():
+    m = pd.DataFrame({"gene_match": [True, True, False, True, True],
+                      "dist3_exon": [0, -26, 0, -25, 10], "dist5_exon": [1000, 50, 50, 50, 1001]})
+    assert select_members(m).index.tolist() == [0, 3]
+    assert select_members(m, cap=2000).index.tolist() == [0, 3, 4]

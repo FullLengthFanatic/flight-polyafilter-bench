@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from .config import A_BANDS, LABEL_CUTOFFS
+
 
 def hexamer_curve(mol):
     g = mol.groupby("a20").hexamer.agg(["size", "mean"])
@@ -43,3 +45,19 @@ def compare_shares(a, b, threshold=0.05):
     j["diff"] = j.share_b - j.share_a
     j["flag"] = j["diff"].abs() > threshold
     return j
+
+
+def a_band(a20, bands=A_BANDS):
+    """Reporting band of a downstream A count ('' outside every band)."""
+    for name, lo, hi in bands:
+        if lo <= a20 <= hi:
+            return name
+    return ""
+
+
+def label_molecules(mol, cutoffs=LABEL_CUTOFFS):
+    """Adds label (templated / nontemplated / ambiguous) and a_band from a20."""
+    a = mol.a20.to_numpy()
+    label = np.where(a >= cutoffs["templated_min"], "templated",
+                     np.where(a <= cutoffs["nontemplated_max"], "nontemplated", "ambiguous"))
+    return mol.assign(label=label, a_band=[a_band(int(x)) for x in a])

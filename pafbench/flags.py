@@ -51,7 +51,10 @@ def setting_tag(s):
 
 
 def parse_setting(text):
+    """'COVLEN,MINSNRLEN|none,MISM,i|e'. 'none' is the remove-all-non-terminal control; 0 is refused because the CLI's 0 is not that control."""
     c, l, m, mode = text.split(",")
+    if l != "none" and int(l) == 0:
+        raise ValueError("MINSNRLEN 0 is not the remove-all control; write 'none'")
     return Setting(int(c), None if l == "none" else int(l), int(m), mode == "i")
 
 
