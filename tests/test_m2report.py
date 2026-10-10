@@ -506,7 +506,7 @@ def test_selection_section(base):
     assert "| Mode | Chosen setting (on 1417) |" in s
     assert "| -i | c300_l10_m1_i | 0.237 | 0.990 | 0.997 | 120 / 189 |" in s
     assert "| default | none reached specificity 0.95 | n/a | n/a | n/a | 0 / 189 |" in s
-    assert "| c150_l3_m2_e | 0.410 | 0.900 |" in s and "| c300_l10_m1_e | 0.036 | 0.994 |" in s
+    assert "| c150_l3_m2_e |  | 0.410 | 0.900 |" in s and "| c300_l10_m1_e |  | 0.036 | 0.994 |" in s
     # chosen and published at once; molecule-level CIs only (the read-level row is not used)
     assert ("| c300_l10_m1_i | chosen (-i), published | 1417 | 41,369 | 2,786 | 0.237 [0.207, 0.259] | "
             "0.990 [0.985, 0.993] | 0.997 [0.996, 0.998] |") in s
@@ -516,7 +516,7 @@ def test_selection_section(base):
     assert "| c375_l3_m2_i | published | 1417 | 41,369 | 2,786 | 0.637 [0.562, 0.690] | 0.861 [n/a, n/a] |" in s
     assert "| c375_l3_m2_i | published | 1179 | n/a | n/a | n/a | n/a | n/a |" in s
     # molecule_weighted from metrics.parquet: 8,000 / 41,369 = 0.193, 2,700 / 2,786 = 0.969
-    assert "| Setting | Library | Molecule (all reads) | Molecule (majority) | Molecule (weighted 1 / family size) | Read |" in s
+    assert "| Setting | Library | Molecule (all reads) | Molecule (majority) | Molecule (weighted 1 / reads in units) | Read |" in s
     assert "| c300_l10_m1_i | 1417 | 0.237 / 0.990 | 0.259 / 0.986 | 0.193 / 0.969 | 0.278 / 0.975 |" in s
     assert "| c375_l3_m2_i | 1417 | 0.637 / 0.861 | 0.656 / 0.848 | n/a | 0.677 / 0.828 |" in s
     # molecule-level clusters only (the read-level row, first in the file, has 13,500)
@@ -536,6 +536,36 @@ def test_selection_section(base):
     # (0.95 x 2,786 - 178) / (2,786 - 178) = 2,468.7 / 2,608 = 0.9466
     assert ("specificity >= 0.95 over all 2,786 non-templated units on 1417 is at least (0.95 x 2,786 - 178) / 2,608 = "
             "0.947 over the 2,608 genic ones") in s
+
+
+def test_selection_section_wording_matches_the_code(base):
+    s = m2report.selection_section(base)
+    # weighted level: 1 / number of the molecule's truth reads in the units (evaluate.units n_reads), not the UMI family size
+    assert "Molecule (weighted 1 / reads in units)" in s and "1 / family size" not in s
+    assert "each molecule counts 1 / (the number of its truth reads inside the units: pa reads and members within the cap)" in s
+    # molecules without a gene are intergenic and antisense (evaluate.gene_clusters)
+    assert "a 10 kb locus window for molecules without a gene (intergenic and antisense)" in s
+    # candidates per mode from the grid constants: 7 COVLEN x 9 MINSNRLEN x 3 MISM
+    assert "189 candidates per mode: 7 COVLEN x 9 MINSNRLEN x 3 MISM" in s
+    # column names say which class they count
+    assert "Templated removed at most" in s and "Non-templated removed at most" in s and "| Removed at most |" not in s
+    assert "Intergenic and antisense non-templated" in s
+    # published settings and where each comes from
+    assert "| Setting | Source |" in s
+    assert "| 300/10/1 | README example, not a tuned value |" in s
+    assert "| 275/9/1 | paper Fig. 4A optimum, 10x PBMC1 |" in s
+    assert "| 180/11/2 | paper Fig. 4A optimum, 10x PBMC2 |" in s
+    assert "| 375/3/2 | paper Fig. 4A optimum, 10x mouse cortex nuclei with intronic counting |" in s
+    assert "only through reads elsewhere" not in s and "polyAfilter's windows lie on expressed transcripts" not in s
+    # the chosen setting's frontier is printed too, with the chosen and published settings marked
+    sel = json.loads((base / "eval/selection.json").read_text())
+    sel["modes"]["i"]["selection"]["frontier"] = [["c150_l3_m2_i", 0.7, 0.7], [I1, 0.2368, 0.9896]]
+    (base / "eval/selection.json").write_text(json.dumps(sel))
+    s = m2report.selection_section(base)
+    t = s.split("Frontier, -i mode")[1]
+    assert "| Setting | Role | Sens | Spec |" in t
+    assert "| c150_l3_m2_i |  | 0.700 | 0.700 |" in t
+    assert "| c300_l10_m1_i | chosen (-i), published | 0.237 | 0.990 |" in t
 
 
 def test_selection_section_remove_all_control(base):
