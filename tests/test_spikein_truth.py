@@ -243,14 +243,15 @@ def test_spike_summary():
 
 def test_merge_scans_order_with_several_re_values():
     def region(rows):
-        return pd.DataFrame(rows, columns=["tag", "re", "removed", "total"])
+        return pd.DataFrame(rows, columns=["tag", "re", "removed", "total", "total_nondup"])
     # contig 1 has E and N, contig 2 has I and E; first appearance order would be t1E t1N t2E t2N t1I t2I
-    r1 = region([("t1", "E", 1, 10), ("t1", "N", 2, 20), ("t2", "E", 3, 10), ("t2", "N", 4, 20)])
-    r2 = region([("t1", "E", 5, 7), ("t1", "I", 6, 9), ("t2", "E", 0, 7), ("t2", "I", 1, 9)])
+    r1 = region([("t1", "E", 1, 10, 8), ("t1", "N", 2, 20, 20), ("t2", "E", 3, 10, 8), ("t2", "N", 4, 20, 20)])
+    r2 = region([("t1", "E", 5, 7, 5), ("t1", "I", 6, 9, 9), ("t2", "E", 0, 7, 5), ("t2", "I", 1, 9, 9)])
     t1 = pd.DataFrame({"qname": ["a"], "ref": ["x"], "pos": [1], "flag": [0], "t1": [True], "t2": [False]})
     t2 = pd.DataFrame({"qname": ["b", "c"], "ref": ["y", "y"], "pos": [5, 9], "flag": [16, 0], "t1": [False, True],
                        "t2": [True, True]})
     truth, reg = merge_scans([(t1, r1), (t2, r2)], ["t1", "t2"])
     assert truth.qname.tolist() == ["a", "b", "c"] and truth.index.tolist() == [0, 1, 2]
     assert list(reg.itertuples(index=False, name=None)) == [
-        ("t1", "E", 6, 17), ("t1", "I", 6, 9), ("t1", "N", 2, 20), ("t2", "E", 3, 17), ("t2", "I", 1, 9), ("t2", "N", 4, 20)]
+        ("t1", "E", 6, 17, 13), ("t1", "I", 6, 9, 9), ("t1", "N", 2, 20, 20), ("t2", "E", 3, 17, 13),
+        ("t2", "I", 1, 9, 9), ("t2", "N", 4, 20, 20)]

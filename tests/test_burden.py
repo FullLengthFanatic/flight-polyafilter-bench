@@ -112,11 +112,12 @@ def test_same_gene_spearman_and_min_n():
 def test_selection_bias():
     mol = pd.DataFrame({"re": ["E", "E", "N", "I", None]})
     rc = pd.DataFrame({"tag": ["t1"] * 4 + ["t2"] * 4, "re": ["E", "N", "I", ""] * 2, "removed": [5, 1, 1, 0] * 2,
-                       "total": [60, 20, 15, 5] * 2})
+                       "total": [60, 20, 15, 5] * 2, "total_nondup": [30, 20, 10, 0] * 2})
     s = selection_bias(mol, rc).set_index("re")
-    assert list(s.columns) == ["labeled_share", "records_share"]
+    assert list(s.columns) == ["labeled_share", "records_share", "records_nondup_share"]
     assert s.labeled_share.to_dict() == pytest.approx({"": 0.2, "E": 0.4, "I": 0.2, "N": 0.2})
     assert s.records_share.to_dict() == pytest.approx({"": 0.05, "E": 0.6, "I": 0.15, "N": 0.2})
+    assert s.records_nondup_share.to_dict() == pytest.approx({"": 0.0, "E": 0.5, "I": 1 / 6, "N": 1 / 3})
     s = selection_bias(pd.DataFrame({"re": ["E"]}), rc).set_index("re")
     assert s.loc["N", "labeled_share"] == 0.0 and s.loc["E", "labeled_share"] == 1.0
 
@@ -149,7 +150,8 @@ def test_stage18_end_to_end(tmp_path):
         (base / lib / "truth").mkdir(parents=True)
         mol.to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
     (base / "1417" / "grid").mkdir()
-    pd.DataFrame({"tag": "t1", "re": ["E", "I"], "removed": [1, 2], "total": [30, 70]}).to_parquet(
+    pd.DataFrame({"tag": "t1", "re": ["E", "I"], "removed": [1, 2], "total": [30, 70],
+                       "total_nondup": [15, 70]}).to_parquet(
         base / "1417" / "grid" / "region_counts.parquet")
     env = dict(os.environ, PYTHONPATH=str(REPO))
     r = subprocess.run([sys.executable, str(REPO / "scripts" / "18_burden.py"), "--base", str(base), "--out", str(out),
@@ -176,6 +178,7 @@ def test_stage18_end_to_end(tmp_path):
     assert g.loc["nuclei_vs_cells", "n_genes"] == 3
     b = pd.read_parquet(out / "selection_bias.parquet")
     assert set(b.lib) == {"1417"} and b.set_index("re").records_share.to_dict() == {"E": 0.3, "I": 0.7}
+    assert b.set_index("re").records_nondup_share.to_dict() == pytest.approx({"E": 15 / 85, "I": 70 / 85})
     summ = json.loads((out / "summary.json").read_text())
     assert summ["groups"]["nuclei"] == ["1417", "1419"] and summ["share"]["1417"]["all"]["share_all"] == 0.5
     assert summ["share"]["cells"]["region"]["3UTR"]["total"] == 40

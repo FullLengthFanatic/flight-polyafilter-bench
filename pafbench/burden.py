@@ -91,10 +91,12 @@ def same_gene(a, b, min_n=20):
 
 
 def selection_bias(mol, region_counts):
-    """Share of labeled molecules per RE value ('' when absent) against the share of all primary records (totals of one tag)."""
+    """Share of labeled molecules per RE value ('' when absent) against the share of all primary records (records_share)
+    and of primary records without the duplicate flag (records_nondup_share); totals of one tag."""
     labeled = mol.re.fillna("").astype(str).value_counts(normalize=True)
-    rc = region_counts[region_counts.tag == region_counts.tag.iloc[0]].groupby("re").total.sum()
-    out = pd.concat([labeled.rename("labeled_share"), (rc / rc.sum()).rename("records_share")], axis=1).fillna(0.0)
+    rc = region_counts[region_counts.tag == region_counts.tag.iloc[0]].groupby("re")[["total", "total_nondup"]].sum()
+    out = pd.concat([labeled.rename("labeled_share"), (rc.total / rc.total.sum()).rename("records_share"),
+                     (rc.total_nondup / rc.total_nondup.sum()).rename("records_nondup_share")], axis=1).fillna(0.0)
     return out.rename_axis("re").sort_index().reset_index()
 
 

@@ -35,6 +35,7 @@ SETTINGS = [
 ]
 TAGS = [setting_tag(s) for s in SETTINGS]
 CELLS = ["GGGTTT-1", "AAACCC-1", "CCCGGG-1"]           # deliberately unsorted
+REGION_COLS = ["tag", "re", "removed", "total", "total_nondup"]
 CB_CYCLE = ["AAACCC-1", "CCCGGG-1", "GGGTTT-1", "TTTAAA-1", None]   # TTTAAA-1 is not a called cell
 RE_CYCLE = ["E", "N", "I", None]
 
@@ -57,6 +58,8 @@ def tagged(synth, tmp_path_factory):
                 a.flag |= 2048
             if i % 13 == 7:
                 a.flag |= 512
+            if i % 5 == 2:
+                a.flag |= 1024
             if a.is_secondary and prev is not None:
                 a.query_name = prev
             prev = a.query_name
@@ -79,7 +82,7 @@ def _region_long(prim):
     rows = []
     for re_, g in prim.groupby("re", sort=False):
         for t in TAGS:
-            rows.append((t, re_, int(g[t].sum()), len(g)))
+            rows.append((t, re_, int(g[t].sum()), len(g), int(((g.flag & 0x400) == 0).sum())))
     return sorted(rows)
 
 
@@ -243,13 +246,15 @@ def test_scan_reference_equals_flag_reference(synth, tagged, chunk):
         assert (truth.ref == ref).all()
         assert truth.pos.tolist() == prim.pos.tolist() and truth.flag.tolist() == prim.flag.tolist()
         assert np.array_equal(truth[TAGS].to_numpy(), prim[TAGS].to_numpy())
-        assert sorted(region[["tag", "re", "removed", "total"]].itertuples(index=False, name=None)) == _region_long(prim)
+        assert sorted(region[REGION_COLS].itertuples(index=False, name=None)) == _region_long(prim)
         want = _cells_expected(prim, CELLS)
         assert cells.index.name == "cb" and cells.index.tolist() == sorted(CELLS)
         assert list(cells.columns) == ["total"] + TAGS
         assert (cells.dtypes == np.uint32).all()
         assert np.array_equal(cells.to_numpy(np.int64), want.to_numpy(np.int64))
         assert region.attrs["records"] == len(flag_reference(tagged, synth.fasta, ref, tx, SETTINGS[:1]))
+        assert 0 < (prim.flag & 0x400).astype(bool).sum() and (region.total_nondup <= region.total).all()
+        assert (region.total_nondup < region.total).any()
         n_removed += int(prim[TAGS].to_numpy().sum())
         assert set(region.re) <= {"E", "N", "I", "", "X"}
     assert n_removed > 0
@@ -431,7 +436,7 @@ def test_scan_reference_with_tiny_block_buffers(synth, tagged, monkeypatch, capa
                                               chunk=chunk)
         assert truth.qname.tolist() == prim.qname.tolist()
         assert np.array_equal(truth[TAGS].to_numpy(), prim[TAGS].to_numpy())
-        assert sorted(region[["tag", "re", "removed", "total"]].itertuples(index=False, name=None)) == _region_long(prim)
+        assert sorted(region[REGION_COLS].itertuples(index=False, name=None)) == _region_long(prim)
         assert np.array_equal(cells.to_numpy(np.int64), _cells_expected(prim, CELLS).to_numpy(np.int64))
         # 145 records on chrA; a buffer of at most 4 blocks forces far more flushes (two kernel calls each) than chunk 1000
         assert len(flushes) > 2 * 30
@@ -560,7 +565,8 @@ def test_stage13_empty_parts_keep_their_region_totals(stage13_inputs, stage13_fr
     assert np.array_equal(tf[tags].to_numpy(), want[tags].to_numpy())
     # but their primary records stay in the region totals: chrC adds I, I, "" and N (the duplicate counts, the secondary not)
     allp = pd.concat(prim.values(), ignore_index=True)
-    want_region = sorted((t, re_, int(g[t].sum()), len(g)) for re_, g in allp.groupby("re") for t in tags)
+    want_region = sorted((t, re_, int(g[t].sum()), len(g), int(((g.flag & 0x400) == 0).sum()))
+                         for re_, g in allp.groupby("re") for t in tags)
     assert sorted(region.itertuples(index=False, name=None)) == want_region
     assert prim["chrC"].re.tolist() == ["I", "I", "", "N"] and not prim["chrC"][tags].to_numpy().any()
     # chrB: t4 (+) has no read and t5 (-, 80 nt) is shorter than every COVLEN, so wholly protected: nothing removed

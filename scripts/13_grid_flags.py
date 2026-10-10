@@ -1,9 +1,10 @@
 """Stage 13: polyAfilter removal at every grid setting, streamed per reference (pafbench.stream).
 
-Writes OUT/LIB/grid/truth_flags.parquet (primary records of truth reads), region_counts.parquet, cell_counts.parquet
-and summary.json. Per-reference parts go to grid/parts/; a reference whose json exists is not scanned again. Each part
-json names its inputs (truth file path, row count and sha256 of the qname column, number of settings); when they differ
-from this run's, the stage stops and asks for parts/ to be trashed (after a stage 12 rerun, for example).
+Writes OUT/LIB/grid/truth_flags.parquet (primary records of truth reads), region_counts.parquet (tag, re, removed, total,
+total_nondup: primary records without the duplicate flag), cell_counts.parquet and summary.json. Per-reference parts
+go to grid/parts/; a reference whose json exists is not scanned again. Each part json names its inputs (truth file
+path, row count and sha256 of the qname column, number of settings); when they differ from this run's, the stage
+stops and asks for parts/ to be trashed (after a stage 12 rerun, for example).
 
 Measured on 1417 chr1 (6.96M records, 396 settings, one worker, 2026-10-08): 202 s wall; worker peak RSS 2.71 GiB, of
 which 0.6 GiB is shared with the parent through fork (interpreter, GTF transcripts, truth qnames); memwatch tree peak
