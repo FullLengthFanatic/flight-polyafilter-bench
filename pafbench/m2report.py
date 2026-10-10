@@ -647,13 +647,14 @@ def spikein_section(base):
     out += table("molecule")
     out += ["", f"Metrics per module at the read level (a read counts as a unit; same file, cap {MEMBER_CAP:,} nt), sens / spec:", ""]
     out += table("read")
-    ex = next(((lib, t, m, r) for lib in dict.fromkeys(s.lib) for t in CONTROL_TAGS
+    t = CONTROL_TAGS[len(COVLENS)]
+    ex = next(((lib, m, r) for lib in dict.fromkeys(s.lib)
                if (m := s[(s.lib == lib) & (s.tag == t) & (s.level == "molecule") & (s.stratum == "all")].spec).size
                and (r := s[(s.lib == lib) & (s.tag == t) & (s.level == "read") & (s.stratum == "all")].spec).size), None)
     out += ["", "Molecule-level specificity cannot fail here, because the pa read of a "
                 "tail molecule ends in the protected 3' stretch, so the molecule is never fully removed" +
-            ("." if ex is None else f"; on {ex[0]} the control {ex[1]} reads {_r(ex[2].iloc[0])} at molecule level and "
-                                    f"{_r(ex[3].iloc[0])} at read level.")]
+            ("." if ex is None else f"; on {ex[0]} the control {t} reads {_r(ex[1].iloc[0])} at molecule level and "
+                                    f"{_r(ex[2].iloc[0])} at read level.")]
     return "\n".join(out)
 
 
