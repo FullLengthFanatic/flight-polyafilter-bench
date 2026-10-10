@@ -2,6 +2,7 @@
 prints "not run (missing ...)" with the absent file names instead of numbers."""
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +17,7 @@ from .regions import REGION_NAMES
 from .bd67 import read_outcome
 from .spikein import label_spike_site
 from .truth import in_population
-from .validation import run_stats
+from .validation import parse_tag, run_stats
 
 LIBS = NUCLEI + CELLS
 _SPIKE = inspect.signature(label_spike_site).parameters
@@ -466,8 +467,7 @@ def selection_section(base):
             fronts.append((mode, s["tag"], s["frontier"]))
     out += _table(["Mode", f"Chosen setting (on {sl})", "Sens", "Spec", "Prec", "Qualifying / candidates"], rows)
     out += ["", f"{N_CANDIDATES} candidates per mode: {len(COVLENS)} COVLEN x {len(MINLENS)} MINSNRLEN x {len(MISMS)} MISM (the "
-                "remove-all controls and the published settings off the grid are not candidates). Setting tags read "
-                "c<COVLEN>_l<MINSNRLEN>_m<MISM>_<e or i>, e = default mode, i = -i (introns)."]
+                "remove-all controls and the published settings off the grid are not candidates)."]
     roles = _chosen(sel)
     for mode, tag, front in fronts:
         out += ["", f"Frontier, {MODE_NAMES[mode]} mode ({'no setting chosen; ' if tag is None else ''}candidates not dominated in "
@@ -1176,8 +1176,78 @@ SECTIONS = (runs_section, truth_section, grid_section, selection_section, strata
             ercc_section, long_read_section, burden_section, validation_section)
 
 
+def headline(base):
+    """Chosen setting per mode with sensitivity and specificity and their 95% interval on each library, the population and
+    units, and the validation outcome; from eval/selection.json, eval/bootstrap.parquet and validation/exact_match_m2.json."""
+    base = Path(base)
+    out = ["## Headline", ""]
+    p = base / "eval" / "selection.json"
+    sel = _json(p)
+    if sel is None:
+        out.append(f"Headline: {_not_run(base, [p])}")
+    else:
+        libs, min_spec = sel["libraries"], sel["min_spec"]
+        out += [f"{_pop_text(sel)[:-1]}; member cap {sel['cap']:,} nt, {sel['cutoffs']} labels. Rule: {sel['rule']}", ""]
+        bp = base / "eval" / "bootstrap.parquet"
+        boot = _parquet(bp)
+        ci = {}
+        if boot is not None:
+            b = boot[(boot.level == "molecule") & (boot.cap == sel["cap"])]
+            ci = {(r.lib, r.tag, r.metric): (r.lo, r.hi) for r in b.itertuples()}
+        rows = []
+        for mode, d in sel["modes"].items():
+            s = d["selection"]
+            q = f"{s['n_qualifying']} / {s['n_candidates']}"
+            if s["tag"] is None:
+                none = "no candidates" if s["n_candidates"] == 0 else f"none reached specificity {min_spec:g}"
+                rows.append([MODE_NAMES[mode], none, "n/a", "n/a", "n/a", q] + ["n/a"] * 5)
+                continue
+            t = parse_tag(s["tag"])
+            for lib in libs:
+                m = d["metrics"].get(lib, {}).get("molecule")
+                rows.append([MODE_NAMES[mode], s["tag"], t.covlen, t.min_len, t.mism, q, lib] + (["n/a"] * 4 if not m else [
+                    _int(m["tp"] + m["fn"]), _int(m["tn"] + m["fp"])] + [_ci(m[k], *ci.get((lib, s["tag"], k), (None, None)))
+                                                                         for k in ("sens", "spec")]))
+        out += _table(["Mode", "Setting", "COVLEN", "MINSNRLEN", "MISM", "Qualifying / candidates", "Library", "Templated",
+                       "Non-templated", "Sens (95% interval)", "Spec (95% interval)"], rows)
+        if boot is None:
+            out += ["", f"Bootstrap: {_not_run(base, [bp])}"]
+    out += [""]
+    p = base / "validation" / "exact_match_m2.json"
+    em = _json(p)
+    if em is None:
+        out.append(f"Validation against the original tool: {_not_run(base, [p])}")
+    elif "complete" not in em:
+        out.append(f"Validation against the original tool (section 11): compared {em.get('n_compared', 'n/a')}, all identical "
+                   f"{em.get('all_identical', 'n/a')}, completeness not recorded.")
+    else:
+        ok = em.get("all_identical") and em["complete"]
+        out.append(f"Validation against the original tool (section 11): compared {em.get('n_compared', 'n/a')}, all identical "
+                   f"{em.get('all_identical', 'n/a')}, complete {'yes' if em['complete'] else 'no'}: "
+                   f"{'validated' if ok else 'not validated'} on these runs.")
+    return "\n".join(out)
+
+
+def _missing(sections):
+    """The header line on missing inputs: places per section and the files, from the rendered sections."""
+    per, files = {}, []
+    for name, text in sections:
+        n = text.count("not run")
+        if n:
+            per[name] = n
+        files += [f for m in re.findall(r"not run \(missing ([^)]*)\)", text) for f in m.split(", ") if f not in files]
+    if not per:
+        return "Missing inputs: none."
+    return (f"Missing inputs: {sum(per.values())} places ({'; '.join(f'{k}: {v}' for k, v in per.items())}). Files: "
+            + ", ".join(files) + ".")
+
+
 def render(base):
+    texts = [("headline", headline(base))] + [(f"section {i}", f(base)) for i, f in enumerate(SECTIONS, 1)]
     head = ["# Milestone 2 results (generated by scripts/21_m2_summary.py)", "",
             f"Inputs under `{base}`. Each section names the files its numbers come from; \"not run\" lists the files that "
-            "are absent.", ""]
-    return "\n".join(head) + "\n" + "\n\n".join(f(base) for f in SECTIONS) + "\n"
+            "are absent.", "",
+            "Setting tags read c<COVLEN>_l<MINSNRLEN>_m<MISM>_<e or i>: COVLEN, MINSNRLEN and MISM are polyAfilter's parameters "
+            "(spec 3); e is the default mode and i the -i mode (introns); l none is the remove-all control.", "",
+            _missing(texts), ""]
+    return "\n".join(head) + "\n" + "\n\n".join(t for _, t in texts) + "\n"

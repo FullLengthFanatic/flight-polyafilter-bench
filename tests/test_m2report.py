@@ -314,7 +314,7 @@ def base(tmp_path):
 def _sections(text):
     """{section number: its text} from a rendered page."""
     parts = text.split("\n## ")[1:]
-    return {int(p.split(".", 1)[0]): p for p in parts}
+    return {int(p.split(".", 1)[0]): p for p in parts if p.split(".", 1)[0].isdigit()}
 
 
 def test_empty_base_renders_every_section_as_not_run(tmp_path):
@@ -333,6 +333,11 @@ def test_empty_base_renders_every_section_as_not_run(tmp_path):
     assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s[9]
     assert "not run (missing burden/templated_share.parquet)" in s[10]
     assert "not run (missing validation/exact_match_m2.json)" in s[11]
+    head = text.split("\n## 1.")[0]
+    assert "## Headline" in head and "Headline: not run (missing eval/selection.json)" in head
+    assert "Validation against the original tool: not run (missing validation/exact_match_m2.json)" in head
+    # every missing input is listed once in the header, with the number of places
+    assert "Missing inputs:" in head and "eval/selection.json" in head
     # a base that does not exist at all behaves the same
     assert m2report.render(tmp_path / "absent") == text.replace(str(tmp_path), str(tmp_path / "absent"))
 
@@ -1226,3 +1231,40 @@ def test_render_and_script(base, tmp_path):
     assert out.read_text() == text
     line = json.loads(r.stdout.strip().splitlines()[-1])
     assert line == {"out": str(out), "sections": 11, "not_run": text.count("not run")}
+
+
+def test_headline_block(base):
+    text = m2report.render(base)
+    head = text.split("\n## 1.")[0]
+    assert head.index("## Headline") > head.index("# Milestone 2 results")
+    # population, units, cap, cut-offs and the rule text of selection.json
+    assert ("Computed on: all barcodes, molecules with a member read within the cap; member cap 1,000 nt, 8/4 labels. "
+            "Rule: highest molecule-level sensitivity with specificity >= 0.95 on 1417") in head
+    # chosen -i setting split into its parameters, its library rows with the bootstrap interval; the default mode chose none
+    assert "| Mode | Setting | COVLEN | MINSNRLEN | MISM | Qualifying / candidates | Library | Templated | Non-templated | " \
+           "Sens (95% interval) | Spec (95% interval) |" in head
+    assert "| -i | c300_l10_m1_i | 300 | 10 | 1 | 120 / 189 | 1417 | 41,369 | 2,786 | 0.237 [0.207, 0.259] | 0.990 [0.985, 0.993] |" in head
+    assert "| -i | c300_l10_m1_i | 300 | 10 | 1 | 120 / 189 | 1179 | 1,000 | 100 | 0.300 [n/a, n/a] | 0.950 [n/a, n/a] |" in head
+    assert "| default | none reached specificity 0.95 | n/a | n/a | n/a | 0 / 189 | n/a | n/a | n/a | n/a | n/a |" in head
+    # validation outcome from exact_match_m2.json (the fixture file is complete: false)
+    assert "Validation against the original tool (section 11): compared 3, all identical True, complete no: not validated on these runs." \
+        in head
+    (base / "eval/bootstrap.parquet").unlink()
+    assert "Bootstrap: not run (missing eval/bootstrap.parquet)" in m2report.headline(base)
+    p = base / "validation/exact_match_m2.json"
+    em = json.loads(p.read_text()) | {"complete": True}
+    p.write_text(json.dumps(em))
+    assert "complete yes: validated on these runs." in m2report.headline(base)
+    del em["complete"]
+    p.write_text(json.dumps(em))
+    assert "completeness not recorded" in m2report.headline(base)
+
+
+def test_header_defines_setting_tags_and_lists_missing_inputs(base):
+    text = m2report.render(base)
+    head = text.split("\n## Headline")[0]
+    assert ("Setting tags read c<COVLEN>_l<MINSNRLEN>_m<MISM>_<e or i>: COVLEN, MINSNRLEN and MISM are polyAfilter's parameters "
+            "(spec 3); e is the default mode and i the -i mode (introns); l none is the remove-all control.") in head
+    # the fixture lacks 1419 and 1179 inputs: counted per section, files listed once
+    assert "Missing inputs:" in head and "1419/grid/summary.json" in head and "section 3: " in head
+    assert "not run" not in head.split("Missing inputs:")[1]
