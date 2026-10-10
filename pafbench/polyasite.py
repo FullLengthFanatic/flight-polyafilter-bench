@@ -1,5 +1,8 @@
 """PolyASite 3.0 proximity of priming sites (spec 4.1). Reported next to the labels, never used to validate them: the atlas
-comes from 10x 3' reads primed by the same oligo(dT), and its sites are not screened for A-rich genome downstream."""
+comes from 10x 3' reads primed by the same oligo(dT), the v3.0 documentation describes no filter on A content downstream of a
+site, and on chr21 and chr22 the clusters file is not depleted of A-rich downstream sequence (our observation: 9,544 of
+465,261 sites, 2.05%, have 14 or more A's in the 20 nt downstream, against 3,282, 0.71%, for the same sites moved 1,000 nt
+upstream)."""
 from collections import defaultdict
 
 import numpy as np

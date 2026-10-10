@@ -762,6 +762,54 @@ def test_burden_section(base):
     assert "Same gene: not run (missing burden/same_gene.parquet)" in m2report.burden_section(base)
 
 
+def test_polyasite_wording_in_the_sources():
+    for f, n in (("pafbench/polyasite.py", 5), ("scripts/18_burden.py", 5)):
+        head = " ".join((REPO / f).read_text().splitlines()[:n])
+        assert "describes no filter on A content downstream of a site" in head, f
+        assert "9,544 of 465,261" in head and "3,282" in head, f
+        assert "keeps sites" not in head and "not screened" not in head, f
+
+
+def test_burden_section_templated_share_by_label_and_corrected(base):
+    s = m2report.burden_section(base)
+    assert "| Library | Labeled molecules | Templated share by label | Templated share, corrected |" in s
+    # 1,500 labeled; 0.8 x (1 - 0.0279) = 0.778; 1179: 0.8 x (1 - 0.0837) = 0.733
+    assert "| 1417 | 1,500 | 0.800 | 0.778 |" in s
+    assert "| 1179 | 1,500 | 0.800 | 0.733 |" in s
+    assert "removes the estimated tail-primed part of the templated class" in s
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    del sel["label_purity"]
+    p.write_text(json.dumps(sel))
+    assert "Templated share corrected: not run (eval/selection.json has no label_purity)" in m2report.burden_section(base)
+    p.unlink()
+    assert "Templated share corrected: not run (missing eval/selection.json)" in m2report.burden_section(base)
+
+
+def test_burden_section_selection_bias_without_the_duplicate_free_baseline(base):
+    s = m2report.burden_section(base)
+    assert "| Library | RE | Labeled share | Records share |" in s
+    assert "records_nondup_share" in s and "stage 13 predates it" in s
+    assert "cannot be applied" in s
+
+
+def test_burden_section_selection_bias_rule(base):
+    sb = pd.DataFrame([("1417", "E", 0.421, 0.407, 0.350), ("1417", "N", 0.48, 0.5, 0.49), ("1419", "I", 0.099, 0.093, 0.099)],
+                      columns=["lib", "re", "labeled_share", "records_share", "records_nondup_share"])
+    _write(base / "burden/selection_bias.parquet", sb)
+    s = m2report.burden_section(base)
+    assert "| Library | RE | Labeled share | Records share | Records share without PCR duplicates |" in s
+    assert "| 1417 | E | 0.421 | 0.407 | 0.350 |" in s
+    assert "stage 13 predates it" not in s
+    assert "all primary records" in s and "without the PCR-duplicate flag" in s and "intergenic records never carry the flag" in s
+    # 0.421 - 0.350 = 7.1 points; 0.48 - 0.49 = 1.0 and 0.099 - 0.099 = 0.0 are within 5
+    assert "more than 5 percentage points: 1417 E (labeled 0.421, without duplicates 0.350, 7.1 points)." in s
+    assert "conclusions there hold for the labeled population only" in s
+    sb["records_nondup_share"] = sb.labeled_share
+    _write(base / "burden/selection_bias.parquet", sb)
+    assert "No library and region pair differs by more than 5 percentage points" in m2report.burden_section(base)
+
+
 def test_burden_section_without_a_pair(base):
     # stage 18 with one library (1417 alone): empty same-site and same-gene frames
     pd.DataFrame(columns=["pair", "label_a", "label_b", "n"]).to_parquet(base / "burden/same_site.parquet", index=False)
@@ -777,7 +825,11 @@ def test_burden_section_without_a_pair(base):
 
 def test_burden_section_polyasite(base):
     s = m2report.burden_section(base)
-    assert "does not screen out candidate sites with A-rich genome downstream" in s
+    assert "describes no filter on A content downstream of a site" in s
+    assert ("on chr21 and chr22 the clusters file is not depleted of A-rich downstream sequence (our observation: 9,544 of "
+            "465,261 sites, 2.05%, have 14 or more A's in the 20 nt downstream, against 3,282, 0.71%, for the same sites moved "
+            "1,000 nt upstream)") in s
+    assert "screen" not in s
     assert ("The null row takes every molecule of the group with its site moved 1,000 nt upstream in transcript sense on the "
             "same ref and strand; its share within 10 nt is the share expected by chance at this atlas density.") in s
     assert "| Label | Molecules | 0-10 | 11-50 | 51-200 | >200 | no atlas site on this ref and strand |" in s

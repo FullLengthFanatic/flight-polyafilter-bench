@@ -1,6 +1,8 @@
 """Stage 18: templated share by library and group with gene-bootstrap CIs, same-site and same-gene comparisons, selection bias,
 PolyASite 3.0 proximity of the labeled sites (reported only, not a label check: the atlas is built from 10x 3' reads of the
-same oligo(dT) priming and keeps sites with A-rich genome downstream).
+same oligo(dT) priming; the v3.0 documentation describes no filter on A content downstream of a site, and on chr21 and chr22
+the clusters file is not depleted of A-rich downstream sequence: 9,544 of 465,261 sites, 2.05%, have 14 or more A's in the
+20 nt downstream, against 3,282, 0.71%, for the same sites moved 1,000 nt upstream).
 
 In templated_share.parquet, lo and hi bound share_all, except on the a_band rows: there they bound frac (the band's share
 of the molecules), because the labels are defined from the A count and fix share_all within a band.

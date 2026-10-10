@@ -784,6 +784,19 @@ def burden_section(base):
     out += ["", "Resolved share:", ""]
     out += _table(["Stratum kind", "Stratum"] + groups,
                   [[k, s] + [cell(g, k, s, lambda r: _r(r.share_resolved)) for g in groups] for k, s in strata])
+    ps = base / "eval" / "selection.json"
+    sel = _json(ps)
+    out += ["", "Templated share by label and corrected (`eval/selection.json` label_purity, stage 17; labeled molecules of the "
+                "called cells). The corrected share removes the estimated tail-primed part of the templated class, an estimate "
+                "from the hexamer rates (see the label purity table in section 2):", ""]
+    if sel is None:
+        out[-2:] = [f"Templated share corrected: {_not_run(base, [ps])}"]
+    elif "label_purity" not in sel:
+        out[-2:] = ["Templated share corrected: not run (eval/selection.json has no label_purity)"]
+    else:
+        out += _table(["Library", "Labeled molecules", "Templated share by label", "Templated share, corrected"],
+                      [[lib, _int(d["n_labeled"]), _r(d["templated_share"]), _r(d["templated_share_corrected"])]
+                       for lib, d in sel["label_purity"].items()])
     out += ["", "Distribution over A bands (share of labeled molecules in the band, 95% gene-bootstrap interval in brackets; on "
                 "these rows stage 18's lo and hi bound this share, not share_all, because the labels are defined by the band "
                 "and fix share_all within it):", ""]
@@ -828,9 +841,24 @@ def burden_section(base):
     if sb is None:
         out += ["", f"Selection bias: {_not_run(base, [p])}"]
     else:
-        out += ["", "Selection bias (share of labeled molecules versus share of primary records, by RE tag):", ""]
-        out += _table(["Library", "RE", "Labeled share", "Records share"],
-                      [[r.lib, r.re, _r(r.labeled_share), _r(r.records_share)] for r in sb.itertuples()])
+        has = "records_nondup_share" in sb
+        out += ["", "Selection bias: share of labeled molecules versus share of primary records, by RE tag (E exonic, N intronic, "
+                    "I intergenic). records_share is the share among all primary records; the duplicate-free share is the share "
+                    "among primary records without the PCR-duplicate flag, where intergenic records never carry the flag:", ""]
+        out += _table(["Library", "RE", "Labeled share", "Records share"] + (["Records share without PCR duplicates"] if has else []),
+                      [[r.lib, r.re, _r(r.labeled_share), _r(r.records_share)] + ([_r(r.records_nondup_share)] if has else [])
+                       for r in sb.itertuples()])
+        if not has:
+            out += ["", "burden/selection_bias.parquet has no records_nondup_share column: stage 13 predates it, so the spec 11 "
+                        "rule below cannot be applied."]
+        else:
+            off = [r for r in sb.itertuples() if abs(r.labeled_share - r.records_nondup_share) > 0.05]
+            out += ["", "Spec 11 rule: where the labeled share differs from the duplicate-free share by more than 5 percentage "
+                        "points, conclusions there hold for the labeled population only. "]
+            out[-1] += ("Pairs with a difference of more than 5 percentage points: " + "; ".join(
+                f"{r.lib} {r.re} (labeled {_r(r.labeled_share)}, without duplicates {_r(r.records_nondup_share)}, "
+                f"{100 * abs(r.labeled_share - r.records_nondup_share):.1f} points)" for r in off) + "." if off else
+                        "No library and region pair differs by more than 5 percentage points.")
     p = base / "burden" / "polyasite.parquet"
     px = _parquet(p)
     if px is None:
@@ -839,8 +867,10 @@ def burden_section(base):
         out += ["", "PolyASite 3.0 proximity (share of labeled molecules by the distance in nt from the site to the nearest atlas "
                     "cleavage site on the same strand; templated molecules also by A band). Proximity is reported, not used to "
                     "validate the labels: the atlas is built from 10x 3' single-cell reads, oligo(dT) primed like these "
-                    "libraries, and does not screen out candidate sites with A-rich genome downstream, so internally primed "
-                    "sites can be in it. The null row takes every molecule of the group with its site moved 1,000 nt upstream "
+                    "libraries, so internally primed sites can be in it. The v3.0 documentation describes no filter on A "
+                    "content downstream of a site, and on chr21 and chr22 the clusters file is not depleted of A-rich "
+                    "downstream sequence (our observation: 9,544 of 465,261 sites, 2.05%, have 14 or more A's in the 20 nt "
+                    "downstream, against 3,282, 0.71%, for the same sites moved 1,000 nt upstream). The null row takes every molecule of the group with its site moved 1,000 nt upstream "
                     "in transcript sense on the same ref and strand; its share within 10 nt is the share expected by chance "
                     "at this atlas density."]
         for g, d in px.groupby("group", sort=False):
