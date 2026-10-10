@@ -1,6 +1,6 @@
 """Stage 18: templated share by library and group with gene-bootstrap CIs, same-site and same-gene comparisons, selection bias,
-PolyASite 3.0 proximity of the labeled sites (reported only, not a label check: the atlas is built from 10x 3' reads of the
-same oligo(dT) priming; the v3.0 documentation describes no filter on A content downstream of a site; the A content downstream
+PolyASite 3.0 proximity of the labeled sites (reported only, not a label check: the atlas is built from 10x scRNA-seq data,
+https://polyasite.unibas.ch/atlas_sc; the v3.0 documentation describes no filter on A content downstream of a site; the A content downstream
 of the atlas sites is counted by scripts/22_polyasite_a_content.py).
 
 --population (default cells, config.SEL_POPULATION) picks the barcodes of all tables except templated_share_population.parquet,

@@ -758,7 +758,8 @@ def test_selection_section_mapq_sensitivity(base):
 
 
 def test_spikein_section_states_that_every_barcode_is_used(base):
-    assert "Spike-in metrics use every barcode" in m2report.spikein_section(base)
+    _add_populations(base)
+    assert "Spike-in metrics count all barcodes" in m2report.spikein_section(base)
 
 
 def test_strata_section(base):
@@ -801,7 +802,7 @@ def test_strata_and_hexamer_sections_name_their_population_and_definitions(base)
     pop = "Computed on: all barcodes, molecules with a member read within the cap."
     s = m2report.strata_section(base)
     assert pop in s
-    assert ("Expression tertile: genes ranked by the number of their labeled molecules in the selection units (ties by gene id) "
+    assert ("Expression tertile: genes ranked by the number of their labeled molecules in the selection population, with or without a member read (ties by gene id) "
             "and split into three equal gene groups, so the groups hold very different numbers of molecules; each molecule takes "
             "its gene's group.") in s
     h = m2report.hexamer_section(base)
@@ -882,7 +883,7 @@ def test_ercc_section(base):
     assert "pearson_log10: Pearson correlation of log10(UMIs + 1) with log10(concentration)" in s
     assert "umis_kept_share: umis over the unfiltered umis" in s
     assert ("UMIs are counted over primary records with a UB and a CB of the barcode set recorded in ercc.json (stage 15): "
-            "1417 called cells; 1419 not recorded. Section 7 counts every barcode.") in s
+            "1417 called cells; 1419 not recorded. Section 7: barcode set not recorded (stage 17 predates it).") in s
     p = base / "1417/spikein/ercc.json"
     d = json.loads(p.read_text())
     for pop, name in (("all", "all barcodes"), ("noncells", "other barcodes")):
@@ -916,7 +917,7 @@ def test_long_read_section(base):
     # 4 / 7 = 0.571; ratio 2.29. Exclusive cut-offs would give 0.400, 0.500, 0.000 and 0.667.
     assert "| BD67 | 8/4 | 28,473 / 6,469 / 7,228 | 0.106 | 0.541 | 0.443 | 5.12 | True | 0.333 | 0.667 | 2.00 |" in s
     assert "| BD67 | 14/8 | 11,551 / 16,279 / 14,340 | 0.046 | 0.456 | 0.200 | 9.95 | True | 0.250 | 0.571 | 2.29 |" in s
-    assert "The spec expects about 7% of reads dropped. In this run BD67 dropped 11.1% of the reads used" in s
+    assert "Spec 4.3 gives about 7% for milestone 1. In this run BD67 dropped 11.1% of the reads used" in s
     assert "about 12%" not in s
     assert "| BD67 | 16,408 | 0.615 | 0.491 / 0.907 / 0.805 | 0.993 / 0.996 / 0.994 |" in s
     assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s
@@ -1013,6 +1014,7 @@ def test_burden_section_selection_bias_without_the_duplicate_free_baseline(base)
 
 
 def test_burden_section_selection_bias_rule(base):
+    _write(base / "burden/summary.json", {"groups": {"nuclei": ["1417"]}, "selection_bias_population": "all"})
     sb = pd.DataFrame([("1417", "E", 0.421, 0.407, 0.350), ("1417", "N", 0.48, 0.5, 0.49), ("1419", "I", 0.099, 0.093, 0.099)],
                       columns=["lib", "re", "labeled_share", "records_share", "records_nondup_share"])
     _write(base / "burden/selection_bias.parquet", sb)
@@ -1075,7 +1077,7 @@ def test_burden_section_population_and_groups(base):
     assert "Groups (burden/summary.json): nuclei = 1417 + 1419; cells = 1179. A group with one library holds the same " \
            "molecules as that library: cells = 1179." in s
     for pop, name in (("all", "all barcodes"), ("cells", "called cells"), ("noncells", "other barcodes")):
-        _write(base / "burden/summary.json", {"groups": groups, "population": pop})
+        _write(base / "burden/summary.json", {"groups": groups, "population": pop, "selection_bias_population": "all"})
         s = m2report.burden_section(base)
         assert f"Population of the burden tables (burden/summary.json): {name}." in s
         assert "not recorded" not in s and "inferred" not in s
@@ -1199,7 +1201,7 @@ def test_validation_section_without_completeness_keys(base):
         del v["n_grid"], v["grid_equal"]
     p.write_text(json.dumps(em))
     s = m2report.validation_section(base)
-    assert "completeness not recorded (file written before 2026-10-10)" in s
+    assert "completeness not recorded (stage 20 predates the key)" in s
     assert "| 1417 | c275_l9_m1_i | 17,000,000 | 17,000,000 | 0 | 0 | True | 1.95 | 15.49 | 60.50 | n/a | n/a |" in s
     assert "Engine tie" not in s and "validated" not in s.split("completeness not recorded")[1]
 
@@ -1246,7 +1248,7 @@ def test_render_and_script(base, tmp_path):
                        capture_output=True, text=True, env=env, check=True)
     assert out.read_text() == text
     line = json.loads(r.stdout.strip().splitlines()[-1])
-    assert line == {"out": str(out), "sections": 11, "not_run": text.count("not run")}
+    assert line == {"out": str(out), "sections": 11, "not_run": text.split("\n## Headline", 1)[1].count("not run")}
 
 
 def test_headline_block(base):
@@ -1284,3 +1286,48 @@ def test_header_defines_setting_tags_and_lists_missing_inputs(base):
     # the fixture lacks 1419 and 1179 inputs: counted per section, files listed once
     assert "Missing inputs:" in head and "1419/grid/summary.json" in head and "section 3: " in head
     assert "not run" not in head.split("Missing inputs:")[1]
+
+
+def test_selection_bias_caption_follows_the_recorded_population(base):
+    groups = {"1417": ["1417"], "nuclei": ["1417", "1419"], "cells": ["1179"]}
+    _write(base / "burden/summary.json", {"groups": groups, "population": "cells"})
+    s = m2report.burden_section(base)
+    assert "Population of the labeled share: not recorded (stage 18 predates it)." in s
+    assert "Both shares cover all barcodes" not in s
+    _write(base / "burden/summary.json", {"groups": groups, "population": "cells", "selection_bias_population": "all"})
+    s = m2report.burden_section(base)
+    assert "Both shares cover all barcodes: the records are those of every barcode" in s and "not recorded (stage 18" not in \
+        s.split("Selection bias:")[1]
+    _write(base / "burden/summary.json", {"groups": groups, "selection_bias_population": "cells"})
+    s = m2report.burden_section(base)
+    assert "The labeled share covers called cells (burden/summary.json)" in s and "Both shares cover all barcodes" not in s
+
+
+def test_band_lines_survive_an_undefined_estimate(base):
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    sel["label_purity"]["1417"]["bands"]["8-9"] = {"n": 0, "hexamer_rate": None, "tail_primed_share": None}
+    p.write_text(json.dumps(sel))
+    s = m2report.truth_section(base)
+    assert "| 1417 | 8-9 | 0 | n/a | n/a |" in s
+
+
+def test_a_content_line_with_no_full_window(base):
+    z = {"n_sites": 5, "n_full": 0, "n_a14": 0, "n_full_null": 0, "n_a14_null": 0}
+    _write(base / "burden/polyasite_a_content.json", {"window_nt": 20, "min_a": 14, "null_shift_nt": 1000, "refs": ["chr1"],
+                                                       "atlas_refs_not_counted": [], "total": z, "per_ref": {}})
+    s = m2report.burden_section(base)
+    assert "0 of 0 atlas sites with a full 20 nt downstream window (n/a)" in s
+
+
+def test_population_words_follow_the_inputs(base):
+    _add_populations(base)
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    sel |= {"selection_population": "noncells", "spikein_barcodes": "cells"}
+    p.write_text(json.dumps(sel))
+    assert "run on 1179 other barcodes in place of" in m2report.selection_section(base)
+    assert "Spike-in metrics count called cells" in m2report.spikein_section(base)
+    del sel["spikein_barcodes"]
+    p.write_text(json.dumps(sel))
+    assert "Spike-in metrics barcode set not recorded (stage 17 predates it)" in m2report.spikein_section(base)

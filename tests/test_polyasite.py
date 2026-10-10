@@ -148,6 +148,14 @@ def test_a_content_counts_full_windows_in_transcript_sense():
             assert got["n_full" + key] == len(full), (is_plus, key)
             assert got["n_a14" + key] == sum(w >= 14 for w in full), (is_plus, key)
         assert got["n_sites"] == len(sites)
+    # the threshold is 14 A's: exactly 14 counts, 13 does not (each strand)
+    edge = "C" * 5000
+    edge = edge[:100] + "A" * 14 + "C" * 6 + edge[120:]
+    edge = edge[:300] + "A" * 13 + "C" * 7 + edge[320:]
+    edge = edge[:600] + "C" * 6 + "T" * 14 + edge[620:]
+    edge = edge[:800] + "C" * 7 + "T" * 13 + edge[820:]
+    assert a_content(edge.encode(), np.array([100, 300], np.int64), True)["n_a14"] == 1
+    assert a_content(edge.encode(), np.array([620, 820], np.int64), False)["n_a14"] == 1
     assert a_content(seq.encode(), plus, True)["n_a14"] >= 2 and a_content(seq.encode(), minus, False)["n_a14"] >= 1
     # lowercase soft-masked bases count
     assert a_content(seq.lower().encode(), plus, True) == a_content(seq.encode(), plus, True)

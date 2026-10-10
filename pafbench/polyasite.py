@@ -1,6 +1,6 @@
 """PolyASite 3.0 proximity of priming sites (spec 4.1). Reported next to the labels, never used to validate them: the atlas
-comes from 10x 3' reads primed by the same oligo(dT) and the v3.0 documentation describes no filter on A content downstream of
-a site. The A content downstream of the atlas sites themselves, and of the same sites moved NULL_SHIFT nt upstream, is
+is built from 10x scRNA-seq data (https://polyasite.unibas.ch/atlas_sc) and the v3.0 documentation describes no filter on A
+content downstream of a site. The A content downstream of the atlas sites themselves, and of the same sites moved NULL_SHIFT nt upstream, is
 counted by scripts/22_polyasite_a_content.py (a_content below) and printed on the results page."""
 from collections import defaultdict
 
@@ -11,7 +11,7 @@ import pyarrow.csv as pcsv
 
 ATLAS_COLUMNS = ["chrom", "start", "end", "id", "score", "strand", "tissues_pct", "protocols", "stringency", "class", "signals"]
 BINS = ("0-10", "11-50", "51-200", ">200", "no atlas site on this ref and strand")
-NULL_SHIFT = 1000            # chance level: the same sites moved this many nt upstream in transcript sense
+NULL_SHIFT = 1000            # local background: the same sites moved this many nt upstream in transcript sense
 NULL_LABEL = "null_shift1kb"
 A_WINDOW = 20               # nt after a site, transcript sense
 A_MIN = 14                  # A's in that window that make a site A-rich

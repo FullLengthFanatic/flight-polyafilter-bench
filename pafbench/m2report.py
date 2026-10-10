@@ -213,7 +213,7 @@ def _band_lines(base, sel, sel_path):
                       [[lib, _int(d["bands"][band]["n"]), _r(d["bands"][band]["hexamer_rate"]), _r(d["bands"][band]["tail_primed_share"])]
                        for lib, d in purity.items()])
         for lib, d in purity.items():
-            if d["bands"][band]["tail_primed_share"] > 0.5:
+            if (d["bands"][band]["tail_primed_share"] or 0) > 0.5:
                 out += ["", f"By this estimate most A band {band} molecules of {lib} are real poly(A) sites that follow "
                             f"genome-encoded A's, and the {CUTOFFS} rule labels them templated, so read {lib} by A band."]
     pop = (sel or {}).get("selection_population", "all")
@@ -448,7 +448,7 @@ def _cells_tuned_lines(sel):
             said.append(f"{MODE_NAMES[mode]} {_r(o and o['spec'])} and {_r(o and o['sens'])} against {_r(m and m['spec'])} and "
                         f"{_r(m and m['sens'])}")
     t = " and ".join(tuned_libs)
-    out = [f"Setting tuned on whole cells (descriptive): the selection rule run on {t} called cells in place of {sl}, next to "
+    out = [f"Setting tuned on whole cells (descriptive): the selection rule run on {t} {POP_NAMES[sel.get('selection_population', 'all')]} in place of {sl}, next to "
            f"the setting picked on {sl}; sensitivity and specificity at molecule level on {t}:", ""]
     out += _table(["Mode", "Tuned on", "Setting", f"Sens on {t}", f"Spec on {t}"], rows)
     out += ["", f"On {t}, specificity and sensitivity of the setting picked on {sl} next to the setting picked on {t}: " +
@@ -486,7 +486,7 @@ def selection_section(base):
                     f"sensitivity and specificity on {sl}; chosen and published settings marked):", ""]
         out += _table(["Setting", "Role", "Sens", "Spec"], [[t, ", ".join(roles.get(t, [])), _r(a), _r(b)] for t, a, b in front])
     out += ["", "Published settings (spec 3), COVLEN/MINSNRLEN/MISM, each run in both modes:", ""]
-    out += _table(["Setting", "Source"], [[f"{c}/{l}/{m}", PUBLISHED_SOURCES[c, l, m]] for c, l, m in PUBLISHED])
+    out += _table(["Setting", "Source"], [[f"{c}/{l}/{m}", PUBLISHED_SOURCES.get((c, l, m), "source not listed")] for c, l, m in PUBLISHED])
 
     mp = base / "eval" / "metrics.parquet"
     metrics = _parquet(mp)
@@ -580,7 +580,7 @@ def selection_section(base):
             f"metrics.parquet (molecule level, cap {MEMBER_CAP:,}, {CUTOFFS}); 'never removed' is the templated count in these "
             "two regions minus that, and the ceiling is the stratum-all sensitivity if every other templated molecule were "
             "removed. Intergenic and antisense non-templated molecules count as retained negatives. Spec 3 (from the "
-            "polyAfilter code, commit 5ce0098) says reads in these regions are never removed; the columns show what this data "
+            "polyAfilter code, commit {POLYAFILTER_COMMIT}) says reads in these regions are never removed; the columns show what this data "
             "gives.", ""]
     if metrics is None:
         out[-2:] = [f"Intergenic and antisense molecules: {_not_run(base, [mp])}"]
@@ -646,7 +646,7 @@ def strata_section(base):
     out += a_band_table("molecule_majority")
     out += ["", "By region, molecule level, sens / spec:", ""] + sens_spec("region", REGION_NAMES)
     out += ["", "By expression tertile of the gene, molecule level, sens / spec (no_gene: molecules without a gene). Expression tertile: "
-                "genes ranked by the number of their labeled molecules in the selection units (ties by gene id) and split into three "
+                "genes ranked by the number of their labeled molecules in the selection population, with or without a member read (ties by gene id) and split into three "
                 "equal gene groups, so the groups hold very different numbers of molecules; each molecule takes its gene's group.", ""]
     out += sens_spec("expr_tertile", EXPR_TERTILES)
     out += ["", "By has_ts (a pa read of the molecule has a ts tag above 0, section 2), molecule level, sens / spec:", ""]
@@ -678,6 +678,12 @@ def hexamer_section(base):
     return "\n".join(out)
 
 
+def _spike_pop_text(base):
+    """Barcodes of the spike-in metrics (eval/selection.json "spikein_barcodes", stage 17)."""
+    b = (_json(base / "eval" / "selection.json") or {}).get("spikein_barcodes")
+    return "barcode set not recorded (stage 17 predates it)" if b is None else f"count {POP_NAMES.get(b, b)}"
+
+
 def spikein_section(base):
     base = Path(base)
     out = ["## 7. Spike-ins", "",
@@ -686,7 +692,7 @@ def spikein_section(base):
            f"(spikein.label_spike_site) tail: within {_SPIKE['tail_tol'].default} nt of an annotated 3' end; internal: not tail and "
            f"at least {_SPIKE['internal_min'].default} nt upstream of one; other: neither, so other molecules are left out of the "
            "agreement and of the metrics (positives are internal, negatives tail). Spike-in metrics "
-           "use every barcode, whatever population the setting selection uses: spike-ins are free RNA in every droplet. 1179 has no "
+           f"{_spike_pop_text(base)}, whatever population the setting selection uses. 1179 has no "
            "spike-ins, so this section has no 1179 rows.", ""]
     data, notes = {}, []
     for lib in NUCLEI:
@@ -809,7 +815,7 @@ def ercc_section(base):
                 "umis: UMIs left after the setting; umis_kept_share: umis over the unfiltered umis. UMIs are counted over primary "
                 "records with a UB and a CB of the barcode set recorded in ercc.json (stage 15): "
                 + "; ".join(f"{lib} {POP_NAMES[b] if b in POP_NAMES else b}" if b else f"{lib} not recorded"
-                            for lib, b in barcodes.items()) + ". Section 7 counts every barcode.", ""]
+                            for lib, b in barcodes.items()) + f". Section 7: {_spike_pop_text(base)}.", ""]
     if entries:
         cols = list(dict.fromkeys(k for _, _, f in entries for k in f))
         out += _table(["Library", "Setting"] + cols,
@@ -858,7 +864,7 @@ def long_read_section(base):
     (first, (d0, _)), *rest = data.items()
     drops = f"{first} dropped {_pct(d0['dropped_fraction'], 1)} of the reads used" + "".join(
         f" and {lib} {_pct(d['dropped_fraction'], 1)}" for lib, (d, _) in rest)
-    out += ["", f"- The spec expects about 7% of reads dropped. In this run {drops} (`dropped_fraction` in each acceptance file, "
+    out += ["", f"- Spec 4.3 gives about 7% for milestone 1. In this run {drops} (`dropped_fraction` in each acceptance file, "
                 "over the references stage 16 processed)."]
     out += ["", "Sites with an accepted read by region and label "
                 "(" + ", ".join(f"`{lib}/long_read_sites.parquet`" for lib, (_, sites) in data.items() if sites is not None) +
@@ -913,10 +919,12 @@ def _a_content_line(base):
     t, w, k, shift = d["total"], d["window_nt"], d["min_a"], d["null_shift_nt"]
     real, null = t["n_a14"] / t["n_full"] if t["n_full"] else None, t["n_a14_null"] / t["n_full_null"] if t["n_full_null"] else None
     kind = "n/a" if real is None or null is None else "is not depleted of" if real >= null else "is depleted of"
+    def pct(n, d):
+        return "n/a" if not d else f"{100 * n / d:.2f}%"
     return (f"A content downstream of the atlas sites: our observation (`{_rel(base, p)}`, stage 22, {len(d['refs'])} of "
             f"{len(d['refs']) + len(d['atlas_refs_not_counted'])} atlas references): {_int(t['n_a14'])} of {_int(t['n_full'])} atlas "
-            f"sites with a full {w} nt downstream window ({100 * t['n_a14'] / t['n_full']:.2f}%) have {k} or more A's in it, against "
-            f"{_int(t['n_a14_null'])} of {_int(t['n_full_null'])} ({100 * t['n_a14_null'] / t['n_full_null']:.2f}%) for the same sites "
+            f"sites with a full {w} nt downstream window ({pct(t['n_a14'], t['n_full'])}) have {k} or more A's in it, against "
+            f"{_int(t['n_a14_null'])} of {_int(t['n_full_null'])} ({pct(t['n_a14_null'], t['n_full_null'])}) for the same sites "
             f"moved {shift:,} nt upstream; the clusters file {kind} A-rich downstream sequence by this count.")
 
 
@@ -965,6 +973,20 @@ def _burden_population(base):
         lines.append("Groups (burden/summary.json): " + "; ".join(f"{k} = {' + '.join(v)}" for k, v in grp.items()) + "." + (
             " A group with one library holds the same molecules as that library: " + ", ".join(same) + "." if same else ""))
     return lines
+
+
+def _sb_population_text(base):
+    """Sentence naming the barcodes behind the labeled share (burden/summary.json "selection_bias_population", stage 18)."""
+    summary = _json(base / "burden" / "summary.json") or {}
+    pop = summary.get("selection_bias_population")
+    if pop is None:
+        return "Population of the labeled share: not recorded (stage 18 predates it)."
+    if pop == "all":
+        return ("Both shares cover all barcodes: the records are those of every barcode, so stage 18 takes the labeled molecules of "
+                "all barcodes whatever its population. The check is not repeated within called cells because stage 13 does not "
+                "split the records by barcode (left for milestone 3, which builds per-cell counts)")
+    return (f"The labeled share covers {POP_NAMES.get(pop, pop)} (burden/summary.json); the records cover all barcodes, so the two "
+            "shares are not comparable")
 
 
 def burden_section(base):
@@ -1054,10 +1076,7 @@ def burden_section(base):
         out += ["", "Selection bias: share of labeled molecules versus share of primary records, by RE tag (RE is the region type "
                     f"of the alignment (E = exonic, N = intronic, I = intergenic; Cell Ranger documentation, Barcoded BAM Tags, "
                     f"{BAM_TAGS_URL}). records_share is the share among all primary records; the duplicate-free share is the "
-                    "share among primary records without the PCR-duplicate flag. Both shares cover all barcodes: the records are those of every "
-                    "barcode, so stage 18 takes the labeled molecules of all barcodes whatever its population. The check is not "
-                    "repeated within called cells because stage 13 does not split the records by barcode (left for milestone 3, "
-                    "which builds per-cell counts):", ""]
+                    "share among primary records without the PCR-duplicate flag. " + _sb_population_text(base) + ":", ""]
         out += _table(["Library", "RE", "Labeled share", "Records share"] + (["Records share without PCR duplicates"] if has else []),
                       [[r.lib, r.re, _r(r.labeled_share), _r(r.records_share)] + ([_r(r.records_nondup_share)] if has else [])
                        for r in sb.itertuples()])
@@ -1146,7 +1165,7 @@ def validation_section(base):
                         _r(ct["max_rss_gib"], 2), _sec(sum(nc["seconds"].values()))]])
     out += ["", f"Compared: {em.get('n_compared', 'n/a')}; all identical: {em.get('all_identical', 'n/a')}"]
     if "complete" not in em:
-        out += ["", "completeness not recorded (file written before 2026-10-10)"]
+        out += ["", "completeness not recorded (stage 20 predates the key)"]
         return "\n".join(out)
     out += ["", f"complete: {'yes' if em['complete'] else 'no'}"]
     miss = [[lib, m["tag"], "n/a" if m["exit_status"] is None else m["exit_status"], m["reason"]]
@@ -1236,11 +1255,17 @@ def _missing(sections):
         files += [f for m in re.findall(r"not run \(missing ([^)]*)\)", text) for f in m.split(", ") if f not in files]
     if not per:
         return "Missing inputs: none."
-    return (f"Missing inputs: {sum(per.values())} places ({'; '.join(f'{k}: {v}' for k, v in per.items())}). Files: "
+    n = sum(per.values())
+    return (f"Missing inputs: {n} {'place' if n == 1 else 'places'} ({'; '.join(f'{k}: {v}' for k, v in per.items())}). Files: "
             + ", ".join(files) + ".")
 
 
 def render(base):
+    return render_counted(base)[0]
+
+
+def render_counted(base):
+    """The page and the number of "not run" places in its sections (the number the header gives)."""
     texts = [("headline", headline(base))] + [(f"section {i}", f(base)) for i, f in enumerate(SECTIONS, 1)]
     head = ["# Milestone 2 results (generated by scripts/21_m2_summary.py)", "",
             f"Inputs under `{base}`. Each section names the files its numbers come from; \"not run\" lists the files that "
@@ -1248,4 +1273,4 @@ def render(base):
             "Setting tags read c<COVLEN>_l<MINSNRLEN>_m<MISM>_<e or i>: COVLEN, MINSNRLEN and MISM are polyAfilter's parameters "
             "(spec 3); e is the default mode and i the -i mode (introns); l none is the remove-all control.", "",
             _missing(texts), ""]
-    return "\n".join(head) + "\n" + "\n\n".join(t for _, t in texts) + "\n"
+    return "\n".join(head) + "\n" + "\n\n".join(t for _, t in texts) + "\n", sum(t.count("not run") for _, t in texts)
