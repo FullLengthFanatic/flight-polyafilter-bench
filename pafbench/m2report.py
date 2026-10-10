@@ -593,7 +593,7 @@ def selection_section(base):
             f"metrics.parquet (molecule level, cap {MEMBER_CAP:,}, {CUTOFFS}); 'never removed' is the templated count in these "
             "two regions minus that, and the ceiling is the stratum-all sensitivity if every other templated molecule were "
             "removed. Intergenic and antisense non-templated molecules count as retained negatives. Spec 3 (from the "
-            "polyAfilter code, commit {POLYAFILTER_COMMIT}) says reads in these regions are never removed; the columns show what this data "
+            f"polyAfilter code, commit {POLYAFILTER_COMMIT}) says reads in these regions are never removed; the columns show what this data "
             "gives.", ""]
     if metrics is None:
         out[-2:] = [f"Intergenic and antisense molecules: {_not_run(base, [mp])}"]
@@ -694,7 +694,7 @@ def hexamer_section(base):
 def _spike_pop_text(base):
     """Barcodes of the spike-in metrics (eval/selection.json "spikein_barcodes", stage 17)."""
     b = (_json(base / "eval" / "selection.json") or {}).get("spikein_barcodes")
-    return "barcode set not recorded (stage 17 predates it)" if b is None else f"count {POP_NAMES.get(b, b)}"
+    return "use a barcode set that is not recorded (stage 17 predates it)" if b is None else f"count {POP_NAMES.get(b, b)}"
 
 
 def spikein_section(base):
@@ -828,7 +828,7 @@ def ercc_section(base):
                 "umis: UMIs left after the setting; umis_kept_share: umis over the unfiltered umis. UMIs are counted over primary "
                 "records with a UB and a CB of the barcode set recorded in ercc.json (stage 15): "
                 + "; ".join(f"{lib} {POP_NAMES[b] if b in POP_NAMES else b}" if b else f"{lib} not recorded"
-                            for lib, b in barcodes.items()) + f". Section 7: {_spike_pop_text(base)}.", ""]
+                            for lib, b in barcodes.items()) + f". The spike-in metrics of section 7 {_spike_pop_text(base)}.", ""]
     if entries:
         cols = list(dict.fromkeys(k for _, _, f in entries for k in f))
         out += _table(["Library", "Setting"] + cols,
@@ -1086,7 +1086,7 @@ def burden_section(base):
         out += ["", f"Selection bias: {_not_run(base, [p])}"]
     else:
         has = "records_nondup_share" in sb
-        out += ["", "Selection bias: share of labeled molecules versus share of primary records, by RE tag (RE is the region type "
+        out += ["", "Selection bias: share of labeled molecules versus share of primary records, by RE tag. RE is the region type "
                     f"of the alignment (E = exonic, N = intronic, I = intergenic; Cell Ranger documentation, Barcoded BAM Tags, "
                     f"{BAM_TAGS_URL}). records_share is the share among all primary records; the duplicate-free share is the "
                     "share among primary records without the PCR-duplicate flag. " + _sb_population_text(base) + ":", ""]
