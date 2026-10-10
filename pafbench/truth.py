@@ -21,13 +21,11 @@ def _pa_join(mol, pa):
 
 
 def load_called_cell_barcodes(barcodes_path):
-    """Read barcodes from filtered_feature_bc_matrix/barcodes.tsv.gz; strip trailing -1 suffix."""
+    """Read barcodes from filtered_feature_bc_matrix/barcodes.tsv.gz."""
     barcodes = set()
     with gzip.open(barcodes_path, "rt") as f:
         for line in f:
             bc = line.rstrip("\n")
-            if bc.endswith("-1"):
-                bc = bc[:-2]
             barcodes.add(bc)
     return barcodes
 
