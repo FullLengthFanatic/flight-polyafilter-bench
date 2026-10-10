@@ -595,3 +595,20 @@ def test_stage13_resume_after_crash_and_stale_truth(stage13_inputs, stage13_fres
     assert r.returncode == 1
     assert "chrA, chrB, chrC" in r.stderr and f"gio trash {out / 'parts'}" in r.stderr
     assert {p.name: p.stat().st_mtime_ns for p in out.iterdir() if p.is_file()} == before
+
+
+def test_json_is_last(synth, tagged, tmp_path, monkeypatch):
+    """The json that marks a reference done is written after the parquet parts: a failed cells write leaves no json."""
+    tx = load_transcripts(synth.gtf)
+    part_dir = tmp_path / "parts"
+    real = pd.DataFrame.to_parquet
+
+    def boom(self, path, *a, **k):
+        if str(path).endswith(".cells.parquet"):
+            raise OSError("disk full")
+        return real(self, path, *a, **k)
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", boom)
+    with pytest.raises(OSError):
+        scan_to_parts(tagged, synth.fasta, "chrA", tx, SETTINGS, set(_qnames(tagged, "chrA")[::4]), CELLS, part_dir)
+    assert not (part_dir / "chrA.json").exists()
