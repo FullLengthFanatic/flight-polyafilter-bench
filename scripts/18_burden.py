@@ -4,8 +4,12 @@ same oligo(dT) priming; the v3.0 documentation describes no filter on A content 
 of the atlas sites is counted by scripts/22_polyasite_a_content.py).
 
 --population (default cells, config.SEL_POPULATION) picks the barcodes of all tables except templated_share_population.parquet,
-which holds every population. summary.json records it in the key "population". Other files: same_site.parquet, same_gene.parquet, selection_bias.parquet (labeled_share, records_share and, when
-stage 13 wrote total_nondup, records_nondup_share; the records are those of all barcodes) and summary.json.
+which holds every population. summary.json records it in the key "population". Other files: same_site.parquet,
+same_gene.parquet, selection_bias.parquet (labeled_share, records_share and, when stage 13 wrote total_nondup,
+records_nondup_share) and summary.json. grid/region_counts.parquet counts the primary records of
+every barcode, so selection_bias.parquet compares them with the labeled molecules of all barcodes whatever --population is
+(summary.json key "selection_bias_population": "all"). The comparison is not repeated within called cells because stage 13
+does not split the records by barcode (left for milestone 3, which builds per-cell counts).
 
 In templated_share.parquet, lo and hi bound share_all, except on the a_band rows: there they bound frac (the band's share
 of the molecules), because the labels are defined from the A count and fix share_all within a band.
@@ -108,12 +112,12 @@ def main():
     pd.DataFrame(genes, columns=["pair", "n_genes", "spearman_rho", "p_value"]).to_parquet(args.out / "same_gene.parquet", index=False)
 
     bias = []
-    for lib, mol in mols.items():
+    for lib in mols:
         p = args.base / lib / "grid" / "region_counts.parquet"
         if not p.exists():
             print(f"{lib}: selection bias skipped, missing {p}")
             continue
-        b = selection_bias(mol, pd.read_parquet(p))
+        b = selection_bias(by_population[lib]["all"], pd.read_parquet(p))
         b.insert(0, "lib", lib)
         bias.append(b)
     if bias:
@@ -146,7 +150,7 @@ def main():
         matched = s[s.label_b != "none"]
         site_summary[s.pair.iloc[0]] = {"sites_a": n, "matched": int(matched.n.sum()),
                                         "same_label": int(matched[matched.label_a == matched.label_b].n.sum())}
-    out = {"population": args.population, "libraries": list(mols), "groups": members, "share": headline,
+    out = {"population": args.population, "selection_bias_population": "all", "libraries": list(mols), "groups": members, "share": headline,
            "same_gene": {d["pair"]: {"n_genes": d["n_genes"], "spearman_rho": _num(d["spearman_rho"]),
                                      "p_value": _num(d["p_value"])} for d in genes},
            "same_site": site_summary,

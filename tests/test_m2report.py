@@ -1000,6 +1000,9 @@ def test_burden_section_selection_bias_rule(base):
     assert "stage 13 predates it" not in s
     assert "all primary records" in s and "without the PCR-duplicate flag" in s
     assert "never carry" not in s
+    assert ("Both shares cover all barcodes: the records are those of every barcode, so stage 18 takes the labeled molecules of "
+            "all barcodes whatever its population. The check is not repeated within called cells because stage 13 does not "
+            "split the records by barcode (left for milestone 3, which builds per-cell counts):") in s
     assert f"RE is the region type of the alignment (E = exonic, N = intronic, I = intergenic; Cell Ranger documentation, " \
            f"Barcoded BAM Tags, {m2report.BAM_TAGS_URL})" in s
     # 0.421 - 0.350 = 7.1 points; 0.48 - 0.49 = 1.0 and 0.099 - 0.099 = 0.0 are within 5

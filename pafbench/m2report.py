@@ -1040,7 +1040,10 @@ def burden_section(base):
         out += ["", "Selection bias: share of labeled molecules versus share of primary records, by RE tag (RE is the region type "
                     f"of the alignment (E = exonic, N = intronic, I = intergenic; Cell Ranger documentation, Barcoded BAM Tags, "
                     f"{BAM_TAGS_URL}). records_share is the share among all primary records; the duplicate-free share is the "
-                    "share among primary records without the PCR-duplicate flag:", ""]
+                    "share among primary records without the PCR-duplicate flag. Both shares cover all barcodes: the records are those of every "
+                    "barcode, so stage 18 takes the labeled molecules of all barcodes whatever its population. The check is not "
+                    "repeated within called cells because stage 13 does not split the records by barcode (left for milestone 3, "
+                    "which builds per-cell counts):", ""]
         out += _table(["Library", "RE", "Labeled share", "Records share"] + (["Records share without PCR duplicates"] if has else []),
                       [[r.lib, r.re, _r(r.labeled_share), _r(r.records_share)] + ([_r(r.records_nondup_share)] if has else [])
                        for r in sb.itertuples()])

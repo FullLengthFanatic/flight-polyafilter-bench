@@ -236,6 +236,28 @@ def test_stage18_population_selects_barcodes_and_reports_all_three(tmp_path):
     assert r.stratum.tolist() == ["intron"] and r.total.tolist() == [20]
 
 
+def test_stage18_selection_bias_uses_all_barcodes_whatever_the_population(tmp_path):
+    base = tmp_path / "base"
+    libs = _pop_libs(base)
+    (base / "1417" / "grid").mkdir()
+    pd.DataFrame({"tag": "t1", "re": ["E", "I"], "removed": [1, 2], "total": [30, 70], "total_nondup": [15, 70]}).to_parquet(
+        base / "1417" / "grid" / "region_counts.parquet")
+    got = {}
+    for pop in ("all", "cells", "noncells"):
+        r = _stage18(base, tmp_path / pop, tmp_path, "--population", pop)
+        assert r.returncode == 0, r.stderr
+        assert json.loads((tmp_path / pop / "summary.json").read_text())["selection_bias_population"] == "all"
+        got[pop] = pd.read_parquet(tmp_path / pop / "selection_bias.parquet")
+    pd.testing.assert_frame_equal(got["all"], got["cells"])
+    pd.testing.assert_frame_equal(got["all"], got["noncells"])
+    mol = libs["1417"]
+    want = mol.re.fillna("").astype(str).value_counts(normalize=True)
+    b = got["cells"].set_index("re")
+    assert not libs["1417"].in_cell.all() and libs["1417"].in_cell.any()
+    for re_, share in want.items():
+        assert b.loc[re_, "labeled_share"] == pytest.approx(share)
+
+
 def test_stage18_population_needs_in_cell(tmp_path):
     base = tmp_path / "base"
     _pop_libs(base, in_cell=False)
