@@ -13,12 +13,14 @@ from .flags import Setting, setting_tag
 from .grid import COVLENS, MINLENS, MISMS, PUBLISHED, published
 from .polyasite import BINS, NULL_LABEL
 from .regions import REGION_NAMES
+from .bd67 import read_outcome
 from .spikein import label_spike_site
 from .truth import in_population
 from .validation import run_stats
 
 LIBS = NUCLEI + CELLS
 _SPIKE = inspect.signature(label_spike_site).parameters
+_READ = inspect.signature(read_outcome).parameters
 LABELS = ("templated", "ambiguous", "nontemplated")
 LABEL_NAMES = {"templated": "templated", "ambiguous": "ambiguous", "nontemplated": "non-templated", "all": "all"}
 MODE_NAMES = {"e": "default", "i": "-i"}
@@ -149,14 +151,17 @@ def runs_section(base):
            "Stage runs under memwatch (every `*.mem.json` under the base directory outside `*/original/`; a JSON written "
            "elsewhere is not found). This includes stage 20's createTRANS run for the remove-all control "
            "(`validation/none_control/`), an original-tool run, and its createTRANS and original-tool runs on the 1179 subset "
-           "(`validation/subset_1179/`). Peak RSS is summed over the process tree, so pages shared by "
-           "forked workers count once per process (an upper bound). memwatch samples every 2 s (interval_s), so the peak of a "
-           "shorter run reads near zero.", ""]
+           "(`validation/subset_1179/`). Peak RSS is the largest sum over the process tree at a sample, so pages shared by "
+           "forked workers count once per process and a peak between two samples is missed; memwatch samples every "
+           "INTERVAL (interval_s in the files), so the peak of a shorter run reads near zero.", ""]
     mem = [p for p in base.rglob("*.mem.json") if "original" not in p.relative_to(base).parts[:-1]]
-    rows = []
+    rows, intervals = [], set()
     for p in mem:
         d = json.loads(p.read_text())
+        intervals.add(d.get("interval_s"))
         rows.append([_command(d["cmd"]), _rel(base, p), _sec(d["elapsed_s"]), _r(d["peak_tree_rss_gib"], 2), d["exit_status"]])
+    shown = sorted(f"{x:g} s" for x in intervals if x is not None)
+    out[-2] = out[-2].replace("INTERVAL", " and ".join(shown) if shown else "an interval not recorded in these files")
     out += _table(["Command", "File", "Wall (s)", "Peak tree RSS (GiB)", "Exit"], sorted(rows)) if rows else \
         ["not run (missing *.mem.json)"]
 
@@ -765,7 +770,7 @@ def ercc_section(base):
     out = ["## 8. ERCC count accuracy (provisional)", "",
            "Source: `<lib>/spikein/ercc.json` (stage 15): correlation of ERCC UMI counts with input concentration, "
            "unfiltered and per setting. 1179 has no spike-ins, so this section has no 1179 rows.", ""]
-    entries, notes, flags = [], [], []
+    entries, notes, flags, recorded = [], [], [], {}
     for lib in NUCLEI:
         p = base / lib / "spikein" / "ercc.json"
         d = _json(p)
@@ -774,9 +779,22 @@ def ercc_section(base):
             continue
         if d.get("provisional"):
             flags.append(f"Provisional ({lib}): {d.get('note', '')}")
+        recorded[lib] = d.get("selection")
         src = d.get("settings", d)
         entries += [(lib, k, _flat(v)) for k, v in src.items() if isinstance(v, dict)]
     out += [f"- {f}" for f in flags] + ([""] if flags else [])
+    sel = _json(base / "eval" / "selection.json")
+    now = None if sel is None else {m: d["selection"]["tag"] for m, d in sel["modes"].items()}
+    for lib, rec in recorded.items():
+        if now is not None and rec is not None and rec != now:
+            show = lambda x: ", ".join(f"{MODE_NAMES[m]} {t or 'none'}" for m, t in x.items())  # noqa: E731
+            notes.append(f"{lib}: ercc.json was written with the chosen settings {show(rec)}; eval/selection.json now chooses "
+                         f"{show(now)}, so stage 15 predates the current selection and the table lacks the chosen setting.")
+    if entries:
+        out += ["Columns: n: ERCCs with a UMI unfiltered and a Mix 1 concentration; pearson_log10: Pearson correlation of "
+                "log10(UMIs + 1) with log10(concentration); spearman: Spearman correlation of the UMIs with the concentration; "
+                "umis: UMIs left after the setting; umis_kept_share: umis over the unfiltered umis. UMIs are counted over primary "
+                "records with a called-cell CB and a UB (stage 15), not over every barcode as in section 7.", ""]
     if entries:
         cols = list(dict.fromkeys(k for _, _, f in entries for k in f))
         out += _table(["Library", "Setting"] + cols,
@@ -800,7 +818,10 @@ def long_read_section(base):
     base = Path(base)
     out = ["## 9. Long reads (BD67, BD70)", "",
            "Source: `<lib>/long_read_acceptance.json` and `<lib>/long_read_sites.parquet` (stage 16). Hexamer rates per unique "
-           "site with an accepted read (binding, spec 4.3: passes at ratio >= 3) and per accepted read.", ""]
+           "site with an accepted read (binding, spec 4.3: passes at a per-site ratio >= 3) and per accepted read. Outcomes of the "
+           f"used reads: Accepted, a terminal A run of at least {_READ['min_run'].default} nt followed by at least "
+           f"{_READ['min_after'].default} nt of clip; Short run, the run is shorter than {_READ['min_run'].default} nt; Short "
+           f"after, the run is long enough but fewer than {_READ['min_after'].default} nt of clip follow; Both, neither.", ""]
     data, notes = {}, []
     for lib in LONG_READS:
         p = base / lib / "long_read_acceptance.json"
@@ -808,7 +829,7 @@ def long_read_section(base):
         if d is None:
             notes.append(f"{lib}: {_not_run(base, [p])}")
         else:
-            data[lib] = (d, _parquet(base / lib / "long_read_sites.parquet", ["n_accepted", "a20", "hexamer"]))
+            data[lib] = (d, _parquet(base / lib / "long_read_sites.parquet", ["n_accepted", "a20", "hexamer", "label", "region"]))
     if not data:
         return "\n".join(_notes(out, notes))
     rows = []
@@ -824,6 +845,18 @@ def long_read_section(base):
         f" and {lib} {_pct(d['dropped_fraction'], 1)}" for lib, (d, _) in rest)
     out += ["", f"- The spec expects about 7% of reads dropped. In this run {drops} (`dropped_fraction` in each acceptance file, "
                 "over the references stage 16 processed)."]
+    out += ["", "Sites with an accepted read by region and label "
+                "(" + ", ".join(f"`{lib}/long_read_sites.parquet`" for lib, (_, sites) in data.items() if sites is not None) +
+                ", unique sites):", ""]
+    rows = []
+    for lib, (_, sites) in data.items():
+        if sites is None:
+            continue
+        c = pd.crosstab(sites[sites.n_accepted >= 1].region, sites[sites.n_accepted >= 1].label)
+        c = c.reindex(index=list(REGION_NAMES), columns=list(LABELS), fill_value=0)
+        rows += [[lib, region, _int(t.templated), _int(t.ambiguous), _int(t.nontemplated), _int(t.sum())] for region, t in c.iterrows()]
+    out += _table(["Library", "Region", "templated", "ambiguous", "non-templated", "total"], rows) if rows else \
+        ["not run (missing long_read_sites.parquet)"]
     out += ["", "Hexamer rates (sites T / NT / amb counted per unique site with an accepted read):", ""]
     rows = []
     for lib, (d, sites) in data.items():
@@ -836,10 +869,11 @@ def long_read_section(base):
                          _r(h["hexamer_rate"]["templated"]), _r(h["hexamer_rate"]["nontemplated"]),
                          _r(h["hexamer_rate"]["ambiguous"]), _r(h["ratio"], 2), h["passes"], _r(t), _r(nt), _r(ratio, 2)])
     out += _table(["Library", "Cut-offs", "Sites T / NT / amb", "Rate T", "Rate NT", "Rate amb", "Ratio per site",
-                   "Passes (ratio >= 3)", "Per-read rate T", "Per-read rate NT", "Ratio per read"], rows)
+                   "Passes (per-site ratio >= 3)", "Per-read rate T", "Per-read rate NT", "Ratio per read"], rows)
     out += ["", "Agreement with 1179 (1179 molecules on the references stage 16 processed; a long-read site within 10 nt on "
-                "the same strand; agreement within 10 nt mostly measures co-location, the matched share per label is the "
-                "informative number):", ""]
+                "the same strand). Agreement T / NT / pooled: among 1179 molecules matched to a long-read site, the share with the "
+                "same label (T: of the matched templated molecules, NT: of the matched non-templated, pooled: of the matched "
+                "templated or non-templated). Agreement within 10 nt may mostly measure co-location (not tested here):", ""]
     rows = []
     for lib, (d, _) in data.items():
         v = d.get("vs_1179")

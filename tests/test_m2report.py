@@ -339,6 +339,8 @@ def test_empty_base_renders_every_section_as_not_run(tmp_path):
 
 def test_runs_section(base):
     s = m2report.runs_section(base)
+    assert "memwatch samples every 2 s (interval_s in the files)" in s
+    assert "upper bound" not in s and "a peak between two samples is missed" in s
     # memwatch outside original/: command from the script on, paths reduced to names; 1,240.2 s; 19.123 GiB
     assert "| 13_grid_flags.py 1417 --workers 8 | 1417/grid/stage13.mem.json | 1,240 | 19.12 | 0 |" in s
     assert "c275_l9_m1_i.mem.json |" not in s.split("Stage 13")[0]
@@ -851,6 +853,27 @@ def test_ercc_section(base):
     assert "| 1417 | c300_l10_m1_i | 61 | 0.920 | 0.890 | 50,502 | 0.971 |" in s
     assert "| 1417 | c375_l3_m2_i | 3 | n/a | n/a | 3 | 0.000 |" in s
     assert "| 1419 | unfiltered | 60 | 0.900 | 0.800 | 4,000 | 1.000 |" in s
+    # column definitions from evaluate/ercc.py, and the barcode set of stage 15
+    assert "n: ERCCs with a UMI unfiltered and a Mix 1 concentration" in s
+    assert "pearson_log10: Pearson correlation of log10(UMIs + 1) with log10(concentration)" in s
+    assert "umis_kept_share: umis over the unfiltered umis" in s
+    assert "UMIs are counted over primary records with a called-cell CB and a UB (stage 15), not over every barcode as in section 7" in s
+    # the recorded selection (default none, -i c300_l10_m1_i) is the one in eval/selection.json: no note
+    assert "predates the current selection" not in s
+
+
+def test_ercc_section_flags_a_selection_that_changed(base):
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    sel["modes"]["i"]["selection"]["tag"] = "c200_l10_m2_i"
+    p.write_text(json.dumps(sel))
+    s = m2report.ercc_section(base)
+    assert ("1417: ercc.json was written with the chosen settings default none, -i c300_l10_m1_i; eval/selection.json now "
+            "chooses default none, -i c200_l10_m2_i, so stage 15 predates the current selection and the table lacks the "
+            "chosen setting.") in s
+    assert "1419:" not in s.split("predates")[0].split("- ")[-1]   # 1419 records no selection: no note
+    p.unlink()
+    assert "predates the current selection" not in m2report.ercc_section(base)
 
 
 def test_long_read_section(base):
@@ -867,6 +890,23 @@ def test_long_read_section(base):
     assert "about 12%" not in s
     assert "| BD67 | 16,408 | 0.615 | 0.491 / 0.907 / 0.805 | 0.993 / 0.996 / 0.994 |" in s
     assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s
+    # outcome and agreement columns defined, thresholds from bd67.read_outcome
+    assert ("Outcomes of the used reads: Accepted, a terminal A run of at least 10 nt followed by at least 30 nt of clip; Short run, "
+            "the run is shorter than 10 nt; Short after, the run is long enough but fewer than 30 nt of clip follow; Both, "
+            "neither.") in s
+    assert "Passes (per-site ratio >= 3)" in s and "Passes (ratio >= 3)" not in s
+    assert "Agreement T / NT / pooled: among 1179 molecules matched to a long-read site" in s
+    assert "may mostly measure co-location (not tested here)" in s and "mostly measures co-location" not in s
+
+
+def test_long_read_section_sites_by_region_and_label(base):
+    s = m2report.long_read_section(base)
+    # the fixture sites (all region 3UTR): sites with an accepted read are 10, 20, 30, 40, 70, 80, 90; labels templated 10, 20,
+    # 80, 90 and non-templated 30, 40, 70
+    assert "Sites with an accepted read by region and label (`BD67/long_read_sites.parquet`, unique sites):" in s
+    assert "| BD67 | 3UTR | 4 | 0 | 3 | 7 |" in s
+    assert "| BD67 | CDS | 0 | 0 | 0 | 0 |" in s
+    assert "| Library | Region | templated | ambiguous | non-templated | total |" in s.split("Sites with an accepted read")[1]
 
 
 def test_long_read_section_drop_rates_come_from_the_files(base):
