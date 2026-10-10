@@ -580,7 +580,8 @@ def spikein_section(base):
     out = ["## 7. Spike-ins", "",
            "Source: `<lib>/spikein/truth/molecules_labeled.parquet` (stage 14), `eval/spikein_metrics.parquet` (stage 17). "
            "spike_label comes from the distance to the annotated 3' end; label from the A count after the site. Spike-in metrics "
-           "use every barcode, whatever population the setting selection uses: spike-ins are free RNA in every droplet.", ""]
+           "use every barcode, whatever population the setting selection uses: spike-ins are free RNA in every droplet. 1179 has no "
+           "spike-ins, so this section has no 1179 rows.", ""]
     data, notes = {}, []
     for lib in NUCLEI:
         p = base / lib / "spikein" / "truth" / "molecules_labeled.parquet"
@@ -628,16 +629,30 @@ def spikein_section(base):
         out[-2:] = [f"Metrics per module: {_not_run(base, [p])}"]
         return "\n".join(out)
     tags, note = _report_tags(base)
+    tags = tags + CONTROL_TAGS
     out += note
-    s = s[(s.level == "molecule") & (s.cap == MEMBER_CAP)]
-    look = {(r.lib, r.tag, r.stratum): r for r in s.itertuples()}
-    rows = []
-    for lib in dict.fromkeys(s.lib):
-        for tag in tags:
-            if (lib, tag, "all") in look:
-                rows.append([lib, tag] + [f"{_r(look[lib, tag, k].sens)} / {_r(look[lib, tag, k].spec)}"
-                                          if (lib, tag, k) in look else "n/a" for k in ("all",) + MODULES])
-    out += _table(["Library", "Setting", "all"] + list(MODULES), rows)
+    s = s[s.cap == MEMBER_CAP]
+
+    def table(level):
+        look = {(r.lib, r.tag, r.stratum): r for r in s[s.level == level].itertuples()}
+        rows = []
+        for lib in dict.fromkeys(s.lib):
+            for tag in tags:
+                if (lib, tag, "all") in look:
+                    rows.append([lib, tag] + [f"{_r(look[lib, tag, k].sens)} / {_r(look[lib, tag, k].spec)}"
+                                              if (lib, tag, k) in look else "n/a" for k in ("all",) + MODULES])
+        return _table(["Library", "Setting", "all"] + list(MODULES), rows)
+
+    out += table("molecule")
+    out += ["", f"Metrics per module at the read level (a read counts as a unit; same file, cap {MEMBER_CAP:,} nt), sens / spec:", ""]
+    out += table("read")
+    ex = next(((lib, t, m, r) for lib in dict.fromkeys(s.lib) for t in CONTROL_TAGS
+               if (m := s[(s.lib == lib) & (s.tag == t) & (s.level == "molecule") & (s.stratum == "all")].spec).size
+               and (r := s[(s.lib == lib) & (s.tag == t) & (s.level == "read") & (s.stratum == "all")].spec).size), None)
+    out += ["", "Molecule-level specificity cannot fail here, because the pa read of a "
+                "tail molecule ends in the protected 3' stretch, so the molecule is never fully removed" +
+            ("." if ex is None else f"; on {ex[0]} the control {ex[1]} reads {_r(ex[2].iloc[0])} at molecule level and "
+                                    f"{_r(ex[3].iloc[0])} at read level.")]
     return "\n".join(out)
 
 
@@ -654,7 +669,7 @@ def ercc_section(base):
     base = Path(base)
     out = ["## 8. ERCC count accuracy (provisional)", "",
            "Source: `<lib>/spikein/ercc.json` (stage 15): correlation of ERCC UMI counts with input concentration, "
-           "unfiltered and per setting.", ""]
+           "unfiltered and per setting. 1179 has no spike-ins, so this section has no 1179 rows.", ""]
     entries, notes, flags = [], [], []
     for lib in NUCLEI:
         p = base / lib / "spikein" / "ercc.json"

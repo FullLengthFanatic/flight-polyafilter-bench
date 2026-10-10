@@ -195,7 +195,9 @@ def _full_base(tmp_path):
         columns=["lib", "cap", "tag", "label", "removed_n", "removed_hex_rate", "kept_n", "kept_hex_rate"]))
     spike = [dict(_metric("1417", I1, "all", "all", 10, 30, 50, 2), level="molecule"),
              dict(_metric("1417", I1, "module", "ERCC", 5, 5, 20, 0)),
-             dict(_metric("1417", I1, "all", "all", 9, 1, 0, 0, level="read"))]
+             dict(_metric("1417", I1, "all", "all", 9, 1, 0, 0, level="read")),
+             dict(_metric("1417", C1, "all", "all", 50, 50, 984, 16)),
+             dict(_metric("1417", C1, "all", "all", 60, 40, 156, 844, level="read"))]
     spike = pd.DataFrame(spike).drop(columns=["cutoffs"])
     spike["min_len"] = spike.min_len.astype("Int64")
     _write(b / "eval/spikein_metrics.parquet", spike)
@@ -675,8 +677,29 @@ def test_spikein_section(base):
     assert "1419: not run (missing 1419/spikein/truth/molecules_labeled.parquet)" in s
     # molecule level only: 10 / 40, 50 / 52; ERCC 5 / 10, 20 / 20; the read-level row (9 / 10) is not used
     assert "| 1417 | c300_l10_m1_i | 0.250 / 0.962 | 0.500 / 1.000 | n/a | n/a |" in s
+    # the control, molecule level: 50 / 100, 984 / 1,000
+    assert "| 1417 | c150_lnone_m0_i | 0.500 / 0.984 | n/a | n/a | n/a |" in s
     (base / "eval/spikein_metrics.parquet").unlink()
     assert "Metrics per module: not run (missing eval/spikein_metrics.parquet)" in m2report.spikein_section(base)
+
+
+def test_spikein_section_read_level_and_no_1179(base):
+    s = m2report.spikein_section(base)
+    read = s.split("Metrics per module at the read level", 1)[1]
+    # read level from the same file: 9 / 10 and no negatives; the control 60 / 100 and 156 / 1,000
+    assert "| 1417 | c300_l10_m1_i | 0.900 / n/a | n/a | n/a | n/a |" in read
+    assert "| 1417 | c150_lnone_m0_i | 0.600 / 0.156 | n/a | n/a | n/a |" in read
+    assert "Molecule-level specificity cannot fail here" in s
+    assert "ends in the protected 3' stretch, so the molecule is never fully removed" in s
+    # the example sentence is built from the control rows: 0.984 at molecule level, 0.156 at read level
+    assert "on 1417 the control c150_lnone_m0_i reads 0.984 at molecule level and 0.156 at read level" in s
+    assert "1179 has no spike-ins, so this section has no 1179 rows" in s
+    (base / "eval/spikein_metrics.parquet").unlink()
+    assert "at the read level" not in m2report.spikein_section(base)
+
+
+def test_ercc_section_says_1179_has_no_spikeins(base):
+    assert "1179 has no spike-ins, so this section has no 1179 rows" in m2report.ercc_section(base)
 
 
 def test_ercc_section(base):
