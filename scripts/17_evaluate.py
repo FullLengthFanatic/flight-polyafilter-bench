@@ -7,7 +7,8 @@ member read within the cap, or all labeled molecules. Spike-in metrics use every
 Writes metrics.parquet, populations.parquet, bootstrap.parquet, hexamer_check.parquet, spikein_metrics.parquet and
 selection.json. selection.json holds the rule, selection_population, selection_units, the chosen settings per mode and the
 metrics of the chosen and published settings, plus molecules (labeled and called-cell counts), cells_tuned (the rule run on
-the cells library), cap_sensitivity, cutoff_sweep, populations (the rule per population and units), mapq_sensitivity,
+the cells library), cap_sensitivity, cutoff_sweep, populations (the rule per population and units, and per entry the molecule-level
+metrics of the headline settings there under "headline"), mapq_sensitivity,
 ambiguous_tail_share and label_purity (hexamer-based estimates of the tail-primed share)."""
 import argparse
 import json
@@ -152,8 +153,11 @@ def main():
         by_population.setdefault(pop, {})[um] = {}
         for mode, introns in MODES.items():
             s = select_setting(d, removed_sel, introns, SEL_LIB, MEMBER_CAP, CUTOFFS, MIN_SPEC)
+            head = modes[mode]["selection"]["tag"]
             by_population[pop][um][mode] = {"introns": introns, "selection": s, "metrics": {
-                lib: _summary(d, s["tag"], lib, ("molecule",)) for lib in libs} if s["tag"] else {}}
+                lib: _summary(d, s["tag"], lib, ("molecule",)) for lib in libs} if s["tag"] else {},
+                "headline": {"tag": head, "metrics": {
+                    lib: _summary(d, head, lib, ("molecule",)) for lib in libs} if head else {}}}
 
     mapq_sens = {}
     if mapq_metrics:

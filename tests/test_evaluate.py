@@ -451,8 +451,32 @@ def test_stage17_population_and_units_options(tmp_path):
                        kinds=("all", "a_band", "region"))
         got = pops[0][(pops[0].population == pop) & (pops[0].units == um) & (pops[0].lib == "1417")]
         pd.testing.assert_frame_equal(got.drop(columns=["population", "units"]).reset_index(drop=True), ref, check_dtype=False)
-    assert runs["all", "with_member"]["populations"] == runs["cells", "all_labeled"]["populations"] == \
-        runs["noncells", "with_member"]["populations"]
+    def bare(sel):
+        return {pop: {um: {mode: {k: v for k, v in d.items() if k != "headline"} for mode, d in modes.items()}
+                      for um, modes in v.items()} for pop, v in sel["populations"].items()}
+
+    assert bare(runs["all", "with_member"]) == bare(runs["cells", "all_labeled"]) == bare(runs["noncells", "with_member"])
+    # headline: the tag chosen per mode in the run's population and units, scored in every population and units
+    for (hp, hu), sel in runs.items():
+        for pop, um in COMBOS:
+            for mode, d in sel["populations"][pop][um].items():
+                tag = sel["modes"][mode]["selection"]["tag"]
+                assert d["headline"]["tag"] == tag
+                if tag is None:
+                    assert d["headline"]["metrics"] == {}
+                    continue
+                assert set(d["headline"]["metrics"]) == {"1417", "1419"}
+                for lib, lv in d["headline"]["metrics"].items():
+                    sub = mol[mol.mol.isin(POP_MOLS[pop])].reset_index(drop=True)
+                    ref = evaluate(units(sub, tr, fl, tags, 1000, all_labeled=um == "all_labeled"), lib, 1000, levels=("molecule",),
+                                   kinds=("all",))
+                    r = ref[(ref.tag == tag) & (ref.cutoffs == "8/4") & (ref.stratum_kind == "all")].iloc[0]
+                    assert lv["molecule"]["tp"] == r.tp and lv["molecule"]["tn"] == r.tn
+                    assert lv["molecule"]["sens"] == (None if pd.isna(r.sens) else pytest.approx(r.sens))
+                    assert set(lv) == {"molecule"}
+                if (pop, um) == (hp, hu):
+                    assert d["headline"]["metrics"] == {lib: {"molecule": v["molecule"]}
+                                                        for lib, v in sel["modes"][mode]["metrics"].items()}
     block = runs["all", "with_member"]["populations"]
     assert set(block) == {"all", "cells", "noncells"} and all(set(v) == {"with_member", "all_labeled"} for v in block.values())
     assert block["all"]["with_member"]["i"]["selection"] == runs["all", "with_member"]["modes"]["i"]["selection"]

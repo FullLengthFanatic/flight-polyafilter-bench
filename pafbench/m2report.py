@@ -396,6 +396,17 @@ def _populations_lines(base, sel):
                 rows.append([POP_NAMES[pop], UNIT_NAMES[um], MODE_NAMES[mode], s["tag"] or "none", s["n_qualifying"]] + [
                     f"{_r(m['sens'])} / {_r(m['spec'])}" if (m := d["metrics"].get(lib, {}).get("molecule")) else "n/a" for lib in libs])
     out += _table(["Population", "Units", "Mode", f"Chosen (on {sl})", "Qualifying"] + [f"{lib} sens / spec" for lib in libs], rows)
+    rows = [[POP_NAMES[pop], UNIT_NAMES[um], MODE_NAMES[mode], h["tag"] or "none"] + [
+        f"{_r(m['sens'])} / {_r(m['spec'])}" if (m := h["metrics"].get(lib, {}).get("molecule")) else "n/a" for lib in libs]
+        for pop, units_ in sel["populations"].items() for um, modes in units_.items() for mode, d in modes.items()
+        if (h := d.get("headline"))]
+    if not rows:
+        return out + ["", "Headline settings in each population: not run (eval/selection.json populations have no headline, "
+                          "stage 17 predates it)"]
+    out += ["", f"Headline settings (the tags chosen per mode in {POP_NAMES[sel.get('selection_population', 'all')]}, "
+                f"{UNIT_NAMES[sel.get('selection_units', 'with_member')]}) scored in each population and with each unit "
+                f"definition, molecule level (member cap {MEMBER_CAP:,} nt, {CUTOFFS} labels):", ""]
+    out += _table(["Population", "Units", "Mode", "Headline setting"] + [f"{lib} sens / spec" for lib in libs], rows)
     return out
 
 

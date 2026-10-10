@@ -670,8 +670,10 @@ def test_selection_section_chosen_setting_outside_the_published_ones(base):
 
 
 def _pop_sel(tag, sens, spec, n_q):
+    head = "c250_l7_m1_e" if not tag else tag
     return {"introns": bool(tag), "selection": _sel(tag, sens, spec, 0.99, n_q) if tag else NONE_E,
-            "metrics": {"1417": {"molecule": _lvl(80, 20, 90, 10)}, "1179": {"molecule": _lvl(30, 70, 95, 5)}} if tag else {}}
+            "metrics": {"1417": {"molecule": _lvl(80, 20, 90, 10)}, "1179": {"molecule": _lvl(30, 70, 95, 5)}} if tag else {},
+            "headline": {"tag": head, "metrics": {"1417": {"molecule": _lvl(60, 40, 95, 5)}, "1179": {"molecule": _lvl(10, 90, 99, 1)}}}}
 
 
 def _add_populations(base):
@@ -723,6 +725,20 @@ def test_selection_section_called_cells_table(base):
     assert "| called cells | all labeled molecules | -i | c160_l9_m2_i | 101 | 0.800 / 0.900 | 0.300 / 0.950 |" in s
     assert "| other barcodes | molecules with a member read within the cap | default | none | 0 | n/a | n/a |" in s
     assert "| all barcodes | molecules with a member read within the cap | -i | c150_l9_m2_i | 100 | 0.800 / 0.900 | 0.300 / 0.950 |" in s
+    # headline settings under every population and units: sens / spec = tp / (tp + fn), tn / (tn + fp) of _lvl
+    assert ("Headline settings (the tags chosen per mode in called cells, all labeled molecules) scored in each population and "
+            "with each unit definition, molecule level (member cap 1,000 nt, 8/4 labels):") in s
+    assert "| Population | Units | Mode | Headline setting | 1417 sens / spec | 1179 sens / spec |" in s
+    assert "| called cells | all labeled molecules | -i | c160_l9_m2_i | 0.600 / 0.950 | 0.100 / 0.990 |" in s
+    assert "| other barcodes | molecules with a member read within the cap | default | c250_l7_m1_e | 0.600 / 0.950 | 0.100 / 0.990 |" in s
+    sel = json.loads((base / "eval/selection.json").read_text())
+    for units_ in sel["populations"].values():
+        for modes in units_.values():
+            for d in modes.values():
+                del d["headline"]
+    (base / "eval/selection.json").write_text(json.dumps(sel))
+    assert "Headline settings in each population: not run (eval/selection.json populations have no headline, stage 17 predates it)" \
+        in m2report.selection_section(base)
     (base / "burden/templated_share_population.parquet").unlink()
     s = m2report.selection_section(base)
     assert "Templated share by population: not run (missing burden/templated_share_population.parquet)" in s
