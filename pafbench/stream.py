@@ -5,6 +5,7 @@ Pass 2 reads records in chunks and checks each record's blocks against every set
 merge kernel; only aggregates (per RE code, per called cell) and the rows of truth reads are kept.
 Results equal flags.flag_reference record for record.
 """
+import hashlib
 import json
 import time
 from bisect import bisect_left, bisect_right
@@ -348,6 +349,14 @@ def scan_to_parts(bam_path, fasta_path, ref, transcripts, settings, truth_qnames
              "seconds": round(time.monotonic() - t0, 1)} | (meta or {})
     done.write_text(json.dumps(stats))
     return stats
+
+
+def qname_digest(qnames):
+    """sha256 (hex) of the read names in the given order, each followed by a newline."""
+    h = hashlib.sha256()
+    for q in qnames:
+        h.update(q.encode() + b"\n")
+    return h.hexdigest()
 
 
 def stale_parts(part_dir, refs, meta):

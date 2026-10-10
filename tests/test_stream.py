@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import os
 import shutil
@@ -16,8 +17,8 @@ from pafbench.flags import Setting, flag_reference, setting_tag
 from pafbench.grid import all_settings
 from pafbench.intervals import blocks_hit, flatten, intersect
 from pafbench.snr import scan_snrs, snr_pieces
-from pafbench.stream import (body_pieces, coverage_prefix_chunked, merge_parts, reference_pieces, scan_reference, scan_to_parts,
-                             stale_parts)
+from pafbench.stream import (body_pieces, coverage_prefix_chunked, merge_parts, qname_digest, reference_pieces, scan_reference,
+                             scan_to_parts, stale_parts)
 from pafbench.transcripts import coverage_prefix, expressed, load_transcripts, start_pieces
 
 SETTINGS = [
@@ -443,7 +444,8 @@ def test_scan_reference_with_tiny_block_buffers(synth, tagged, monkeypatch, capa
 def test_parts_store_their_inputs_and_stale_parts_are_named(synth, tagged, tmp_path):
     tx = load_transcripts(synth.gtf)
     part_dir = tmp_path / "parts"
-    meta = {"truth": "/x/truth_reads.parquet", "truth_rows": 12, "settings": len(SETTINGS)}
+    meta = {"truth": "/x/truth_reads.parquet", "truth_rows": 12, "truth_qname_sha256": qname_digest(["r1", "r2"]),
+            "settings": len(SETTINGS)}
     st = scan_to_parts(tagged, synth.fasta, "chrB", tx, SETTINGS, set(), None, part_dir, meta=meta)
     stored = json.loads((part_dir / "chrB.json").read_text())
     assert stored == st and {k: stored[k] for k in meta} == meta and stored["ref"] == "chrB"
@@ -452,9 +454,18 @@ def test_parts_store_their_inputs_and_stale_parts_are_named(synth, tagged, tmp_p
     assert stale_parts(part_dir, ["chrA", "chrB"], meta | {"truth_rows": 13}) == ["chrB"]
     assert stale_parts(part_dir, ["chrB"], meta | {"truth": "/y/truth_reads.parquet"}) == ["chrB"]
     assert stale_parts(part_dir, ["chrB"], meta | {"settings": 396}) == ["chrB"]
+    assert stale_parts(part_dir, ["chrB"], meta | {"truth_qname_sha256": "0" * 64}) == ["chrB"]
     # a part written without the guard (no inputs stored) is stale as well
     scan_to_parts(tagged, synth.fasta, "chrA", tx, SETTINGS, set(), None, part_dir)
     assert stale_parts(part_dir, ["chrA", "chrB"], meta) == ["chrA"]
+
+
+def test_qname_digest_is_sha256_of_the_names_in_file_order():
+    want = hashlib.sha256(b"r1\nr2\nr3\n").hexdigest()
+    assert qname_digest(["r1", "r2", "r3"]) == want
+    assert qname_digest(pd.Series(["r1", "r2", "r3"])) == want
+    assert qname_digest(["r2", "r1", "r3"]) != want and qname_digest(["r1", "r2", "r4"]) != want
+    assert qname_digest(["r1r", "2r3"]) != qname_digest(["r1", "r2r3"])
 
 
 # Runs a stage script with pafbench.config pointed at test inputs: FASTA GTF BAM(of library X) SCRIPT ARGS...
@@ -588,8 +599,16 @@ def test_stage13_resume_after_crash_and_stale_truth(stage13_inputs, stage13_fres
     r = _stage13(inputs, out)
     assert r.returncode == 0 and json.loads(r.stdout.strip().splitlines()[-1])["scanned"] == 0
     assert _grid_outputs(out)[3] == want[3]
-    # stage 12 reran and rewrote the truth file at the same path with other rows: refused, nothing rewritten
+    # stage 12 reran and rewrote the truth file at the same path with the same number of other reads: refused, nothing rewritten
     before = {p.name: p.stat().st_mtime_ns for p in out.iterdir() if p.is_file()}
+    same_n = pd.read_parquet(fixture_truth)
+    same_n.loc[same_n.index[0], "qname"] = "another_read"
+    same_n.to_parquet(truth)
+    assert len(same_n) == len(pd.read_parquet(fixture_truth))
+    r = _stage13(inputs, out)
+    assert r.returncode == 1 and "chrA, chrB, chrC" in r.stderr
+    assert {p.name: p.stat().st_mtime_ns for p in out.iterdir() if p.is_file()} == before
+    # and with one more row
     pd.concat([pd.read_parquet(truth), pd.DataFrame({"qname": ["extra"]})]).to_parquet(truth)
     r = _stage13(inputs, out)
     assert r.returncode == 1
