@@ -182,6 +182,67 @@ def test_stage18_end_to_end(tmp_path):
     assert summ["same_site"]["1417_vs_1419"] == {"sites_a": 60, "matched": 60, "same_label": 60}
 
 
+def _stage18(base, out, tmp_path, *extra):
+    env = dict(os.environ, PYTHONPATH=str(REPO))
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "18_burden.py"), "--base", str(base), "--out", str(out),
+                           "--atlas", str(_atlas(tmp_path)), *extra], capture_output=True, text=True, env=env, cwd=REPO)
+
+
+def _pop_libs(base, in_cell=True):
+    libs = {"1417": _lib_mol(0), "1419": _lib_mol(0), "1179": _lib_mol(3)}
+    for lib, mol in libs.items():
+        libs[lib] = mol.assign(in_cell=(mol.mol % 3 != 0) if lib != "1179" else mol.mol < 40) if in_cell else mol
+        (base / lib / "truth").mkdir(parents=True)
+        libs[lib].to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
+    return libs
+
+
+def test_stage18_population_selects_barcodes_and_reports_all_three(tmp_path):
+    base = tmp_path / "base"
+    libs = _pop_libs(base)
+    shares = {}
+    for pop in ("all", "cells", "noncells"):
+        r = _stage18(base, tmp_path / pop, tmp_path, "--population", pop)
+        assert r.returncode == 0, r.stderr
+        t = pd.read_parquet(tmp_path / pop / "templated_share.parquet")
+        a = t[(t.group == "1417") & (t.stratum_kind == "all")].iloc[0]
+        sub = libs["1417"][{"all": slice(None), "cells": libs["1417"].in_cell, "noncells": ~libs["1417"].in_cell}[pop]]
+        assert (a.templated, a.nontemplated, a.ambiguous, a.total) == tuple(
+            int(x) for x in (sub.label.eq("templated").sum(), sub.label.eq("nontemplated").sum(), sub.label.eq("ambiguous").sum(),
+                             len(sub)))
+        shares[pop] = pd.read_parquet(tmp_path / pop / "templated_share_population.parquet")
+    # the per-population table does not depend on --population
+    pd.testing.assert_frame_equal(shares["all"], shares["cells"])
+    pd.testing.assert_frame_equal(shares["all"], shares["noncells"])
+    t = shares["all"]
+    assert list(t.columns) == ["lib", "population", "stratum_kind", "stratum", "templated", "nontemplated", "ambiguous", "total",
+                               "share_all"]
+    assert set(zip(t.lib, t.population)) == {(lib, p) for lib in libs for p in ("all", "cells", "noncells")}
+    assert set(t.stratum_kind) == {"all", "region"}
+    for lib, mol in libs.items():
+        for pop, sub in (("all", mol), ("cells", mol[mol.in_cell]), ("noncells", mol[~mol.in_cell])):
+            row = t[(t.lib == lib) & (t.population == pop) & (t.stratum_kind == "all")].iloc[0]
+            n = sub.label.value_counts()
+            assert (row.templated, row.nontemplated, row.ambiguous, row.total) == (
+                n.get("templated", 0), n.get("nontemplated", 0), n.get("ambiguous", 0), len(sub))
+            assert row.share_all == n.get("templated", 0) / len(sub)
+    r = t[(t.lib == "1179") & (t.population == "cells") & (t.stratum_kind == "region") & (t.stratum == "intron")]
+    assert len(r) == 0  # 1179 cells are mol < 40: all 3UTR
+    r = t[(t.lib == "1179") & (t.population == "noncells") & (t.stratum_kind == "region")]
+    assert r.stratum.tolist() == ["intron"] and r.total.tolist() == [20]
+
+
+def test_stage18_population_needs_in_cell(tmp_path):
+    base = tmp_path / "base"
+    _pop_libs(base, in_cell=False)
+    r = _stage18(base, tmp_path / "out", tmp_path, "--population", "cells")
+    assert r.returncode != 0 and "in_cell" in r.stderr
+    r = _stage18(base, tmp_path / "out_all", tmp_path)
+    assert r.returncode == 0, r.stderr
+    t = pd.read_parquet(tmp_path / "out_all" / "templated_share_population.parquet")
+    assert set(t.population) == {"all"}
+
+
 def test_share_ci_of_stratum_fraction_matches_brute_force():
     rng = np.random.default_rng(2)
     genes = [f"g{i % 9}" for i in range(80)]

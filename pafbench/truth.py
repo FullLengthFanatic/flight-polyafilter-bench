@@ -26,6 +26,15 @@ def mark_in_cell(mol, barcodes_path):
     return mol.assign(in_cell=mol.cb.isin(called).to_numpy(bool))
 
 
+def in_population(mol, population):
+    """The molecules of one population: every barcode ("all"), called cells ("cells") or the other barcodes ("noncells")."""
+    if population == "all":
+        return mol
+    if "in_cell" not in mol:
+        raise ValueError(f"no in_cell column (rerun stage 12), needed for population {population}")
+    return mol[mol.in_cell.to_numpy(bool) == (population == "cells")].reset_index(drop=True)
+
+
 def label_truth_molecules(mol, pa, members, segments, cutoffs=LABEL_CUTOFFS):
     """mol plus label, a_band, region at the last cDNA base, gene, has_ts and n_members (members selected at MEMBER_CAP)."""
     out = label_molecules(mol, cutoffs)

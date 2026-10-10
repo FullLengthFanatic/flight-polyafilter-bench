@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from pafbench.config import CELLS, MEMBER_CAP, NUCLEI, OUT, SENS_CAPS
+from pafbench.config import CELLS, MEMBER_CAP, NUCLEI, OUT, POPULATIONS, SEL_POPULATION, SEL_UNITS, SENS_CAPS
 from pafbench.evaluate import (COUNT_COLUMNS, ambiguous_tail_share, bootstrap, evaluate, hexamer_check, relabel, select_setting,
                                spikein_metrics, tag_setting, units)
 from pafbench.flags import Setting, setting_tag
 from pafbench.grid import all_settings, published
+from pafbench.truth import in_population
 
 RULE = ("On 1417, in each mode, the grid setting (remove-all control and off-grid published settings excluded) with the "
         "highest molecule-level sensitivity subject to specificity >= 0.95, at member cap 1000 nt and 8/4 labels; ties broken "
@@ -19,9 +20,6 @@ RULE = ("On 1417, in each mode, the grid setting (remove-all control and off-gri
 MIN_SPEC = 0.95
 SEL_LIB = "1417"
 CUTOFFS = "8/4"
-SEL_POPULATION = "all"
-SEL_UNITS = "with_member"
-POPULATIONS = ("all", "cells", "noncells")
 UNITS = ("with_member", "all_labeled")
 POP_KINDS = ("all", "a_band", "region")
 MODES = {"e": False, "i": True}
@@ -46,12 +44,10 @@ def _load(f):
 
 
 def _population(mol, population, lib):
-    """The molecules of one population: every barcode, called cells (in_cell) or the other barcodes."""
-    if population == "all":
-        return mol
-    if "in_cell" not in mol:
-        raise SystemExit(f"{lib}: molecules_labeled.parquet has no in_cell column (rerun stage 12), needed for population {population}")
-    return mol[mol.in_cell.to_numpy(bool) == (population == "cells")].reset_index(drop=True)
+    try:
+        return in_population(mol, population)
+    except ValueError as e:
+        raise SystemExit(f"{lib}: {e}")
 
 
 def _summary(metrics, tag, lib, levels=SUMMARY_LEVELS):
