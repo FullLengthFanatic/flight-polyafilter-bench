@@ -1,12 +1,12 @@
 """Stage 03: per-record removal flags for polyAfilter settings (reimplementation)."""
 import argparse
 import json
-from multiprocessing import Pool
 
 import pysam
 
 from pafbench.config import FASTA, GTF, LIBRARIES, OUT
 from pafbench.flags import flag_reference, parse_setting, setting_tag
+from pafbench.pool import map_forked
 from pafbench.transcripts import load_transcripts
 
 _TX = None
@@ -37,8 +37,7 @@ def main():
     with pysam.AlignmentFile(str(bam)) as fh:
         stats = sorted((s for s in fh.get_index_statistics() if s.mapped > 0), key=lambda s: -s.mapped)
     jobs = [(bam, s.contig, settings, out_dir) for s in stats]
-    with Pool(args.workers, initializer=_init) as pool:
-        res = pool.map(_work, jobs, chunksize=1)
+    res = map_forked(_work, jobs, args.workers, initializer=_init)
     summary = {
         "library": args.library,
         "settings": [setting_tag(s) for s in settings],

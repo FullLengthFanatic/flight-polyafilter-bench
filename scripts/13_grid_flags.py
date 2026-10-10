@@ -1,8 +1,9 @@
 """Stage 13: polyAfilter removal at every grid setting, streamed per reference (pafbench.stream).
 
-Writes OUT/LIB/grid/truth_flags.parquet (primary records of truth reads), region_counts.parquet, cell_counts.parquet
-and summary.json. Per-reference parts go to grid/parts/; a reference whose json exists is not scanned again. Each part
-json names its inputs (truth file path and row count, number of settings); when they differ from this run's, the stage
+Writes OUT/LIB/grid/truth_flags.parquet (primary records of truth reads), region_counts.parquet (tag, re, removed, total,
+total_nondup: primary records without the duplicate flag), cell_counts.parquet and summary.json. Per-reference parts
+go to grid/parts/; a reference whose json exists is not scanned again. Each part json names its inputs (truth file
+path, row count and sha256 of the qname column, number of settings); when they differ from this run's, the stage
 stops and asks for parts/ to be trashed (after a stage 12 rerun, for example).
 
 Measured on 1417 chr1 (6.96M records, 396 settings, one worker, 2026-10-08): 202 s wall; worker peak RSS 2.71 GiB, of
@@ -19,7 +20,6 @@ import gzip
 import json
 import sys
 import time
-from multiprocessing import get_context
 from pathlib import Path
 
 import pandas as pd
@@ -29,7 +29,8 @@ import pysam
 from pafbench.config import FASTA, GTF, LIBRARIES, OUT
 from pafbench.flags import setting_tag
 from pafbench.grid import all_settings
-from pafbench.stream import merge_parts, scan_to_parts, stale_parts
+from pafbench.pool import map_forked
+from pafbench.stream import merge_parts, qname_digest, scan_to_parts, stale_parts
 from pafbench.transcripts import load_transcripts
 
 _TX = _TRUTH = _CELLS = None
@@ -69,7 +70,9 @@ def main():
         absent = [r for r in args.refs if r not in refs]
         if absent:
             print(f"--refs not in the BAM index or without mapped reads, ignored: {', '.join(absent)}", file=sys.stderr)
-    meta = {"truth": str(truth.resolve()), "truth_rows": pq.ParquetFile(truth).metadata.num_rows, "settings": len(settings)}
+    truth_qnames = pd.read_parquet(truth, columns=["qname"]).qname
+    meta = {"truth": str(truth.resolve()), "truth_rows": pq.ParquetFile(truth).metadata.num_rows,
+            "truth_qname_sha256": qname_digest(truth_qnames), "settings": len(settings)}
     stale = stale_parts(part_dir, refs, meta)
     if stale:
         sys.exit(f"{part_dir}: the parts of {', '.join(stale)} were made from another truth file or settings list "
@@ -77,14 +80,11 @@ def main():
     todo = [s for s in sorted(stats, key=lambda s: -s.mapped) if not (part_dir / f"{s.contig}.json").exists()]
     if todo:
         tx = load_transcripts(GTF)
-        truth_qnames = set(pd.read_parquet(truth, columns=["qname"]).qname)
         with gzip.open(cells, "rt") as fh:
             called = [line.strip() for line in fh]
         jobs = [(bam, s.contig, settings, part_dir, args.chunk, meta) for s in todo]
         # fork hands the parent's transcripts, truth set and cells to the workers without pickling (see _init)
-        with get_context("fork").Pool(args.workers, initializer=_init, initargs=(tx, truth_qnames, called),
-                                      maxtasksperchild=1) as pool:
-            pool.map(_work, jobs, chunksize=1)
+        map_forked(_work, jobs, args.workers, initializer=_init, initargs=(tx, set(truth_qnames), called))
     summary = merge_parts(part_dir, refs, [setting_tag(s) for s in settings], out_dir)
     summary = {"library": args.library, "settings": len(settings), "workers": args.workers, "scanned": len(todo),
                "seconds": round(time.monotonic() - t0, 1), **summary}

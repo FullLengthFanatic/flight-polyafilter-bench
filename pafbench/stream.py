@@ -5,6 +5,7 @@ Pass 2 reads records in chunks and checks each record's blocks against every set
 merge kernel; only aggregates (per RE code, per called cell) and the rows of truth reads are kept.
 Results equal flags.flag_reference record for record.
 """
+import hashlib
 import json
 import time
 from bisect import bisect_left, bisect_right
@@ -24,6 +25,7 @@ from .transcripts import expressed
 from .vendor import polyafilter_modules
 
 SECONDARY_OR_SUPPLEMENTARY = 0x900
+DUPLICATE = 0x400
 RE_CODES = ("E", "N", "I", "")
 
 
@@ -213,8 +215,9 @@ def scan_reference(bam_path, fasta_path, ref, transcripts, settings, truth_qname
     """(truth_df, region_df, cell_df) for one reference; region_df.attrs["records"] is the number of records fetched.
 
     truth_df: primary records whose qname is in truth_qnames, fetch order: qname, ref, pos, flag + one bool per tag.
-    region_df: tag, re, removed, total over primary records. cell_df: index cb (sorted cells), total then one
-    uint32 per tag over primary records with a called-cell CB; None when cells is None.
+    region_df: tag, re, removed, total, total_nondup over primary records (total_nondup: those without the duplicate
+    flag). cell_df: index cb (sorted cells), total then one uint32 per tag over primary records with a called-cell CB;
+    None when cells is None.
     """
     with pysam.FastaFile(str(fasta_path)) as fa:
         seq = fa.fetch(ref)
@@ -229,21 +232,24 @@ def scan_reference(bam_path, fasta_path, ref, transcripts, settings, truth_qname
     re_idx = {c: i for i, c in enumerate(RE_CODES)}
     reg = np.zeros((n_tags, len(RE_CODES)), np.int64)
     reg_total = np.zeros(len(RE_CODES), np.int64)
+    reg_nondup = np.zeros(len(RE_CODES), np.int64)
     cel = np.zeros((n_tags, len(cells_sorted)), np.uint32)
     cel_total = np.zeros(len(cells_sorted), np.int64)
     truth_parts = []
     n_records = 0
 
     def flush(c):
-        nonlocal reg, reg_total
+        nonlocal reg, reg_total, reg_nondup
         if len(re_idx) > reg.shape[1]:
             grow = len(re_idx) - reg.shape[1]
             reg = np.pad(reg, ((0, 0), (0, grow)))
             reg_total = np.pad(reg_total, (0, grow))
+            reg_nondup = np.pad(reg_nondup, (0, grow))
         nr, nb = c.nr, c.nb
         flags, re_code, cell, trow = c.flag[:nr], c.re[:nr], c.cell[:nr], c.trow[:nr]
         prim = (flags & SECONDARY_OR_SUPPLEMENTARY) == 0
         reg_total += np.bincount(re_code[prim], minlength=reg.shape[1])
+        reg_nondup += np.bincount(re_code[prim & ((flags & DUPLICATE) == 0)], minlength=reg.shape[1])
         in_cell = prim & (cell >= 0)
         cel_total[:] += np.bincount(cell[in_cell], minlength=len(cells_sorted))
         tru = np.zeros((len(c.t_qname), n_tags), np.bool_)
@@ -314,6 +320,7 @@ def scan_reference(bam_path, fasta_path, ref, transcripts, settings, truth_qname
         "re": [codes[k] for _ in tags for k in seen],
         "removed": reg[:, seen].reshape(-1),
         "total": np.tile(reg_total[seen], n_tags),
+        "total_nondup": np.tile(reg_nondup[seen], n_tags),
     })
     region_df["tag"] = region_df["tag"].astype("str")
     region_df["re"] = region_df["re"].astype("str")
@@ -350,6 +357,14 @@ def scan_to_parts(bam_path, fasta_path, ref, transcripts, settings, truth_qnames
     return stats
 
 
+def qname_digest(qnames):
+    """sha256 (hex) of the read names in the given order, each followed by a newline."""
+    h = hashlib.sha256()
+    for q in qnames:
+        h.update(q.encode() + b"\n")
+    return h.hexdigest()
+
+
 def stale_parts(part_dir, refs, meta):
     """refs whose finished part (<ref>.json) was written with other inputs than meta (or without them), in refs order."""
     stale = []
@@ -363,9 +378,9 @@ def stale_parts(part_dir, refs, meta):
 
 
 def merge_regions(parts, tags):
-    """Region rows (tag, re, removed, total) of several references summed per tag and RE, in tags order then RE."""
+    """Region rows (tag, re, removed, total, total_nondup) of references summed per tag and RE, in tags order then RE."""
     region = pd.concat(parts, ignore_index=True)
-    region = region.groupby(["tag", "re"], sort=False, as_index=False)[["removed", "total"]].sum()
+    region = region.groupby(["tag", "re"], sort=False, as_index=False)[["removed", "total", "total_nondup"]].sum()
     rank = region.tag.map({t: i for i, t in enumerate(tags)})
     return region.iloc[np.lexsort((region.re.to_numpy(), rank.to_numpy()))].reset_index(drop=True)
 

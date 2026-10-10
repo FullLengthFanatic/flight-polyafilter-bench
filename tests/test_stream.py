@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import os
 import shutil
@@ -16,8 +17,8 @@ from pafbench.flags import Setting, flag_reference, setting_tag
 from pafbench.grid import all_settings
 from pafbench.intervals import blocks_hit, flatten, intersect
 from pafbench.snr import scan_snrs, snr_pieces
-from pafbench.stream import (body_pieces, coverage_prefix_chunked, merge_parts, reference_pieces, scan_reference, scan_to_parts,
-                             stale_parts)
+from pafbench.stream import (body_pieces, coverage_prefix_chunked, merge_parts, qname_digest, reference_pieces, scan_reference,
+                             scan_to_parts, stale_parts)
 from pafbench.transcripts import coverage_prefix, expressed, load_transcripts, start_pieces
 
 SETTINGS = [
@@ -34,6 +35,7 @@ SETTINGS = [
 ]
 TAGS = [setting_tag(s) for s in SETTINGS]
 CELLS = ["GGGTTT-1", "AAACCC-1", "CCCGGG-1"]           # deliberately unsorted
+REGION_COLS = ["tag", "re", "removed", "total", "total_nondup"]
 CB_CYCLE = ["AAACCC-1", "CCCGGG-1", "GGGTTT-1", "TTTAAA-1", None]   # TTTAAA-1 is not a called cell
 RE_CYCLE = ["E", "N", "I", None]
 
@@ -56,6 +58,8 @@ def tagged(synth, tmp_path_factory):
                 a.flag |= 2048
             if i % 13 == 7:
                 a.flag |= 512
+            if i % 5 == 2:
+                a.flag |= 1024
             if a.is_secondary and prev is not None:
                 a.query_name = prev
             prev = a.query_name
@@ -78,7 +82,7 @@ def _region_long(prim):
     rows = []
     for re_, g in prim.groupby("re", sort=False):
         for t in TAGS:
-            rows.append((t, re_, int(g[t].sum()), len(g)))
+            rows.append((t, re_, int(g[t].sum()), len(g), int(((g.flag & 0x400) == 0).sum())))
     return sorted(rows)
 
 
@@ -242,13 +246,15 @@ def test_scan_reference_equals_flag_reference(synth, tagged, chunk):
         assert (truth.ref == ref).all()
         assert truth.pos.tolist() == prim.pos.tolist() and truth.flag.tolist() == prim.flag.tolist()
         assert np.array_equal(truth[TAGS].to_numpy(), prim[TAGS].to_numpy())
-        assert sorted(region[["tag", "re", "removed", "total"]].itertuples(index=False, name=None)) == _region_long(prim)
+        assert sorted(region[REGION_COLS].itertuples(index=False, name=None)) == _region_long(prim)
         want = _cells_expected(prim, CELLS)
         assert cells.index.name == "cb" and cells.index.tolist() == sorted(CELLS)
         assert list(cells.columns) == ["total"] + TAGS
         assert (cells.dtypes == np.uint32).all()
         assert np.array_equal(cells.to_numpy(np.int64), want.to_numpy(np.int64))
         assert region.attrs["records"] == len(flag_reference(tagged, synth.fasta, ref, tx, SETTINGS[:1]))
+        assert 0 < (prim.flag & 0x400).astype(bool).sum() and (region.total_nondup <= region.total).all()
+        assert (region.total_nondup < region.total).any()
         n_removed += int(prim[TAGS].to_numpy().sum())
         assert set(region.re) <= {"E", "N", "I", "", "X"}
     assert n_removed > 0
@@ -430,7 +436,7 @@ def test_scan_reference_with_tiny_block_buffers(synth, tagged, monkeypatch, capa
                                               chunk=chunk)
         assert truth.qname.tolist() == prim.qname.tolist()
         assert np.array_equal(truth[TAGS].to_numpy(), prim[TAGS].to_numpy())
-        assert sorted(region[["tag", "re", "removed", "total"]].itertuples(index=False, name=None)) == _region_long(prim)
+        assert sorted(region[REGION_COLS].itertuples(index=False, name=None)) == _region_long(prim)
         assert np.array_equal(cells.to_numpy(np.int64), _cells_expected(prim, CELLS).to_numpy(np.int64))
         # 145 records on chrA; a buffer of at most 4 blocks forces far more flushes (two kernel calls each) than chunk 1000
         assert len(flushes) > 2 * 30
@@ -443,7 +449,8 @@ def test_scan_reference_with_tiny_block_buffers(synth, tagged, monkeypatch, capa
 def test_parts_store_their_inputs_and_stale_parts_are_named(synth, tagged, tmp_path):
     tx = load_transcripts(synth.gtf)
     part_dir = tmp_path / "parts"
-    meta = {"truth": "/x/truth_reads.parquet", "truth_rows": 12, "settings": len(SETTINGS)}
+    meta = {"truth": "/x/truth_reads.parquet", "truth_rows": 12, "truth_qname_sha256": qname_digest(["r1", "r2"]),
+            "settings": len(SETTINGS)}
     st = scan_to_parts(tagged, synth.fasta, "chrB", tx, SETTINGS, set(), None, part_dir, meta=meta)
     stored = json.loads((part_dir / "chrB.json").read_text())
     assert stored == st and {k: stored[k] for k in meta} == meta and stored["ref"] == "chrB"
@@ -452,9 +459,18 @@ def test_parts_store_their_inputs_and_stale_parts_are_named(synth, tagged, tmp_p
     assert stale_parts(part_dir, ["chrA", "chrB"], meta | {"truth_rows": 13}) == ["chrB"]
     assert stale_parts(part_dir, ["chrB"], meta | {"truth": "/y/truth_reads.parquet"}) == ["chrB"]
     assert stale_parts(part_dir, ["chrB"], meta | {"settings": 396}) == ["chrB"]
+    assert stale_parts(part_dir, ["chrB"], meta | {"truth_qname_sha256": "0" * 64}) == ["chrB"]
     # a part written without the guard (no inputs stored) is stale as well
     scan_to_parts(tagged, synth.fasta, "chrA", tx, SETTINGS, set(), None, part_dir)
     assert stale_parts(part_dir, ["chrA", "chrB"], meta) == ["chrA"]
+
+
+def test_qname_digest_is_sha256_of_the_names_in_file_order():
+    want = hashlib.sha256(b"r1\nr2\nr3\n").hexdigest()
+    assert qname_digest(["r1", "r2", "r3"]) == want
+    assert qname_digest(pd.Series(["r1", "r2", "r3"])) == want
+    assert qname_digest(["r2", "r1", "r3"]) != want and qname_digest(["r1", "r2", "r4"]) != want
+    assert qname_digest(["r1r", "2r3"]) != qname_digest(["r1", "r2r3"])
 
 
 # Runs a stage script with pafbench.config pointed at test inputs: FASTA GTF BAM(of library X) SCRIPT ARGS...
@@ -549,7 +565,8 @@ def test_stage13_empty_parts_keep_their_region_totals(stage13_inputs, stage13_fr
     assert np.array_equal(tf[tags].to_numpy(), want[tags].to_numpy())
     # but their primary records stay in the region totals: chrC adds I, I, "" and N (the duplicate counts, the secondary not)
     allp = pd.concat(prim.values(), ignore_index=True)
-    want_region = sorted((t, re_, int(g[t].sum()), len(g)) for re_, g in allp.groupby("re") for t in tags)
+    want_region = sorted((t, re_, int(g[t].sum()), len(g), int(((g.flag & 0x400) == 0).sum()))
+                         for re_, g in allp.groupby("re") for t in tags)
     assert sorted(region.itertuples(index=False, name=None)) == want_region
     assert prim["chrC"].re.tolist() == ["I", "I", "", "N"] and not prim["chrC"][tags].to_numpy().any()
     # chrB: t4 (+) has no read and t5 (-, 80 nt) is shorter than every COVLEN, so wholly protected: nothing removed
@@ -588,10 +605,35 @@ def test_stage13_resume_after_crash_and_stale_truth(stage13_inputs, stage13_fres
     r = _stage13(inputs, out)
     assert r.returncode == 0 and json.loads(r.stdout.strip().splitlines()[-1])["scanned"] == 0
     assert _grid_outputs(out)[3] == want[3]
-    # stage 12 reran and rewrote the truth file at the same path with other rows: refused, nothing rewritten
+    # stage 12 reran and rewrote the truth file at the same path with the same number of other reads: refused, nothing rewritten
     before = {p.name: p.stat().st_mtime_ns for p in out.iterdir() if p.is_file()}
+    same_n = pd.read_parquet(fixture_truth)
+    same_n.loc[same_n.index[0], "qname"] = "another_read"
+    same_n.to_parquet(truth)
+    assert len(same_n) == len(pd.read_parquet(fixture_truth))
+    r = _stage13(inputs, out)
+    assert r.returncode == 1 and "chrA, chrB, chrC" in r.stderr
+    assert {p.name: p.stat().st_mtime_ns for p in out.iterdir() if p.is_file()} == before
+    # and with one more row
     pd.concat([pd.read_parquet(truth), pd.DataFrame({"qname": ["extra"]})]).to_parquet(truth)
     r = _stage13(inputs, out)
     assert r.returncode == 1
     assert "chrA, chrB, chrC" in r.stderr and f"gio trash {out / 'parts'}" in r.stderr
     assert {p.name: p.stat().st_mtime_ns for p in out.iterdir() if p.is_file()} == before
+
+
+def test_json_is_last(synth, tagged, tmp_path, monkeypatch):
+    """The json that marks a reference done is written after the parquet parts: a failed cells write leaves no json."""
+    tx = load_transcripts(synth.gtf)
+    part_dir = tmp_path / "parts"
+    real = pd.DataFrame.to_parquet
+
+    def boom(self, path, *a, **k):
+        if str(path).endswith(".cells.parquet"):
+            raise OSError("disk full")
+        return real(self, path, *a, **k)
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", boom)
+    with pytest.raises(OSError):
+        scan_to_parts(tagged, synth.fasta, "chrA", tx, SETTINGS, set(_qnames(tagged, "chrA")[::4]), CELLS, part_dir)
+    assert not (part_dir / "chrA.json").exists()

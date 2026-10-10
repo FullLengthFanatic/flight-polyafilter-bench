@@ -11,7 +11,6 @@ import argparse
 import json
 import time
 from collections import defaultdict
-from multiprocessing import get_context
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +22,7 @@ from pafbench.flags import setting_tag
 from pafbench.genes import load_gene_segments
 from pafbench.grid import all_settings
 from pafbench.molecules import MEMBER_COLUMNS, consolidate_sites, member_rows
+from pafbench.pool import map_forked
 from pafbench.regions import load_region_segments
 from pafbench.sites import PA_COLUMNS
 from pafbench.spikein import add_spike_labels, annotated_ends, merge_scans, spike_pa_row, spike_summary
@@ -55,8 +55,7 @@ def _grid(job):
 def _per_contig(fn, bam, stats, workers):
     """fn over the contigs (largest first), results in BAM header order."""
     jobs = [(bam, s.contig) for s in sorted(stats, key=lambda s: -s.mapped)]
-    with get_context("fork").Pool(workers) as pool:
-        res = dict(zip([j[1] for j in jobs], pool.map(fn, jobs, chunksize=1)))
+    res = dict(zip([j[1] for j in jobs], map_forked(fn, jobs, workers)))
     return [res[s.contig] for s in stats]
 
 

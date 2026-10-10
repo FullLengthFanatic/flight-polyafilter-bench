@@ -2,7 +2,6 @@
 import argparse
 import json
 import time
-from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +11,7 @@ import pysam
 from pafbench.bd67 import OUTCOMES, annotate_sites, compare_labels, count_duplicates, hexamer_summary, scan_long_reads
 from pafbench.config import FASTA, GTF, LABEL_CUTOFFS, LONG_READS, OUT
 from pafbench.genes import load_gene_segments
+from pafbench.pool import map_forked
 from pafbench.regions import load_region_segments
 
 REFS = [f"chr{i}" for i in range(1, 23)] + ["chrX"]
@@ -64,8 +64,7 @@ def main():
             size |= {(lib, s.contig): s.mapped for s in fh.get_index_statistics()}
     jobs = sorted(((lib, ref) for lib in args.libs for ref in args.refs), key=lambda j: -size.get(j, 0))
     segments = (load_region_segments(GTF), load_gene_segments(GTF))
-    with Pool(min(args.workers, len(jobs)), initializer=_init, initargs=(segments,), maxtasksperchild=1) as pool:
-        res = pool.map(_work, jobs, chunksize=1)
+    res = map_forked(_work, jobs, min(args.workers, len(jobs)), initializer=_init, initargs=(segments,))
     mol, line = None, {"compare": f"skipped, {args.compare} not found", "libraries": []}
     if args.compare.exists():
         mol = pd.read_parquet(args.compare, columns=["ref", "strand", "site", "label"])
