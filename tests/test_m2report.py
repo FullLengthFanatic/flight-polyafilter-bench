@@ -172,10 +172,17 @@ def _full_base(tmp_path):
                  _metric("1417", tag, "region", "antisense", 0 if tag == I1 else 100, 2000 if tag == I1 else 1900,
                          50 if tag == I1 else 48, 0 if tag == I1 else 2),
                  _metric("1417", tag, "region", "3UTR", 5000, 10000, 2000, 20)]
+    rows += [_metric("1417", I1, "expr_tertile", "low", 100, 900, 40, 1), _metric("1417", I1, "expr_tertile", "high", 300, 700, 90, 10),
+             _metric("1417", I1, "expr_tertile", "no_gene", 0, 500, 20, 0), _metric("1417", I1, "has_ts", "True", 5, 95, 10, 0),
+             _metric("1417", I1, "has_ts", "False", 9790, 31479, 2747, 29),
+             _metric("1417", I1, "a_band", "0-4", 0, 0, 2700, 100, level="read"),
+             _metric("1417", I1, "a_band", "14-20", 12000, 24000, 0, 0, level="read"),
+             _metric("1417", I1, "a_band", "0-4", 0, 0, 2650, 150, level="molecule_majority"),
+             _metric("1417", I1, "a_band", "8-9", 300, 1700, 0, 0, level="molecule_majority")]
     rows += [_metric("1417", I1, "all", "all", 8000, 33369, 2700, 86, level="molecule_weighted"),
              _metric("1417", C1, "all", "all", 30000, 11369, 400, 2386), _metric("1417", C2, "all", "all", 20000, 21369, 900, 1886),
              _metric("1417", C1, "all", "all", 1, 1, 1, 1, cap=500)]
-    # rows the sections must ignore: another cap, other cut-offs, the read level
+    # rows the molecule-level tables must ignore: another cap, other cut-offs, the read level
     rows += [_metric("1417", I1, "region", "intergenic", 99, 5083, 100, 28, cap=500),
              _metric("1417", I1, "region", "intergenic", 77, 5105, 100, 28, cutoffs="7/2"),
              _metric("1417", I1, "a_band", "8-9", 2000, 0, 0, 0, level="read")]
@@ -623,6 +630,24 @@ def test_strata_section(base):
     s = m2report.strata_section(base)
     assert "chosen settings: not run (missing eval/selection.json)" in s
     assert "| c300_l10_m1_i | 1417 | 0.990 | 0.050 | 0.156 | 0.264 |" in s
+
+
+def test_strata_section_expression_has_ts_and_levels(base):
+    s = m2report.strata_section(base)
+    # molecule level: sens 100 / 1,000 = 0.100 and spec 40 / 41 = 0.976; 300 / 1,000 and 90 / 100; 0 / 500 and 20 / 20
+    assert "| Setting | Library | low | mid | high | no_gene |" in s
+    assert "| c300_l10_m1_i | 1417 | 0.100 / 0.976 | n/a | 0.300 / 0.900 | 0.000 / 1.000 |" in s
+    # has_ts True 5 / 100 and 10 / 10; False 9,790 / 41,269 = 0.237 and 2,747 / 2,776 = 0.990
+    assert "| Setting | Library | True | False |" in s
+    assert "| c300_l10_m1_i | 1417 | 0.050 / 1.000 | 0.237 / 0.990 |" in s
+    assert "| c375_l3_m2_i | 1417 | n/a | n/a |" in s
+    assert "| 1417 | expr_tertile | no_gene | 500 | 20 |" in s
+    assert "| 1417 | has_ts | True | 100 | 10 |" in s
+    # A band at the read level: spec 2,700 / 2,800 = 0.964, sens 12,000 / 36,000 = 0.333; 8-9 is the 2,000 / 2,000 fixture row
+    assert "at the read level" in s and "at the molecule-majority level" in s
+    assert "| c300_l10_m1_i | 1417 | 0.964 | 1.000 | n/a | 0.333 |" in s
+    # majority: spec 2,650 / 2,800 = 0.946, sens 8-9 300 / 2,000 = 0.150
+    assert "| c300_l10_m1_i | 1417 | 0.946 | 0.150 | n/a | n/a |" in s
 
 
 def test_hexamer_section(base):

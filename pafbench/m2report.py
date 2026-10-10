@@ -22,6 +22,7 @@ BANDS = tuple(b[0] for b in A_BANDS)
 POP_NAMES = {"all": "all barcodes", "cells": "called cells", "noncells": "other barcodes"}
 UNIT_NAMES = {"with_member": "molecules with a member read within the cap", "all_labeled": "all labeled molecules"}
 SPIKE_LABELS = ("internal", "tail", "other")
+EXPR_TERTILES = ("low", "mid", "high", "no_gene")
 CUTOFFS = "{templated_min}/{nontemplated_max}".format(**LABEL_CUTOFFS)
 PUBLISHED_TAGS = [setting_tag(s) for s in published()]
 CONTROL_TAGS = [setting_tag(Setting(c, None, 0, introns)) for introns in (False, True) for c in COVLENS]
@@ -515,30 +516,44 @@ def strata_section(base):
     if metrics is None:
         return "\n".join(out + [_not_run(base, [p])])
     tags, note = _report_tags(base)
-    out += [f"Source: `eval/metrics.parquet` (stage 17), molecule level, member cap {MEMBER_CAP:,} nt, {CUTOFFS} labels. "
-            f"Specificity exists only in band {BANDS[0]} and sensitivity only in bands {BANDS[2]} and up; band {BANDS[1]} is "
+    out += [f"Source: `eval/metrics.parquet` (stage 17), member cap {MEMBER_CAP:,} nt, {CUTOFFS} labels; molecule level unless "
+            f"stated. Specificity exists only in band {BANDS[0]} and sensitivity only in bands {BANDS[2]} and up; band {BANDS[1]} is "
             "ambiguous.", ""] + note
-    m = metrics[(metrics.cap == MEMBER_CAP) & (metrics.cutoffs == CUTOFFS) & (metrics.level == "molecule")
-                & metrics.tag.isin(tags)]
+    m = metrics[(metrics.cap == MEMBER_CAP) & (metrics.cutoffs == CUTOFFS) & metrics.tag.isin(tags)]
     libs = list(dict.fromkeys(m.lib))
-    look = {(r.tag, r.lib, r.stratum_kind, r.stratum): r for r in m.itertuples()}
+    looks = {lv: {(r.tag, r.lib, r.stratum_kind, r.stratum): r for r in g.itertuples()} for lv, g in m.groupby("level")}
+    look = looks.get("molecule", {})
 
-    def get(tag, lib, kind, stratum, metric):
-        r = look.get((tag, lib, kind, stratum))
+    def get(lv, tag, lib, kind, stratum, metric):
+        r = looks.get(lv, {}).get((tag, lib, kind, stratum))
         return None if r is None else getattr(r, metric)
 
     present = [(tag, lib) for tag in tags for lib in libs if (tag, lib, "all", "all") in look]
-    out += _table(["Setting", "Library", f"Spec {BANDS[0]}"] + [f"Sens {b}" for b in BANDS[2:]],
-                  [[tag, lib, _r(get(tag, lib, "a_band", BANDS[0], "spec"))]
-                   + [_r(get(tag, lib, "a_band", b, "sens")) for b in BANDS[2:]] for tag, lib in present])
-    out += ["", "By region, sens / spec:", ""]
-    out += _table(["Setting", "Library"] + list(REGION_NAMES),
-                  [[tag, lib] + [f"{_r(get(tag, lib, 'region', g, 'sens'))} / {_r(get(tag, lib, 'region', g, 'spec'))}"
-                                 if (tag, lib, "region", g) in look else "n/a" for g in REGION_NAMES] for tag, lib in present])
-    out += ["", "Units per stratum (the same for every setting):", ""]
+
+    def sens_spec(kind, strata):
+        return _table(["Setting", "Library"] + list(strata),
+                      [[tag, lib] + [f"{_r(get('molecule', tag, lib, kind, g, 'sens'))} / {_r(get('molecule', tag, lib, kind, g, 'spec'))}"
+                                     if (tag, lib, kind, g) in look else "n/a" for g in strata] for tag, lib in present])
+
+    def a_band_table(lv):
+        return _table(["Setting", "Library", f"Spec {BANDS[0]}"] + [f"Sens {b}" for b in BANDS[2:]],
+                      [[tag, lib, _r(get(lv, tag, lib, "a_band", BANDS[0], "spec"))]
+                       + [_r(get(lv, tag, lib, "a_band", b, "sens")) for b in BANDS[2:]] for tag, lib in present])
+
+    out += ["By A band at the molecule level:", ""] + a_band_table("molecule")
+    out += ["", "By A band at the read level (a read counts as a unit):", ""] + a_band_table("read")
+    out += ["", "By A band at the molecule-majority level (molecule removed when most of its reads are):", ""]
+    out += a_band_table("molecule_majority")
+    out += ["", "By region, molecule level, sens / spec:", ""] + sens_spec("region", REGION_NAMES)
+    out += ["", "By expression tertile of the gene, molecule level, sens / spec (no_gene: molecules without a gene):", ""]
+    out += sens_spec("expr_tertile", EXPR_TERTILES)
+    out += ["", "By has_ts (molecules with a read from a short RNA, ts), molecule level, sens / spec:", ""]
+    out += sens_spec("has_ts", ("True", "False"))
+    out += ["", "Units per stratum at the molecule level (the same for every setting):", ""]
     rows = []
     for lib in libs:
-        first = m[(m.lib == lib) & (m.tag == m[m.lib == lib].tag.iloc[0]) & m.stratum_kind.isin(["a_band", "region"])]
+        mol = m[(m.level == "molecule") & (m.lib == lib)]
+        first = mol[(mol.tag == mol.tag.iloc[0]) & mol.stratum_kind.isin(["a_band", "region", "expr_tertile", "has_ts"])]
         rows += [[lib, r.stratum_kind, r.stratum, _int(r.tp + r.fn), _int(r.tn + r.fp)] for r in first.itertuples()]
     out += _table(["Library", "Stratum kind", "Stratum", "Templated units", "Non-templated units"], rows)
     return "\n".join(out)
