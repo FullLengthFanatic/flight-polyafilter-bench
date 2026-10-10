@@ -5,8 +5,10 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import pandas as pd
 import pysam
 import pytest
 
@@ -16,8 +18,8 @@ from pafbench.flags import Setting, parse_setting, record_key, removed_keys, set
 from pafbench.grid import all_settings, published
 from pafbench.transcripts import load_transcripts
 from pafbench.validation import (
-    compare_subset, create_trans, discover_settings, none_control, parse_tag, run_original, run_stats, setting_arg,
-    subset_bam, subset_validation,
+    EXPECTED_RUNS, compare_subset, create_trans, discover_settings, engine_tie, grid_removed, missing_runs, none_control,
+    parse_tag, reusable, run_original, run_stats, setting_arg, subset_bam, subset_validation,
 )
 from tests.synth import run_original as serial_original
 
@@ -84,6 +86,22 @@ def test_stage19_dryrun_order(tmp_path):
     assert lines == want
     # a dry run writes nothing: no log, no original/ directories
     assert list(out.iterdir()) == []
+
+
+MILESTONE1_1417 = ["c300_l10_m1_i", "c375_l3_m2_i", "c300_l10_m1_e"]
+
+
+def test_expected_runs_are_pinned_to_stage19(tmp_path):
+    repo, out = _repo19(tmp_path), tmp_path / "out"
+    out.mkdir()
+    listed = {"1417": list(MILESTONE1_1417), "1419": []}
+    for line in _dryrun(repo, out):
+        if "02_run_original.sh" in line and not line.startswith("#"):
+            lib, c, l, m, mode = line.split("02_run_original.sh ")[1].split()
+            listed[lib].append(f"c{c}_l{l}_m{m}_{mode}")
+    assert {lib: sorted(tags) for lib, tags in EXPECTED_RUNS.items()} == {lib: sorted(tags) for lib, tags in listed.items()}
+    assert [len(EXPECTED_RUNS[lib]) for lib in ("1417", "1419")] == [10, 8]
+    assert all(len(set(tags)) == len(tags) for tags in EXPECTED_RUNS.values())
 
 
 def test_stage19_skip_rule(tmp_path):
@@ -234,6 +252,24 @@ def test_discover_settings(tmp_path):
     assert discover_settings(tmp_path / "missing") == []
 
 
+def test_missing_runs_names_the_reason(tmp_path):
+    for tag, txt in (("c300_l10_m1_i", OK_TIME), ("c375_l3_m2_i", KILLED_TIME), ("c180_l11_m2_i", FAILED_TIME)):
+        (tmp_path / f"{tag}.bam").touch()
+        (tmp_path / f"{tag}.time.txt").write_text(txt)
+    (tmp_path / "c300_l10_m1_e.bam").touch()                  # still running or lost its time file
+    (tmp_path / "c275_l9_m1_i.time.txt").write_text(OK_TIME)  # time file without BAM
+    tags = ["c300_l10_m1_i", "c375_l3_m2_i", "c300_l10_m1_e", "c180_l11_m2_i", "c275_l9_m1_i", "c275_l9_m1_e"]
+    assert missing_runs(tmp_path, tags) == [
+        {"tag": "c375_l3_m2_i", "exit_status": 137, "reason": "killed or failed"},
+        {"tag": "c300_l10_m1_e", "exit_status": None, "reason": "no time file"},
+        {"tag": "c180_l11_m2_i", "exit_status": 3, "reason": "killed or failed"},
+        {"tag": "c275_l9_m1_i", "exit_status": 0, "reason": "no output"},
+        {"tag": "c275_l9_m1_e", "exit_status": None, "reason": "no output"},
+    ]
+    assert missing_runs(tmp_path, ["c300_l10_m1_i"]) == []
+    assert [m["reason"] for m in missing_runs(tmp_path / "missing", ["c300_l10_m1_i"])] == ["no output"]
+
+
 def test_run_stats(tmp_path):
     (tmp_path / "x.time.txt").write_text(OK_TIME)
     # 1:02:03 = 3723 s; 2097152 kB = 2 GiB
@@ -325,6 +361,43 @@ def test_none_control_on_a_reference_subset(synth, tmp_path):
         "chrA.bam", "chrA.bam.bai", "chrA.c300_lnone_m0_i.bam", "chrA.createTRANS_i.log", "chrA.createTRANS_i.mem.json",
         "chrA.createTRANS_i.time.txt", "chrA.trans_i.pkl",
     ]
+
+
+def test_none_control_filters_under_a_temporary_name(synth, tmp_path, monkeypatch):
+    trash = tmp_path / "trash"
+    trash.mkdir()
+    monkeypatch.setattr(validation, "TRASH", ("mv", "-t", str(trash)))
+    nc = tmp_path / "nc"
+    nc.mkdir()
+    seen = []
+    real = validation.run_original
+
+    def spy(bam, trans_pkl, db, fasta, out_bam, setting, threads=4):
+        seen.append(Path(out_bam).name)
+        real(bam, trans_pkl, db, fasta, out_bam, setting, threads=threads)
+
+    monkeypatch.setattr(validation, "run_original", spy)
+    # a truncated leftover of a killed run under the temporary name is trashed, never mistaken for the result
+    tmp = nc / "chrA.c300_lnone_m0_i.tmp.bam"
+    tmp.write_text("truncated")
+    res = none_control(synth.bam, ["chrA"], nc, synth.db, synth.fasta, synth.gtf, threads=2)
+    assert seen == ["chrA.c300_lnone_m0_i.tmp.bam"] and (trash / tmp.name).read_text() == "truncated"
+    assert not tmp.exists() and (nc / "chrA.c300_lnone_m0_i.bam").exists() and res["identical"] is True
+    # a finished filtered BAM only ever appears by rename, so it is reused
+    seen.clear()
+    assert none_control(synth.bam, ["chrA"], nc, synth.db, synth.fasta, synth.gtf, threads=2)["identical"] is True
+    assert seen == []
+    # the original dying leaves the temporary file and no final BAM
+    (nc / "chrA.c300_lnone_m0_i.bam").unlink()
+
+    def die(bam, trans_pkl, db, fasta, out_bam, setting, threads=4):
+        Path(out_bam).write_text("truncated")
+        raise RuntimeError("killed")
+
+    monkeypatch.setattr(validation, "run_original", die)
+    with pytest.raises(RuntimeError):
+        none_control(synth.bam, ["chrA"], nc, synth.db, synth.fasta, synth.gtf, threads=2)
+    assert tmp.exists() and not (nc / "chrA.c300_lnone_m0_i.bam").exists()
 
 
 # ---------- original tool on a reference subset at given settings (1179 block of stage 20) ----------
@@ -514,8 +587,11 @@ def test_stage20_without_libraries_or_control(tmp_path):
                         "--skip-1179", "--out", str(tmp_path)], capture_output=True, text=True,
                        env={**os.environ, "PYTHONPATH": str(REPO)})
     assert r.returncode == 0
-    assert json.loads((tmp_path / "validation" / "exact_match_m2.json").read_text()) == {"n_compared": 0, "all_identical": True}
-    assert json.loads(r.stdout) == {"none_control": None, "1179_subset": None, "n_compared": 0, "all_identical": True}
+    # no requested library: nothing missing, nothing tied, never complete
+    assert json.loads((tmp_path / "validation" / "exact_match_m2.json").read_text()) == {
+        "n_compared": 0, "all_identical": True, "missing": {}, "engine_tie": {}, "reused": {}, "complete": False}
+    assert json.loads(r.stdout) == {"complete": False, "missing": {}, "none_control": None, "1179_subset": None, "n_compared": 0,
+                                    "all_identical": True}
 
 
 def test_stage20_1179_block_on_a_stand_in(synth, tmp_path, monkeypatch, capsys):
@@ -531,15 +607,28 @@ def test_stage20_1179_block_on_a_stand_in(synth, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod, "FASTA", synth.fasta)
     monkeypatch.setattr(mod, "GTF", synth.gtf)
     monkeypatch.setattr(sys, "argv", ["20", "--libs", "--skip-none-control", "--out", str(tmp_path)])
+    # stage 13 parts of the subset references: both tags' removals split over the two references
+    monkeypatch.setattr(mod, "OUT", tmp_path / "out")
+    parts = tmp_path / "out" / "1179" / "grid" / "parts"
+    parts.mkdir(parents=True)
+    t0, t1 = (setting_tag(s) for s in published()[:2])
+    n0, n1 = (len(serial_original(synth, s.covlen, s.min_len, s.mism, s.introns)) for s in published()[:2])
+    for ref, a, b in (("chrA", n0 - 1, n1), ("chrB", 1, 0)):
+        pd.DataFrame({"tag": [t0, t1], "re": ["x", "x"], "removed": [a, b], "total": [99, 99]}).to_parquet(
+            parts / f"{ref}.region.parquet", index=False)
     calls = _recorded(monkeypatch)
     with pytest.raises(SystemExit) as ex:
         mod.main()
-    assert ex.value.code == 0
     tags = [setting_tag(s) for s in published()]
     assert sorted(calls[:2]) == [("trans", "e"), ("trans", "i")] and calls[2:] == [("run", t) for t in tags]
     em = json.loads((tmp_path / "validation" / "exact_match_m2.json").read_text())
-    assert set(em) == {"1179_subset", "n_compared", "all_identical"}
-    assert em["n_compared"] == 8 and em["all_identical"] is True
+    assert set(em) == {"1179_subset", "n_compared", "all_identical", "missing", "engine_tie", "reused", "complete"}
+    assert em["n_compared"] == 8 and em["complete"] is False
+    # grid counts of the subset references sum to the original's; tags without a part have none
+    blk = em["1179_subset"]["settings"]
+    assert (blk[t0]["n_grid"], blk[t0]["grid_equal"]) == (n0, True) and (blk[t1]["n_grid"], blk[t1]["grid_equal"]) == (n1, True)
+    assert all(v["n_grid"] is None and v["grid_equal"] is None for t, v in blk.items() if t not in (t0, t1))
+    assert em["all_identical"] is True and ex.value.code == 0
     blk = em["1179_subset"]
     assert blk["refs"] == ["chrA", "chrB"] and blk["n_records"] == len(_keys(synth.bam))
     assert list(blk["settings"]) == tags
@@ -550,8 +639,8 @@ def test_stage20_1179_block_on_a_stand_in(synth, tmp_path, monkeypatch, capsys):
     assert sorted(p.name for p in (tmp_path / "validation" / "subset_1179").glob("*.json")) == sorted(
         [f"chrA_chrB.{t}.json" for t in tags] + [f"chrA_chrB.{t}.mem.json" for t in tags]
         + [f"chrA_chrB.createTRANS_{m}.mem.json" for m in "ie"])
-    assert json.loads(capsys.readouterr().out) == {"none_control": None, "1179_subset": {t: True for t in tags},
-                                                   "n_compared": 8, "all_identical": True}
+    assert json.loads(capsys.readouterr().out) == {"complete": False, "missing": {}, "none_control": None,
+                                                   "1179_subset": {t: True for t in tags}, "n_compared": 8, "all_identical": True}
     # resume: every setting has its result file, so nothing is subset, built, run or compared again
     for name in ("subset_bam", "compare_subset"):
         monkeypatch.setattr(validation, name, lambda *a, **k: pytest.fail("rerun"))
@@ -567,3 +656,223 @@ def test_stage20_1179_block_on_a_stand_in(synth, tmp_path, monkeypatch, capsys):
         mod.main()
     em = json.loads((tmp_path / "validation" / "exact_match_m2.json").read_text())
     assert ex.value.code == 1 and em["all_identical"] is False and em["n_compared"] == 8
+    # a grid count that differs from the original's fails the stage too
+    p.write_text(json.dumps({**json.loads(p.read_text()), "only_reimpl": 0, "identical": True}))
+    pd.DataFrame({"tag": [t0], "re": ["x"], "removed": [0], "total": [99]}).to_parquet(parts / "chrB.region.parquet", index=False)
+    with pytest.raises(SystemExit) as ex:
+        mod.main()
+    em = json.loads((tmp_path / "validation" / "exact_match_m2.json").read_text())
+    assert ex.value.code == 1 and em["1179_subset"]["settings"][t0]["grid_equal"] is False and em["all_identical"] is False
+
+
+# ---------- engine tie: stage 13 grid against stage 03 flags ----------
+
+TAGS = ["c300_l10_m1_i", "c300_lnone_m0_e"]
+
+
+def _tie_dirs(lib_dir, truth, reimpl):
+    """grid/truth_flags.parquet from truth rows (qname, ref, pos, flag, *tags) and reimpl_flags/<ref>.parquet from
+    {ref: rows (qname, flag, ref, pos, cigar, *tags)}."""
+    (lib_dir / "grid").mkdir(parents=True, exist_ok=True)
+    (lib_dir / "reimpl_flags").mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(truth, columns=["qname", "ref", "pos", "flag", *TAGS]).to_parquet(lib_dir / "grid" / "truth_flags.parquet", index=False)
+    for ref, rows in reimpl.items():
+        pd.DataFrame(rows, columns=["qname", "flag", "ref", "pos", "cigar", *TAGS]).to_parquet(
+            lib_dir / "reimpl_flags" / f"{ref}.parquet", index=False)
+
+
+def test_engine_tie_counts_mismatches_and_missing_rows(tmp_path):
+    truth = [("r1", "chr1", 10, 0, True, False), ("r2", "chr1", 20, 16, False, False), ("r3", "chr1", 30, 0, True, True),
+             ("r4", "chr2", 5, 0, False, True), ("r5", "chr3", 7, 0, True, True)]
+    # reimpl has non-truth reads, a secondary record sharing a truth qname, and no file for chr3; r2 differs in tag 0,
+    # r4 in both tags
+    reimpl = {"chr1": [("x", 0, "chr1", 1, "5M", True, True), ("r1", 0, "chr1", 10, "5M", True, False),
+                       ("r1", 256, "chr1", 99, "5M", False, True), ("r2", 16, "chr1", 20, "5M", True, False),
+                       ("r3", 0, "chr1", 30, "5M", True, True)],
+              "chr2": [("r4", 0, "chr2", 5, "5M", True, False)]}
+    _tie_dirs(tmp_path, truth, reimpl)
+    assert engine_tie(tmp_path, TAGS) == {"rows": 5, "tags": TAGS, "mismatches": {TAGS[0]: 2, TAGS[1]: 1}, "missing_rows": 1}
+    # only the asked tags are compared
+    assert engine_tie(tmp_path, TAGS[1:])["mismatches"] == {TAGS[1]: 1}
+    # a row of the same read at another position is not the same record
+    reimpl["chr1"][4] = ("r3", 0, "chr1", 31, "5M", True, True)
+    _tie_dirs(tmp_path, truth, reimpl)
+    assert engine_tie(tmp_path, TAGS)["missing_rows"] == 2
+    # identical tables tie
+    truth = [("r1", "chr1", 10, 0, True, False)]
+    _tie_dirs(tmp_path, truth, {"chr1": [("r1", 0, "chr1", 10, "5M", True, False)]})
+    assert engine_tie(tmp_path, TAGS) == {"rows": 1, "tags": TAGS, "mismatches": {t: 0 for t in TAGS}, "missing_rows": 0}
+
+
+def test_engine_tie_tells_duplicate_keys_apart_and_flags_an_absent_tag_column(tmp_path):
+    truth = [("r1", "chr1", 10, 0, True, False), ("r1", "chr1", 10, 0, False, False)]
+    _tie_dirs(tmp_path, truth, {"chr1": [("r1", 0, "chr1", 10, "5M", True, False), ("r1", 0, "chr1", 10, "4M1S", False, False)]})
+    assert engine_tie(tmp_path, TAGS)["mismatches"] == {t: 0 for t in TAGS}
+    got = engine_tie(tmp_path, [*TAGS, "c150_l3_m0_e"])
+    assert got["mismatches"]["c150_l3_m0_e"] == 2 and got["missing_rows"] == 0
+
+
+def test_grid_removed(tmp_path):
+    assert grid_removed(tmp_path, "c300_l10_m1_i") is None
+    (tmp_path / "parts").mkdir()
+    (tmp_path / "summary.json").write_text(json.dumps({"removed": {"c300_l10_m1_i": 7}}))
+    assert grid_removed(tmp_path, "c300_l10_m1_i") == 7 and grid_removed(tmp_path, "c180_l11_m2_e") is None
+    for ref, a, b in (("chr21", 3, 4), ("chr22", 5, 6), ("chr1", 100, 100)):
+        pd.DataFrame({"tag": ["t1", "t1", "t2"], "re": ["x", "y", "x"], "removed": [a, b, 1], "total": [9, 9, 9]}).to_parquet(
+            tmp_path / "parts" / f"{ref}.region.parquet", index=False)
+    assert grid_removed(tmp_path, "t1", ("chr21", "chr22")) == 18 and grid_removed(tmp_path, "t2", ("chr21", "chr22")) == 2
+    assert grid_removed(tmp_path, "t1", ("chr21", "chrX")) is None
+
+
+def test_reusable(tmp_path):
+    d = tmp_path / "1417"
+    (d / "original").mkdir(parents=True)
+    (d / "reimpl_flags").mkdir()
+    settings = [parse_tag(t) for t in TAGS]
+    for t in TAGS:
+        (d / "original" / f"{t}.bam").touch()
+    summ, em = d / "reimpl_flags" / "summary.json", d / "exact_match.json"
+    assert reusable(d, settings) is False
+    summ.write_text(json.dumps({"settings": TAGS[::-1]}))
+    em.write_text(json.dumps({t: {} for t in TAGS}))
+    t0 = time.time()
+
+    def stamp(path, dt):
+        os.utime(path, (t0 + dt, t0 + dt))
+
+    for p, dt in ((d / "original" / f"{TAGS[0]}.bam", -30), (d / "original" / f"{TAGS[1]}.bam", -20), (summ, -10), (em, 0)):
+        stamp(p, dt)
+    assert reusable(d, settings) is True
+    # a different tag set in either file
+    em.write_text(json.dumps({TAGS[0]: {}}))
+    stamp(em, 0)
+    assert reusable(d, settings) is False
+    em.write_text(json.dumps({t: {} for t in TAGS}))
+    stamp(em, 0)
+    summ.write_text(json.dumps({"settings": TAGS + ["c180_l11_m2_e"]}))
+    stamp(summ, -10)
+    assert reusable(d, settings) is False
+    summ.write_text(json.dumps({"settings": TAGS}))
+    # exact_match.json older than the summary, or than any original BAM (also one that is not a discovered setting)
+    stamp(summ, 5)
+    assert reusable(d, settings) is False
+    stamp(summ, -10)
+    (d / "original" / "c180_l11_m2_e.bam").touch()
+    stamp(d / "original" / "c180_l11_m2_e.bam", 5)
+    assert reusable(d, settings) is False
+    stamp(d / "original" / "c180_l11_m2_e.bam", -5)
+    assert reusable(d, settings) is True
+
+
+# ---------- stage 20: completeness, engine tie, reuse ----------
+
+def _stage20_run(mod, monkeypatch, out, *argv):
+    """Stage 20 with its two reference-subset blocks stubbed (they have their own tests); skip flags go in argv."""
+    monkeypatch.setattr(mod, "none_control", lambda *a, **k: {"identical": True})
+    monkeypatch.setattr(mod, "subset_validation", lambda *a, **k: {"settings": {}})
+    monkeypatch.setattr(sys, "argv", ["20", "--out", str(out), *argv])
+    with pytest.raises(SystemExit) as ex:
+        mod.main()
+    return ex.value.code, json.loads((out / "validation" / "exact_match_m2.json").read_text())
+
+
+def _stage20_tie(d, tags, removed, mismatch=False):
+    """Grid and reimpl outputs for one stand-in library: two truth reads on chr1 that tie (or differ in the first tag)."""
+    truth = [("r1", "chr1", 10, 0, True, False), ("r2", "chr1", 20, 0, False, False)]
+    reimpl = {"chr1": [("r1", 0, "chr1", 10, "5M", not mismatch, False), ("r2", 0, "chr1", 20, "5M", False, False)]}
+    _tie_dirs(d, truth, reimpl)
+    (d / "grid" / "summary.json").write_text(json.dumps({"removed": removed}))
+
+
+def test_stage20_incomplete_when_a_run_is_missing(tmp_path, monkeypatch, capsys):
+    mod, d = _stage20(tmp_path, monkeypatch)
+    out = tmp_path / "out"
+    tags = ["c300_l10_m1_i", "c300_lnone_m0_e"]
+    monkeypatch.setattr(mod, "EXPECTED_RUNS", {"1417": tags + ["c375_l3_m2_i", "c180_l11_m2_e"]})
+    (d / "original" / "c375_l3_m2_i.bam").touch()
+    (d / "original" / "c375_l3_m2_i.time.txt").write_text(KILLED_TIME)
+    monkeypatch.setattr(mod, "NUCLEI", ("1417",))
+    monkeypatch.setenv("FAKE04", "ok")
+    monkeypatch.setenv("FAKE04_RESULT", json.dumps({t: _match(10, 10, 0, 0) for t in tags}))
+    monkeypatch.setattr(mod, "engine_tie", lambda lib_dir, tags: {"rows": 1, "tags": tags, "mismatches": {}, "missing_rows": 0})
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    # every compared run is identical, yet two expected runs are absent: not identical, not complete, exit 1
+    assert code == 1 and em["all_identical"] is False and em["complete"] is False
+    assert em["missing"] == {"1417": [{"tag": "c375_l3_m2_i", "exit_status": 137, "reason": "killed or failed"},
+                                      {"tag": "c180_l11_m2_e", "exit_status": None, "reason": "no output"}]}
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["complete"] is False and printed["missing"] == {"1417": ["c375_l3_m2_i", "c180_l11_m2_e"]}
+    assert printed["all_identical"] is False
+
+
+def test_stage20_engine_tie_and_complete(tmp_path, monkeypatch, capsys):
+    mod, d = _stage20(tmp_path, monkeypatch)
+    tags = ["c300_l10_m1_i", "c300_lnone_m0_e"]
+    monkeypatch.setattr(mod, "EXPECTED_RUNS", {"1417": tags})
+    monkeypatch.setattr(mod, "NUCLEI", ("1417",))
+    monkeypatch.setenv("FAKE04", "ok")
+    monkeypatch.setenv("FAKE04_RESULT", json.dumps({t: _match(10, 10, 0, 0) for t in tags}))
+    # no grid outputs: tie fields are null, complete is false, but nothing differs
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    assert code == 0 and em["all_identical"] is True and em["complete"] is False and em["engine_tie"] == {"1417": None}
+    assert em["missing"] == {"1417": []} and em["reused"] == {"1417": False}
+    assert all(em["1417"][t]["n_grid"] is None and em["1417"][t]["grid_equal"] is None for t in tags)
+    # grid counts equal n_reimpl and the records tie
+    _stage20_tie(d, tags, {tags[0]: 10, tags[1]: 10})
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    assert code == 0 and em["all_identical"] is True and em["complete"] is True
+    assert em["engine_tie"]["1417"] == {"rows": 2, "tags": tags, "mismatches": {t: 0 for t in tags}, "missing_rows": 0}
+    assert all(em["1417"][t]["n_grid"] == 10 and em["1417"][t]["grid_equal"] is True for t in tags)
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["complete"] is True
+    # a count difference in one tag
+    _stage20_tie(d, tags, {tags[0]: 11, tags[1]: 10})
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    assert code == 1 and em["all_identical"] is False and em["1417"][tags[0]]["grid_equal"] is False
+    assert em["1417"][tags[0]]["identical"] is True and em["1417"][tags[1]]["grid_equal"] is True
+    # a record mismatch
+    _stage20_tie(d, tags, {tags[0]: 10, tags[1]: 10}, mismatch=True)
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    assert code == 1 and em["all_identical"] is False and em["engine_tie"]["1417"]["mismatches"] == {tags[0]: 1, tags[1]: 0}
+    # a missing row
+    _stage20_tie(d, tags, {tags[0]: 10, tags[1]: 10})
+    (d / "reimpl_flags" / "chr1.parquet").unlink()
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    assert code == 1 and em["engine_tie"]["1417"]["missing_rows"] == 2
+    # skip flags and a library list other than the nuclei libraries never complete
+    _stage20_tie(d, tags, {tags[0]: 10, tags[1]: 10})
+    monkeypatch.setattr(mod, "NUCLEI", ("1417", "1419"))
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    assert code == 0 and em["all_identical"] is True and em["complete"] is False
+    monkeypatch.setattr(mod, "NUCLEI", ("1417",))
+    for skip in ("--skip-none-control", "--skip-1179"):
+        code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417", skip)
+        assert code == 0 and em["all_identical"] is True and em["complete"] is False
+
+
+def test_stage20_reuse_skips_stages_03_and_04(tmp_path, monkeypatch):
+    mod, d = _stage20(tmp_path, monkeypatch)
+    tags = ["c300_l10_m1_i", "c300_lnone_m0_e"]
+    monkeypatch.setattr(mod, "EXPECTED_RUNS", {"1417": tags})
+    monkeypatch.setattr(mod, "NUCLEI", ("1417",))
+    monkeypatch.setenv("FAKE04", "ok")
+    monkeypatch.setenv("FAKE04_RESULT", json.dumps({t: _match(10, 10, 0, 0) for t in tags}))
+    _stage20_tie(d, tags, {tags[0]: 10, tags[1]: 10})
+    # without a previous comparison --reuse runs both stages
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417", "--reuse")
+    assert code == 0 and em["reused"] == {"1417": False} and (d / "args03.txt").exists() and (d / "args04.txt").exists()
+    # stage 03's summary, then stage 04's result: newer than both, so the next call reuses them
+    (d / "reimpl_flags" / "summary.json").write_text(json.dumps({"settings": tags}))
+    (d / "exact_match.json").write_text(json.dumps({t: _match(10, 10, 0, 0) for t in tags}))
+    t0 = time.time()
+    for p, dt in ((d / "original" / f"{tags[0]}.bam", -30), (d / "original" / f"{tags[1]}.bam", -30),
+                  (d / "reimpl_flags" / "summary.json", -10), (d / "exact_match.json", 0)):
+        os.utime(p, (t0 + dt, t0 + dt))
+    (d / "args03.txt").unlink()
+    (d / "args04.txt").unlink()
+    first = em
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417", "--reuse")
+    assert code == 0 and em["reused"] == {"1417": True} and not (d / "args03.txt").exists() and not (d / "args04.txt").exists()
+    assert em["1417"] == first["1417"] and em["complete"] is True
+    # without the flag the stages run as before
+    code, em = _stage20_run(mod, monkeypatch, tmp_path, "--libs", "1417")
+    assert em["reused"] == {"1417": False} and (d / "args03.txt").exists()
