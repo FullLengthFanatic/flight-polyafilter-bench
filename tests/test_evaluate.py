@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from pafbench.config import REPO
-from pafbench.evaluate import (METRIC_COLUMNS, ambiguous_tail_share, bootstrap, confusion, evaluate, expr_tertiles,
+from pafbench.evaluate import (METRIC_COLUMNS, STRATA, ambiguous_tail_share, bootstrap, confusion, evaluate, expr_tertiles,
                                gene_clusters, hexamer_check, rates, relabel, resample_counts, select_setting, spikein_metrics,
                                units)
 from pafbench.flags import Setting, setting_tag
@@ -122,8 +122,9 @@ def test_units_all_labeled_adds_molecules_without_member_reads():
 
 def test_expr_tertiles_match_qcut():
     mol, _, _ = _tables()
-    # molecules per gene: gA 3, gB 2, gC 1 -> gC low, gB mid, gA high; no gene -> intergenic
-    assert expr_tertiles(mol).tolist() == ["high", "high", "mid", "mid", "intergenic", "low", "high"]
+    # molecules per gene: gA 3, gB 2, gC 1 -> gC low, gB mid, gA high; no gene (intergenic or antisense) -> no_gene
+    assert expr_tertiles(mol).tolist() == ["high", "high", "mid", "mid", "no_gene", "low", "high"]
+    assert expr_tertiles(mol.iloc[0:0]).tolist() == [] and STRATA["expr_tertile"] == ("low", "mid", "high", "no_gene")
     genes = [f"g{i}" for i in range(5) for _ in range(i + 1)]  # g0 x1 ... g4 x5
     t = expr_tertiles(pd.DataFrame({"gene": genes}))
     ref = pd.qcut(pd.Series(np.arange(1, 6)), 3, labels=["low", "mid", "high"]).astype(str).tolist()
@@ -331,6 +332,7 @@ def _run_stage(script, base, out, *extra, check=True):
 
 def test_stage17_end_to_end(tmp_path):
     mol, tr, fl = _tables()
+    mol = mol.assign(in_cell=True)
     base, out = tmp_path / "base", tmp_path / "eval"
     for lib in ("1417", "1419"):
         (base / lib / "truth").mkdir(parents=True)
@@ -478,12 +480,30 @@ def test_stage17_population_without_in_cell_is_refused(tmp_path):
     base, _ = _pop_base(tmp_path, mol, tr, fl)
     r = _run_stage("17_evaluate.py", base, tmp_path / "eval", "--population", "cells", check=False)
     assert r.returncode != 0 and "in_cell" in r.stderr and not (tmp_path / "eval" / "selection.json").exists()
+    r = _run_stage("17_evaluate.py", base, tmp_path / "eval_default", check=False)  # the default is called cells
+    assert r.returncode != 0 and "in_cell" in r.stderr and not (tmp_path / "eval_default" / "selection.json").exists()
     out = tmp_path / "eval_all"
-    _run_stage("17_evaluate.py", base, out)  # the default population does not need in_cell
+    _run_stage("17_evaluate.py", base, out, "--population", "all")
     sel = json.loads((out / "selection.json").read_text())
     assert set(pd.read_parquet(out / "populations.parquet").population) == {"all"}
     assert set(sel["populations"]) == {"all"} and "mapq_sensitivity" not in sel
     assert sel["molecules"]["1417"]["in_cell"] is None
+
+
+def test_stage17_defaults_to_called_cells(tmp_path):
+    from pafbench.config import SEL_POPULATION, SEL_UNITS
+    assert (SEL_POPULATION, SEL_UNITS) == ("cells", "with_member")
+    mol, tr, fl = _tables()
+    mol = mol.assign(in_cell=IN_CELL)
+    base, _ = _pop_base(tmp_path, mol, tr, fl)
+    out = tmp_path / "eval"
+    _run_stage("17_evaluate.py", base, out)
+    sel = json.loads((out / "selection.json").read_text())
+    assert (sel["selection_population"], sel["selection_units"]) == ("cells", "with_member")
+    sub = mol[mol.mol.isin(POP_MOLS["cells"])].reset_index(drop=True)
+    m = pd.read_parquet(out / "metrics.parquet")
+    got = m[(m.lib == "1417") & (m.cap == 1000)].reset_index(drop=True)
+    pd.testing.assert_frame_equal(got, evaluate(units(sub, tr, fl, [T2, T0, T1], 1000), "1417", 1000), check_dtype=False)
 
 
 def test_select_setting_reads_only_stratum_all_and_its_cutoffs():
@@ -549,7 +569,7 @@ SEL_REMOVED = {E1: {0, 2, 3}, E2: {1, 2}, E3: {0}, CE: set(range(13)), I1: {0, 5
 
 def _sel_tables():
     mol = pd.DataFrame([(i, lab, a20, "14-20" if lab == "templated" else "0-4" if lab == "nontemplated" else "5-7", "3UTR", g,
-                         False, h, "chrA", "+", 1000 * (i + 1)) for i, lab, a20, g, _, h in SEL_MOLS], columns=MOL_COLS)
+                         False, h, "chrA", "+", 1000 * (i + 1)) for i, lab, a20, g, _, h in SEL_MOLS], columns=MOL_COLS).assign(in_cell=True)
     rows = [(f"p{i}", i, "pa", np.nan, "", False) for i, *_ in SEL_MOLS]
     rows += [(f"r{i}", i, "member", float(d), "exon", False) for i, _, _, _, d, _ in SEL_MOLS if d is not None]
     tr = pd.DataFrame(rows, columns=["qname", "mol", "role", "dist5_exon", "dist_mode", "spliced"])

@@ -21,7 +21,7 @@ MODULES = ("ERCC", "SIRV_E0", "long_SIRV")
 LEVELS = ("read", "molecule", "molecule_majority", "molecule_weighted")
 MOL_KINDS = ("all", "a_band", "region", "expr_tertile", "has_ts")
 READ_KINDS = MOL_KINDS + ("dist_mode", "spliced")
-STRATA = {"a_band": tuple(b[0] for b in A_BANDS), "region": REGION_NAMES, "expr_tertile": EXPR + ("intergenic",),
+STRATA = {"a_band": tuple(b[0] for b in A_BANDS), "region": REGION_NAMES, "expr_tertile": EXPR + ("no_gene",),
           "has_ts": ("True", "False"), "spliced": ("True", "False"), "module": MODULES}
 SETTING_COLUMNS = ["tag", "covlen", "min_len", "mism", "introns"]
 COUNT_COLUMNS = ["tp", "fn", "tn", "fp", "n_amb", "amb_removed"]
@@ -63,12 +63,14 @@ def group_sum(groups, n_groups, M, weight=None, chunk=64):
 
 def expr_tertiles(mol):
     """low/mid/high tertile of each molecule's gene among genes ranked by molecule count (pd.qcut on the rank, ties by gene
-    id; computed with np.quantile so that a single gene works too); 'intergenic' where gene is ''."""
+    id; computed with np.quantile so that a single gene works too); 'no_gene' where gene is '' (intergenic or antisense)."""
     gene = mol.gene.to_numpy(object)
+    if not len(gene):
+        return gene
     counts = pd.Series(gene[gene != ""]).value_counts().sort_index().sort_values(kind="stable")
     rank = np.arange(1, len(counts) + 1)
     tert = pd.Series(np.asarray(EXPR, object)[np.searchsorted(np.quantile(rank, [1 / 3, 2 / 3]), rank)], index=counts.index)
-    return pd.Series(gene).map(tert).fillna("intergenic").to_numpy(object)
+    return pd.Series(gene).map(tert).fillna("no_gene").to_numpy(object)
 
 
 def units(mol_labeled, truth_reads, truth_flags, tags, cap, label="label", pos="templated", neg="nontemplated",
@@ -224,7 +226,8 @@ def select_setting(metrics, removed_by_tag, introns, lib="1417", cap=1000, cutof
 
 
 def gene_clusters(mol):
-    """Bootstrap cluster of each molecule: its gene, or 'ref:strand:site // 10_000' when intergenic."""
+    """Bootstrap cluster of each molecule: its gene, or the 10 kb locus 'ref:strand:site // 10_000' for molecules without a
+    gene (intergenic and antisense)."""
     gene = mol.gene.to_numpy(object)
     locus = (mol.ref.astype(str) + ":" + mol.strand.astype(str) + ":" + (mol.site // 10_000).astype(str)).to_numpy(object)
     return np.where(gene != "", gene, locus)

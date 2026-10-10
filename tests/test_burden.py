@@ -130,7 +130,7 @@ def _lib_mol(shift):
     return pd.DataFrame({"mol": i, "ref": "chr1", "strand": "+", "site": 100 + 50 * i + shift, "label": lab,
                          "a_band": np.where(lab == "templated", "14-20", np.where(lab == "nontemplated", "0-4", "5-7")),
                          "region": np.where(i < 40, "3UTR", "intron"), "gene": [f"g{x}" for x in i // 20],
-                         "has_ts": i % 5 == 0, "re": np.where(i < 40, "E", "I")})
+                         "has_ts": i % 5 == 0, "re": np.where(i < 40, "E", "I"), "in_cell": True})
 
 
 def _atlas(tmp_path):
@@ -194,7 +194,7 @@ def _stage18(base, out, tmp_path, *extra):
 def _pop_libs(base, in_cell=True):
     libs = {"1417": _lib_mol(0), "1419": _lib_mol(0), "1179": _lib_mol(3)}
     for lib, mol in libs.items():
-        libs[lib] = mol.assign(in_cell=(mol.mol % 3 != 0) if lib != "1179" else mol.mol < 40) if in_cell else mol
+        libs[lib] = mol.assign(in_cell=(mol.mol % 3 != 0) if lib != "1179" else mol.mol < 40) if in_cell else mol.drop(columns="in_cell")
         (base / lib / "truth").mkdir(parents=True)
         libs[lib].to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
     return libs
@@ -240,7 +240,9 @@ def test_stage18_population_needs_in_cell(tmp_path):
     _pop_libs(base, in_cell=False)
     r = _stage18(base, tmp_path / "out", tmp_path, "--population", "cells")
     assert r.returncode != 0 and "in_cell" in r.stderr
-    r = _stage18(base, tmp_path / "out_all", tmp_path)
+    r = _stage18(base, tmp_path / "out_default", tmp_path)  # the default is called cells
+    assert r.returncode != 0 and "in_cell" in r.stderr
+    r = _stage18(base, tmp_path / "out_all", tmp_path, "--population", "all")
     assert r.returncode == 0, r.stderr
     t = pd.read_parquet(tmp_path / "out_all" / "templated_share_population.parquet")
     assert set(t.population) == {"all"}
