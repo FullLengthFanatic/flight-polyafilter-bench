@@ -8854,4 +8854,4 @@ git -c user.name="Simone Picelli" -c user.email="simone.picelli@iob.ch" commit -
 
 ## After the plan
 
-Milestone 3 (not in this plan): per-cell UMI matrices after filtering from `grid/cell_counts.parquet` and a BAM recount that reproduces the Cell Ranger matrix, clustering, cell types from retinal marker genes, and the final report as an Artifact page.
+Milestone 3 (not in this plan): the parts of spec 4.1, 4.3 and 8 deferred on 2026-10-10 (labeled against unlabeled molecules by gene, distance to the annotated 3' end and cell type; whole-isoform context of long-read ends; site sequence, hexamer and distance at matched sites), per-cell UMI matrices after filtering from `grid/cell_counts.parquet` and a BAM recount that reproduces the Cell Ranger matrix, clustering, cell types from retinal marker genes, and the final report as an Artifact page.
