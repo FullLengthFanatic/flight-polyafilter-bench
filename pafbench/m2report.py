@@ -1,5 +1,6 @@
 """Stage 21: the milestone 2 results page. One function per section; each reads its files under a base directory (OUT) and
 prints "not run (missing ...)" with the absent file names instead of numbers."""
+import inspect
 import json
 from pathlib import Path
 
@@ -12,10 +13,12 @@ from .flags import Setting, setting_tag
 from .grid import COVLENS, MINLENS, MISMS, PUBLISHED, published
 from .polyasite import BINS, NULL_LABEL
 from .regions import REGION_NAMES
+from .spikein import label_spike_site
 from .truth import in_population
 from .validation import run_stats
 
 LIBS = NUCLEI + CELLS
+_SPIKE = inspect.signature(label_spike_site).parameters
 LABELS = ("templated", "ambiguous", "nontemplated")
 LABEL_NAMES = {"templated": "templated", "ambiguous": "ambiguous", "nontemplated": "non-templated", "all": "all"}
 MODE_NAMES = {"e": "default", "i": "-i"}
@@ -115,6 +118,18 @@ def _entry(sel, tag, lib):
         if d["selection"]["tag"] == tag:
             return d["metrics"].get(lib, {})
     return sel["published"].get(tag, {}).get(lib, {})
+
+
+def _pop_text(sel):
+    """"Computed on: <population>, <units>." from a loaded eval/selection.json, "" when it is absent."""
+    if sel is None:
+        return ""
+    return (f"Computed on: {POP_NAMES[sel.get('selection_population', 'all')]}, "
+            f"{UNIT_NAMES[sel.get('selection_units', 'with_member')]}.")
+
+
+def _computed_on(base):
+    return _pop_text(_json(base / "eval" / "selection.json"))
 
 
 def _report_tags(base):
@@ -379,7 +394,8 @@ def _mapq_lines(sel):
         return ["Molecules with mapq_min below 255 left out: not run (eval/selection.json has no mapq_sensitivity)"]
     mq, min_spec = sel["mapq_sensitivity"], sel["min_spec"]
     out = ["Molecules with mapq_min below 255 left out (" + "; ".join(f"{k}: {_int(v)}" for k, v in mq["left_out"].items()) +
-           f"), selection rerun on {sel['selection_library']} and the chosen and published settings, molecule level:", ""]
+           f"), selection rerun on {sel['selection_library']} and the chosen and published settings, molecule level. "
+           f"{_pop_text(sel)}", ""]
     rows = []
     for mode, d in mq["modes"].items():
         s = d["selection"]
@@ -518,7 +534,8 @@ def selection_section(base):
                     (_ci(ctl[lib, tag].spec, *ci[lib, tag, "spec"]) if (lib, tag, "spec") in ci else _r(ctl[lib, tag].spec)))])
         out += _table(["Setting"] + [f"{lib} {k}" for lib in libs for k in ("sens", "spec")], rows)
 
-    out += ["", "Units per member cap (molecules with a truth read missing from truth_flags are dropped):", ""]
+    out += ["", "Units per member cap (molecules with a truth read missing from truth_flags are dropped). " +
+                _pop_text(sel), ""]
     out += _table(["Library", "Cap (nt)", "Read units", "Molecule units", "Missing reads", "Dropped molecules"],
                   [[lib, _int(cap), _int(u["read_units"]), _int(u["molecule_units"]), _int(u["missing_reads"]),
                     _int(u["dropped_molecules"])] for lib, caps in sel["units"].items() for cap, u in caps.items()])
@@ -581,7 +598,7 @@ def strata_section(base):
     tags, note = _report_tags(base)
     out += [f"Source: `eval/metrics.parquet` (stage 17), member cap {MEMBER_CAP:,} nt, {CUTOFFS} labels; molecule level unless "
             f"stated. Specificity exists only in band {BANDS[0]} and sensitivity only in bands {BANDS[2]} and up; band {BANDS[1]} is "
-            "ambiguous.", ""] + note
+            "ambiguous. " + _computed_on(base), ""] + note
     m = metrics[(metrics.cap == MEMBER_CAP) & (metrics.cutoffs == CUTOFFS) & metrics.tag.isin(tags)]
     libs = list(dict.fromkeys(m.lib))
     looks = {lv: {(r.tag, r.lib, r.stratum_kind, r.stratum): r for r in g.itertuples()} for lv, g in m.groupby("level")}
@@ -608,7 +625,9 @@ def strata_section(base):
     out += ["", "By A band at the molecule-majority level (molecule removed when most of its reads are):", ""]
     out += a_band_table("molecule_majority")
     out += ["", "By region, molecule level, sens / spec:", ""] + sens_spec("region", REGION_NAMES)
-    out += ["", "By expression tertile of the gene, molecule level, sens / spec (no_gene: molecules without a gene):", ""]
+    out += ["", "By expression tertile of the gene, molecule level, sens / spec (no_gene: molecules without a gene). Expression tertile: "
+                "genes ranked by the number of their labeled molecules in the selection units (ties by gene id) and split into three "
+                "equal gene groups, so the groups hold very different numbers of molecules; each molecule takes its gene's group.", ""]
     out += sens_spec("expr_tertile", EXPR_TERTILES)
     out += ["", "By has_ts (a pa read of the molecule has a ts tag above 0, section 2), molecule level, sens / spec:", ""]
     out += sens_spec("has_ts", ("True", "False"))
@@ -630,7 +649,8 @@ def hexamer_section(base):
     if h is None:
         return "\n".join(out + [_not_run(base, [p])])
     out += [f"Source: `eval/hexamer_check.parquet` (stage 17), molecule level, member cap {MEMBER_CAP:,} nt. Hexamer: "
-            "AATAAA/ATTAAA 5 to 35 nt upstream of the site.", ""]
+            "AATAAA/ATTAAA fully inside the window 6 to 35 nt upstream of the site (sites.has_hexamer; the 5 bases just before the "
+            "site are not searched). " + _computed_on(base), ""]
     h = h[h.cap == MEMBER_CAP]
     out += _table(["Setting", "Library", "Label", "Removed", "Removed hexamer rate", "Kept", "Kept hexamer rate"],
                   [[r.tag, r.lib, LABEL_NAMES.get(r.label, r.label), _int(r.removed_n), _r(r.removed_hex_rate), _int(r.kept_n),
@@ -642,7 +662,10 @@ def spikein_section(base):
     base = Path(base)
     out = ["## 7. Spike-ins", "",
            "Source: `<lib>/spikein/truth/molecules_labeled.parquet` (stage 14), `eval/spikein_metrics.parquet` (stage 17). "
-           "spike_label comes from the distance to the annotated 3' end; label from the A count after the site. Spike-in metrics "
+           "spike_label comes from the distance to the annotated 3' end; label from the A count after the site. Spike label "
+           f"(spikein.label_spike_site) tail: within {_SPIKE['tail_tol'].default} nt of an annotated 3' end; internal: not tail and "
+           f"at least {_SPIKE['internal_min'].default} nt upstream of one; other: neither, so other molecules are left out of the "
+           "agreement and of the metrics (positives are internal, negatives tail). Spike-in metrics "
            "use every barcode, whatever population the setting selection uses: spike-ins are free RNA in every droplet. 1179 has no "
            "spike-ins, so this section has no 1179 rows.", ""]
     data, notes = {}, []
@@ -709,14 +732,19 @@ def spikein_section(base):
     out += table("molecule")
     out += ["", f"Metrics per module at the read level (a read counts as a unit; same file, cap {MEMBER_CAP:,} nt), sens / spec:", ""]
     out += table("read")
-    t = CONTROL_TAGS[len(COVLENS)]
-    ex = next(((lib, m, r) for lib in dict.fromkeys(s.lib)
-               if (m := s[(s.lib == lib) & (s.tag == t) & (s.level == "molecule") & (s.stratum == "all")].spec).size
-               and (r := s[(s.lib == lib) & (s.tag == t) & (s.level == "read") & (s.stratum == "all")].spec).size), None)
-    out += ["", "Molecule-level specificity cannot fail here, because the pa read of a "
-                "tail molecule ends in the protected 3' stretch, so the molecule is never fully removed" +
-            ("." if ex is None else f"; on {ex[0]} the control {t} reads {_r(ex[1].iloc[0])} at molecule level and "
-                                    f"{_r(ex[2].iloc[0])} at read level.")]
+    rows = []
+    for lib in dict.fromkeys(s.lib):
+        ctl = s[(s.lib == lib) & (s.stratum == "all") & s.tag.isin(CONTROL_TAGS)]
+        mol = ctl[(ctl.level == "molecule") & ctl.spec.notna()]
+        if mol.empty:
+            continue
+        r = mol.loc[mol.spec.idxmin()]
+        rd = ctl[(ctl.level == "read") & (ctl.tag == r.tag)].spec
+        rows.append([lib, r.tag, f"{_int(r.fp)} of {_int(r.tn + r.fp)}", _r(r.spec), _r(rd.iloc[0] if len(rd) else None)])
+    out += ["", "Remove-all controls on spike-in tail molecules, our observation in this data (stratum all; per library the "
+                "control with the lowest molecule-level specificity, and the read level at the same setting):", ""]
+    out += _table(["Library", "Setting", "Tail molecules removed (fp of tn + fp)", "Spec, molecule level", "Spec, read level"],
+                  rows) if rows else ["not run (no remove-all control rows in eval/spikein_metrics.parquet)"]
     return "\n".join(out)
 
 

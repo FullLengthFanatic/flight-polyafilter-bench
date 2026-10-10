@@ -766,6 +766,23 @@ def test_strata_section_expression_has_ts_and_levels(base):
     assert "| c300_l10_m1_i | 1417 | 0.946 | 0.150 | n/a | n/a |" in s
 
 
+def test_strata_and_hexamer_sections_name_their_population_and_definitions(base):
+    pop = "Computed on: all barcodes, molecules with a member read within the cap."
+    s = m2report.strata_section(base)
+    assert pop in s
+    assert ("Expression tertile: genes ranked by the number of their labeled molecules in the selection units (ties by gene id) "
+            "and split into three equal gene groups, so the groups hold very different numbers of molecules; each molecule takes "
+            "its gene's group.") in s
+    h = m2report.hexamer_section(base)
+    assert pop in h
+    assert "AATAAA/ATTAAA fully inside the window 6 to 35 nt upstream of the site" in h and "5 to 35" not in h
+    sel = json.loads((base / "eval/selection.json").read_text()) | {"selection_population": "cells"}
+    (base / "eval/selection.json").write_text(json.dumps(sel))
+    assert "Computed on: called cells, molecules" in m2report.strata_section(base)
+    (base / "eval/selection.json").unlink()
+    assert "Computed on" not in m2report.strata_section(base)
+
+
 def test_hexamer_section(base):
     s = m2report.hexamer_section(base)
     assert "| c375_l3_m2_i | 1417 | all | 28,762 | 0.061 | 20,174 | 0.229 |" in s
@@ -783,6 +800,8 @@ def test_spikein_section(base):
     # ambiguous ones left out); SIRV_E0 alone: internal T 1 (a20 15), internal NT 1 (a20 1), tail T 1 (a20 9): 1 of 3
     assert "1417: agreement 0.571 (4 of 7), SIRV_E0 only 0.333 (1 of 3)" in s
     assert "forced" in s
+    assert "tail: within 10 nt of an annotated 3' end; internal: not tail and at least 30 nt upstream of one; other: neither" \
+           in s and "other molecules are left out of the agreement and of the metrics" in s
     # the ambiguous internal molecules (ERCC none, SIRV_E0 a20 7) count in the denominator, not as templated
     assert "| 1417 | all | 4 | 2 (0.500) | 5 | 2 (0.400) |" in s
     assert "| 1417 | ERCC | 1 | 1 (1.000) | 2 | 1 (0.500) |" in s
@@ -803,10 +822,12 @@ def test_spikein_section_read_level_and_no_1179(base):
     # read level from the same file: 9 / 10 and no negatives; the control 60 / 100 and 156 / 1,000
     assert "| 1417 | c300_l10_m1_i | 0.900 / n/a | n/a | n/a | n/a |" in read
     assert "| 1417 | c150_lnone_m0_i | 0.600 / 0.156 | n/a | n/a | n/a |" in read
-    assert "Molecule-level specificity cannot fail here" in s
-    assert "ends in the protected 3' stretch, so the molecule is never fully removed" in s
-    # the example sentence is built from the control rows: 0.984 at molecule level, 0.156 at read level
-    assert "on 1417 the control c150_lnone_m0_i reads 0.984 at molecule level and 0.156 at read level" in s
+    assert "cannot fail" not in s and "protected 3' stretch" not in s and "never fully removed" not in s
+    # the remove-all control with the lowest molecule-level specificity per library, counted from the control rows: fp 16 of
+    # tn + fp 1,000 (0.984) at molecule level, 0.156 at read level
+    assert "| Library | Setting | Tail molecules removed (fp of tn + fp) | Spec, molecule level | Spec, read level |" in s
+    assert "| 1417 | c150_lnone_m0_i | 16 of 1,000 | 0.984 | 0.156 |" in s
+    assert "our observation in this data" in s
     assert "1179 has no spike-ins, so this section has no 1179 rows" in s
     (base / "eval/spikein_metrics.parquet").unlink()
     assert "at the read level" not in m2report.spikein_section(base)
