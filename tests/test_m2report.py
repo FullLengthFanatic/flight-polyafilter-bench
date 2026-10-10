@@ -1174,7 +1174,7 @@ def test_validation_section(base):
     assert "1179: not in exact_match_m2.json; the 1179 grid has no original-versus-reimplementation evidence" in s
     # 20 + 412 + 160 + 80 = 672 s
     assert "| c300_lnone_m0_i | chr21, chr22 | 2,781,871 | 1,894,573 | 1,894,573 | 0 | 0 | True | 412 | 0.26 | 672 |" in s
-    assert "Compared: 3; all identical: True" in s
+    assert "Removed-record comparisons: 3 (the table rows and the control); checks counted by stage 20 (these comparisons plus, where it records them, one completeness and one engine-tie check per library): 3; all identical: True" in s
     assert "Removed-record sets (every record the original fetches, by our reading of its code, spec 5" in s
 
 
@@ -1199,7 +1199,7 @@ def test_validation_section_completeness(base):
     em["complete"], em["missing"] = True, {"1417": [], "1419": []}
     p.write_text(json.dumps(em))
     s = m2report.validation_section(base)
-    assert "complete: yes" in s and "Compared: 3; all identical: True" in s
+    assert "complete: yes" in s and "checks counted by stage 20 (these comparisons plus, where it records them, one completeness and one engine-tie check per library): 3; all identical: True" in s
     assert "| Library | Setting | Exit status | Reason |" not in s
     assert "the reimplementation is validated" in s and "not validated" not in s
 
@@ -1245,7 +1245,7 @@ def test_validation_section_on_a_stale_file(base):
     s = m2report.validation_section(base)
     assert "1417: not in exact_match_m2.json" in s
     assert "Remove-all control: not run (no none_control entry in validation/exact_match_m2.json)" in s
-    assert "Compared: n/a; all identical: n/a" in s
+    assert "Removed-record comparisons: 0 (the table rows and the control); checks counted by stage 20 (these comparisons plus, where it records them, one completeness and one engine-tie check per library): n/a; all identical: n/a" in s
 
 
 def test_render_and_script(base, tmp_path):
@@ -1278,7 +1278,7 @@ def test_headline_block(base):
     assert "| -i | c300_l10_m1_i | 300 | 10 | 1 | 120 / 189 | 1179 | 1,000 | 100 | 0.300 [n/a, n/a] | 0.950 [n/a, n/a] |" in head
     assert "| default | none reached specificity 0.95 | n/a | n/a | n/a | 0 / 189 | n/a | n/a | n/a | n/a | n/a |" in head
     # validation outcome from exact_match_m2.json (the fixture file is complete: false)
-    assert "Validation against the original tool (section 11): compared 3, all identical True, complete no: not validated on these runs." \
+    assert "Validation against the original tool (section 11): 3 removed-record comparisons, all identical True, complete no: not validated on these runs." \
         in head
     (base / "eval/bootstrap.parquet").unlink()
     assert "Bootstrap: not run (missing eval/bootstrap.parquet)" in m2report.headline(base)

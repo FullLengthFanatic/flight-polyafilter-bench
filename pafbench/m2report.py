@@ -1133,6 +1133,14 @@ def burden_section(base):
     return "\n".join(out)
 
 
+def _n_sets(em):
+    """Removed-record comparisons in exact_match_m2.json: the settings of each library and of the 1179 subset, plus the
+    remove-all control. Stage 20's n_compared also counts its completeness and engine-tie checks."""
+    n = sum(1 for v in em.values() if isinstance(v, dict) for r in v.get("settings", v).values()
+            if isinstance(r, dict) and "identical" in r)
+    return n + ("identical" in (em.get("none_control") or {}))
+
+
 def validation_section(base):
     base = Path(base)
     out = ["## 11. Validation against the original tool", ""]
@@ -1176,7 +1184,8 @@ def validation_section(base):
                       [[nc["setting"], ", ".join(nc["refs"]), _int(nc["n_records"]), _int(nc["n_original"]), _int(nc["n_reimpl"]),
                         _int(nc["only_original"]), _int(nc["only_reimpl"]), nc["identical"], _sec(ct["elapsed_s"]),
                         _r(ct["max_rss_gib"], 2), _sec(sum(nc["seconds"].values()))]])
-    out += ["", f"Compared: {em.get('n_compared', 'n/a')}; all identical: {em.get('all_identical', 'n/a')}"]
+    out += ["", f"Removed-record comparisons: {_n_sets(em)} (the table rows and the control); checks counted by stage 20 (these comparisons plus, where it records them, one completeness and one engine-tie check per library): "
+                f"{em.get('n_compared', 'n/a')}; all identical: {em.get('all_identical', 'n/a')}"]
     if "complete" not in em:
         out += ["", "completeness not recorded (stage 20 predates the key)"]
         return "\n".join(out)
@@ -1248,11 +1257,11 @@ def headline(base):
     if em is None:
         out.append(f"Validation against the original tool: {_not_run(base, [p])}")
     elif "complete" not in em:
-        out.append(f"Validation against the original tool (section 11): compared {em.get('n_compared', 'n/a')}, all identical "
+        out.append(f"Validation against the original tool (section 11): {_n_sets(em)} removed-record comparisons, all identical "
                    f"{em.get('all_identical', 'n/a')}, completeness not recorded.")
     else:
         ok = em.get("all_identical") and em["complete"]
-        out.append(f"Validation against the original tool (section 11): compared {em.get('n_compared', 'n/a')}, all identical "
+        out.append(f"Validation against the original tool (section 11): {_n_sets(em)} removed-record comparisons, all identical "
                    f"{em.get('all_identical', 'n/a')}, complete {'yes' if em['complete'] else 'no'}: "
                    f"{'validated' if ok else 'not validated'} on these runs.")
     return "\n".join(out)
