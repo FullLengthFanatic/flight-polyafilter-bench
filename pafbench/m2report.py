@@ -24,6 +24,7 @@ POP_NAMES = {"all": "all barcodes", "cells": "called cells", "noncells": "other 
 UNIT_NAMES = {"with_member": "molecules with a member read within the cap", "all_labeled": "all labeled molecules"}
 SPIKE_LABELS = ("internal", "tail", "other")
 EXPR_TERTILES = ("low", "mid", "high", "no_gene")
+BAM_TAGS_URL = "https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/outputs/cr-outputs-bam"
 CUTOFFS = "{templated_min}/{nontemplated_max}".format(**LABEL_CUTOFFS)
 PUBLISHED_TAGS = [setting_tag(s) for s in published()]
 CONTROL_TAGS = [setting_tag(Setting(c, None, 0, introns)) for introns in (False, True) for c in COVLENS]
@@ -216,7 +217,10 @@ def truth_section(base):
     out = ["## 2. Truth sets", "",
            "Source: `<lib>/truth/molecules_labeled.parquet` and `<lib>/truth/truth_reads.parquet` (stage 12). "
            f"Labels at {CUTOFFS} A's in the 20 nt after the site; members are selected member reads (gene match, "
-           "dist3_exon >= -25) by exon-aware distance.", ""]
+           "dist3_exon >= -25) by exon-aware distance.", "",
+           f"has_ts: a pa read of the molecule has a 10x ts tag above 0. Cell Ranger documentation, Barcoded BAM Tags ({BAM_TAGS_URL}): "
+           "ts is \"The number of template switch oligo (TSO) nucleotides trimmed from the 5' end of read 2.\" Our reading: such a "
+           "read reaches the 5' end of the cDNA.", ""]
     data, notes = {}, []
     for lib in LIBS:
         paths = [base / lib / "truth" / "molecules_labeled.parquet", base / lib / "truth" / "truth_reads.parquet"]
@@ -238,7 +242,7 @@ def truth_section(base):
         rows = [row("Molecules", lambda m, r: _int(len(m)))]
         rows += [row(LABEL_NAMES[k], lambda m, r, k=k: f"{_int((m.label == k).sum())} ({_pct((m.label == k).sum(), len(m))})")
                  for k in LABELS]
-        rows += [row("With a ts read (has_ts)", lambda m, r: _int(m.has_ts.sum())),
+        rows += [row("With a pa read with ts > 0 (has_ts)", lambda m, r: _int(m.has_ts.sum())),
                  row("Multi-gene (gene = alphabetically first id)", lambda m, r: _int(m.genes.str.contains(";").sum())),
                  row("pa reads in labeled molecules", lambda m, r: _int((r.role == "pa").sum()))]
         rows += [["pa reads in pa_sites.parquet"] + [_int(n) for _, _, n in data.values()]]
@@ -594,7 +598,7 @@ def strata_section(base):
     out += ["", "By region, molecule level, sens / spec:", ""] + sens_spec("region", REGION_NAMES)
     out += ["", "By expression tertile of the gene, molecule level, sens / spec (no_gene: molecules without a gene):", ""]
     out += sens_spec("expr_tertile", EXPR_TERTILES)
-    out += ["", "By has_ts (molecules with a read from a short RNA, ts), molecule level, sens / spec:", ""]
+    out += ["", "By has_ts (a pa read of the molecule has a ts tag above 0, section 2), molecule level, sens / spec:", ""]
     out += sens_spec("has_ts", ("True", "False"))
     out += ["", "Units per stratum at the molecule level (the same for every setting):", ""]
     rows = []

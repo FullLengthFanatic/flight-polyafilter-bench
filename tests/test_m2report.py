@@ -363,7 +363,13 @@ def test_truth_section(base):
     assert "| templated | 4 (66.7%) |" in s
     assert "| ambiguous | 1 (16.7%) |" in s
     assert "| non-templated | 1 (16.7%) |" in s
-    assert "| With a ts read (has_ts) | 1 |" in s
+    assert "| With a pa read with ts > 0 (has_ts) | 1 |" in s
+    assert "With a ts read" not in s
+    # has_ts is defined as truth.py sets it, with the 10x wording and URL for the tag
+    assert ("has_ts: a pa read of the molecule has a 10x ts tag above 0. Cell Ranger documentation, Barcoded BAM Tags "
+            "(https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/outputs/cr-outputs-bam): ts is \"The number "
+            "of template switch oligo (TSO) nucleotides trimmed from the 5' end of read 2.\" Our reading: such a read reaches the "
+            "5' end of the cDNA.") in s
     assert "| Multi-gene (gene = alphabetically first id) | 1 |" in s
     assert "| pa reads in labeled molecules | 6 |" in s
     # pa_sites.parquet row count from the parquet metadata
@@ -721,6 +727,8 @@ def test_strata_section_expression_has_ts_and_levels(base):
     assert "| c375_l3_m2_i | 1417 | n/a | n/a |" in s
     assert "| 1417 | expr_tertile | no_gene | 500 | 20 |" in s
     assert "| 1417 | has_ts | True | 100 | 10 |" in s
+    assert "By has_ts (a pa read of the molecule has a ts tag above 0, section 2), molecule level" in s
+    assert "short RNA" not in s
     # A band at the read level: spec 2,700 / 2,800 = 0.964, sens 12,000 / 36,000 = 0.333; 8-9 is the 2,000 / 2,000 fixture row
     assert "at the read level" in s and "at the molecule-majority level" in s
     assert "| c300_l10_m1_i | 1417 | 0.964 | 1.000 | n/a | 0.333 |" in s
