@@ -388,7 +388,10 @@ def test_truth_section(base):
     assert "| 1417 | CDS | 0 | 0 | 0 | 0 | n/a |" in s
     assert "1179: not run (missing 1179/truth/molecules_labeled.parquet, 1179/truth/truth_reads.parquet)" in s
     assert "| 1417 | 0.458 | 0.481 | 0.069 | 0.772 | 0.391 | 0.040 | 4 | 1 | 1 |" in s
-    assert "over all labeled molecules" in s
+    assert "over all labeled molecules" not in s
+    # the fixture selection.json has no selection_population: all barcodes, as the label purity caption
+    assert "tail-primed share over the labeled molecules of all barcodes, with and without a member read, not only" in s
+    assert "The truth table and the region table below cover all barcodes (every row of molecules_labeled.parquet)" in s
     assert "| Library | Estimated tail-primed share (reference: templated class) | " \
            "Estimated tail-primed share (reference: a20 >= 14) | Hexamer rate templated | Hexamer rate non-templated | " \
            "Hexamer rate ambiguous | Hexamer rate a20 >= 14 | n_templated | n_nontemplated | n_ambiguous |" in s
@@ -410,6 +413,8 @@ def test_truth_section_label_purity(base):
     (base / "eval/selection.json").write_text(json.dumps(sel))
     assert "over the labeled molecules of called cells" in m2report.truth_section(base)
     assert "labeled molecules of called cells)" in m2report.burden_section(base)
+    assert "tail-primed share over the labeled molecules of called cells, with and without a member read" in \
+        m2report.truth_section(base)
     assert "ACTB" not in s and "1,976" not in s and "annotated 3' end" not in s
     p = base / "eval/selection.json"
     sel = json.loads(p.read_text())
@@ -897,6 +902,15 @@ def test_burden_section(base):
     assert "Same gene: not run (missing burden/same_gene.parquet)" in m2report.burden_section(base)
 
 
+def test_tool_statements_are_cited_or_labeled(base):
+    reading = "our reading of the polyAfilter code at commit 5ce0098 (spec 3)"
+    assert reading in m2report.grid_section(base)
+    assert reading in m2report.selection_section(base)
+    b = m2report.burden_section(base)
+    assert "10x Genomics scRNA-seq data (PolyASite 3.0, https://polyasite.unibas.ch/atlas_sc)" in b
+    assert "oligo(dT) primed like these libraries" not in b
+
+
 def test_polyasite_wording_in_the_sources():
     for f, n in (("pafbench/polyasite.py", 5), ("scripts/18_burden.py", 5)):
         head = " ".join((REPO / f).read_text().splitlines()[:n])
@@ -942,7 +956,9 @@ def test_burden_section_selection_bias_rule(base):
            f"Barcoded BAM Tags, {m2report.BAM_TAGS_URL})" in s
     # 0.421 - 0.350 = 7.1 points; 0.48 - 0.49 = 1.0 and 0.099 - 0.099 = 0.0 are within 5
     assert "more than 5 percentage points: 1417 E (labeled 0.421, without duplicates 0.350, 7.1 points)." in s
-    assert "conclusions there hold for the labeled population only" in s
+    assert ("Spec 11 says that where labeled and unlabeled molecules differ strongly, conclusions are stated for the labeled "
+            "population only; the threshold used here, a difference of more than 5 percentage points, is our choice (the "
+            "milestone 1 region check uses the same value).") in s
     sb["records_nondup_share"] = sb.labeled_share
     _write(base / "burden/selection_bias.parquet", sb)
     assert "No library and region pair differs by more than 5 percentage points" in m2report.burden_section(base)
@@ -973,6 +989,39 @@ def test_burden_section_records_by_re_tag_is_an_observation_from_region_counts(b
     assert "stage 13 predates it" in s   # the selection_bias.parquet line of the fixture
     assert "has no total_nondup column" not in s
     assert "our observation in these BAMs" in s
+
+
+def test_burden_section_population_and_groups(base):
+    s = m2report.burden_section(base)
+    # no molecule counts in selection.json (fixture): the population is not determined, and no summary.json
+    assert "Population of the burden tables: not determined (eval/selection.json has no molecule counts)" in s
+    assert "Groups: not run (missing burden/summary.json)" in s
+    _add_populations(base)
+    s = m2report.burden_section(base)
+    # all/all total of 1417 is 144,474 = the labeled molecules (all barcodes); 'cells' (1,000) matches no library
+    assert ("Population of the burden tables, inferred by matching the molecule count of each library's all/all row to "
+            "eval/selection.json (stage 18 does not record it): 1417 all barcodes (144,474 molecules).") in s
+    assert ("The corrected table below is over called cells, so the two tables are not over the same molecules.") in s
+    assert ("Selection bias compares the labeled share (over all barcodes) with the share of primary records of all barcodes."
+            ) in s
+    sel = json.loads((base / "eval/selection.json").read_text())
+    sel["selection_population"] = "all"
+    (base / "eval/selection.json").write_text(json.dumps(sel))
+    s = m2report.burden_section(base)
+    assert "not over the same molecules" not in s
+    sel["molecules"]["1417"]["in_cell"] = 144474
+    sel["molecules"]["1417"]["labeled"] = 99
+    sel["selection_population"] = "cells"
+    (base / "eval/selection.json").write_text(json.dumps(sel))
+    s = m2report.burden_section(base)
+    assert "1417 called cells (144,474 molecules)" in s and "not over the same molecules" not in s
+    sel["molecules"]["1417"]["in_cell"] = 5
+    (base / "eval/selection.json").write_text(json.dumps(sel))
+    assert "1417 matches no population" in m2report.burden_section(base)
+    _write(base / "burden/summary.json", {"groups": {"1417": ["1417"], "nuclei": ["1417", "1419"], "cells": ["1179"]}})
+    s = m2report.burden_section(base)
+    assert ("Groups (burden/summary.json): nuclei = 1417 + 1419; cells = 1179. A group with one library holds the same "
+            "molecules as that library: cells = 1179.") in s
 
 
 def test_burden_section_without_a_pair(base):
@@ -1010,7 +1059,8 @@ def test_burden_section_polyasite(base):
     assert "the clusters file is depleted of A-rich downstream sequence by this count" in s
     assert "screen" not in s
     assert ("The null row takes every molecule of the group with its site moved 1,000 nt upstream in transcript sense on the "
-            "same ref and strand; its share within 10 nt is the share expected by chance at this atlas density.") in s
+            "same ref and strand; its share within 10 nt is the local background at that offset, not a uniform chance level.") in s
+    assert "expected by chance" not in s
     assert "| Label | Molecules | 0-10 | 11-50 | 51-200 | >200 | no atlas site on this ref and strand |" in s
     one, cells = s.split("Group 1417:")[1].split("Group cells:")
     # 9,000 / 118,278 = 0.0761, 20,000 / 118,278 = 0.1691, 40,000 / 118,278 = 0.3382, 44,000 / 118,278 = 0.3720,
@@ -1050,7 +1100,7 @@ def test_validation_section(base):
     # 20 + 412 + 160 + 80 = 672 s
     assert "| c300_lnone_m0_i | chr21, chr22 | 2,781,871 | 1,894,573 | 1,894,573 | 0 | 0 | True | 412 | 0.26 | 672 |" in s
     assert "Compared: 3; all identical: True" in s
-    assert "Removed-record sets (every record the original fetches" in s
+    assert "Removed-record sets (every record the original fetches, by our reading of its code, spec 5" in s
 
 
 def test_validation_section_completeness(base):

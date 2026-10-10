@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
-from .config import A_BANDS, CELLS, LABEL_CUTOFFS, LONG_READS, MEMBER_CAP, NUCLEI, SENS_CAPS
+from .config import A_BANDS, CELLS, LABEL_CUTOFFS, LONG_READS, MEMBER_CAP, NUCLEI, POLYAFILTER_COMMIT, SENS_CAPS
 from .evaluate import MODULES
 from .flags import Setting, setting_tag
 from .grid import COVLENS, MINLENS, MISMS, PUBLISHED, published
@@ -27,6 +27,7 @@ POP_NAMES = {"all": "all barcodes", "cells": "called cells", "noncells": "other 
 UNIT_NAMES = {"with_member": "molecules with a member read within the cap", "all_labeled": "all labeled molecules"}
 SPIKE_LABELS = ("internal", "tail", "other")
 EXPR_TERTILES = ("low", "mid", "high", "no_gene")
+READING = f"our reading of the polyAfilter code at commit {POLYAFILTER_COMMIT} (spec 3)"
 BAM_TAGS_URL = "https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/outputs/cr-outputs-bam"
 CUTOFFS = "{templated_min}/{nontemplated_max}".format(**LABEL_CUTOFFS)
 PUBLISHED_TAGS = [setting_tag(s) for s in published()]
@@ -236,7 +237,8 @@ def truth_section(base):
     out = ["## 2. Truth sets", "",
            "Source: `<lib>/truth/molecules_labeled.parquet` and `<lib>/truth/truth_reads.parquet` (stage 12). "
            f"Labels at {CUTOFFS} A's in the 20 nt after the site; members are selected member reads (gene match, "
-           "dist3_exon >= -25) by exon-aware distance.", "",
+           "dist3_exon >= -25) by exon-aware distance. The truth table and the region table below cover all barcodes (every row "
+           "of molecules_labeled.parquet); the tables that come from `eval/selection.json` name their population.", "",
            f"has_ts: a pa read of the molecule has a 10x ts tag above 0. Cell Ranger documentation, Barcoded BAM Tags ({BAM_TAGS_URL}): "
            "ts is \"The number of template switch oligo (TSO) nucleotides trimmed from the 5' end of read 2.\" Our reading: such a "
            "read reaches the 5' end of the cDNA.", ""]
@@ -286,7 +288,8 @@ def truth_section(base):
 
     p = base / "eval" / "selection.json"
     sel = _json(p)
-    out += ["", "Ambiguous molecules: hexamer-based estimate of their tail-primed share over all labeled molecules, not only "
+    out += ["", "Ambiguous molecules: hexamer-based estimate of their tail-primed share over the labeled molecules of "
+                f"{POP_NAMES[(sel or {}).get('selection_population', 'all')]}, with and without a member read, not only "
                 f"the cap {MEMBER_CAP:,} units the metrics use (`eval/selection.json` ambiguous_tail_share, stage 17). Two "
                 "estimates, each (rate ambiguous - rate of the reference) / (rate non-templated - rate of the reference), "
                 "clipped to [0, 1]; they differ in the reference: the templated class, or the molecules with 14 or more A's "
@@ -330,8 +333,8 @@ def grid_section(base):
     base = Path(base)
     out = ["## 3. Grid: removed primary records", "",
            "Source: `<lib>/grid/summary.json` (stage 13). Share of primary records in brackets. The remove-all control "
-           "(MINSNRLEN none) removes every non-terminal read on an expressed transcript at that COVLEN; it bounds removals "
-           "only within its own mode.", ""]
+           "(MINSNRLEN none) removes every non-terminal read on an expressed transcript at that COVLEN (" + READING + "); it "
+           "bounds removals only within its own mode.", ""]
     data, notes = {}, []
     for lib in LIBS:
         p = base / lib / "grid" / "summary.json"
@@ -514,7 +517,7 @@ def selection_section(base):
     out += _table(["Setting", "Library", "Molecule (all reads)", "Molecule (majority)", "Molecule (weighted 1 / reads in units)",
                    "Read"], rows_lvl)
 
-    out += ["", f"Remove-all control (MINSNRLEN none, every non-terminal read on an expressed transcript is removed), molecule "
+    out += ["", "Remove-all control (MINSNRLEN none, every non-terminal read on an expressed transcript is removed; " + READING + "), molecule "
                 f"level, cap {MEMBER_CAP:,} nt, {CUTOFFS} labels, stratum all of the selection population "
                 f"({POP_NAMES[sel.get('selection_population', 'all')]}, {UNIT_NAMES[sel.get('selection_units', 'with_member')]}); "
                 "95% gene-bootstrap interval in brackets where "
@@ -893,6 +896,46 @@ def _re_counts_lines(base):
     return _notes(out, notes)
 
 
+def _burden_population(base, share):
+    """(lines, selection-bias note): the population of the burden tables, inferred by matching each library's all/all molecule
+    count (stage 18 records no population) to the counts in eval/selection.json, the group membership from burden/summary.json,
+    and a warning when the tables differ from the selection population."""
+    sel = _json(base / "eval" / "selection.json")
+    summary = _json(base / "burden" / "summary.json")
+    lines, note = [], ""
+    if sel is None or "molecules" not in sel:
+        lines.append("Population of the burden tables: not determined (" + (
+            "missing eval/selection.json" if sel is None else "eval/selection.json has no molecule counts") + ")")
+    else:
+        tot = {r.group: r.total for r in share[(share.stratum_kind == "all") & (share.stratum == "all")].itertuples()}
+        found = {}
+        for lib, m in sel["molecules"].items():
+            if lib not in tot:
+                continue
+            counts = {"all": m["labeled"], "cells": m["in_cell"], "noncells": m["labeled"] - m["in_cell"]}
+            found[lib] = next((pop for pop in POP_NAMES if counts[pop] == tot[lib]), None)
+        lines.append("Population of the burden tables, inferred by matching the molecule count of each library's all/all row to "
+                     "eval/selection.json (stage 18 does not record it): " + "; ".join(
+                         f"{lib} {POP_NAMES[pop]} ({_int(tot[lib])} molecules)" if pop else f"{lib} matches no population"
+                         for lib, pop in found.items()) + ".")
+        want = sel.get("selection_population", "all")
+        if any(pop and pop != want for pop in found.values()):
+            lines.append(f"The corrected table below is over {POP_NAMES[want]}, so the two tables are not over the same molecules.")
+        pops = {pop for pop in found.values() if pop}
+        if pops:
+            note = (f"Selection bias compares the labeled share (over {' and '.join(POP_NAMES[x] for x in sorted(pops))}) "
+                         "with the share of primary records of all barcodes.")
+    if summary is None:
+        lines.append(f"Groups: {_not_run(base, [base / 'burden' / 'summary.json'])}")
+    else:
+        g = summary["groups"]
+        grp = {k: v for k, v in g.items() if k in ("nuclei", "cells")}
+        same = [f"{k} = {v[0]}" for k, v in grp.items() if len(v) == 1]
+        lines.append("Groups (burden/summary.json): " + "; ".join(f"{k} = {' + '.join(v)}" for k, v in grp.items()) + "." + (
+            " A group with one library holds the same molecules as that library: " + ", ".join(same) + "." if same else ""))
+    return lines, note
+
+
 def burden_section(base):
     base = Path(base)
     out = ["## 10. Burden: templated share of labeled molecules", ""]
@@ -904,6 +947,8 @@ def burden_section(base):
             "difference are confounded. share = templated / all labeled molecules, 95% gene-bootstrap interval in brackets, "
             "molecules in parentheses; resolved = templated / (templated + non-templated).", ""]
     groups = list(dict.fromkeys(share.group))
+    pop_lines, bias_note = _burden_population(base, share)
+    out += pop_lines + [""]
     look = {(r.group, r.stratum_kind, r.stratum): r for r in share.itertuples()}
     strata = [("all", "all")] + [("region", g) for g in REGION_NAMES] + [("has_ts", "True"), ("has_ts", "False")]
 
@@ -982,13 +1027,16 @@ def burden_section(base):
         out += _table(["Library", "RE", "Labeled share", "Records share"] + (["Records share without PCR duplicates"] if has else []),
                       [[r.lib, r.re, _r(r.labeled_share), _r(r.records_share)] + ([_r(r.records_nondup_share)] if has else [])
                        for r in sb.itertuples()])
+        if bias_note:
+            out += ["", bias_note]
         if not has:
             out += ["", "burden/selection_bias.parquet has no records_nondup_share column: stage 13 predates it, so the spec 11 "
                         "rule below cannot be applied."]
         else:
             off = [r for r in sb.itertuples() if abs(r.labeled_share - r.records_nondup_share) > 0.05]
-            out += ["", "Spec 11 rule: where the labeled share differs from the duplicate-free share by more than 5 percentage "
-                        "points, conclusions there hold for the labeled population only. "]
+            out += ["", "Spec 11 says that where labeled and unlabeled molecules differ strongly, conclusions are stated for the "
+                        "labeled population only; the threshold used here, a difference of more than 5 percentage points, is our "
+                        "choice (the milestone 1 region check uses the same value). "]
             out[-1] += ("Pairs with a difference of more than 5 percentage points: " + "; ".join(
                 f"{r.lib} {r.re} (labeled {_r(r.labeled_share)}, without duplicates {_r(r.records_nondup_share)}, "
                 f"{100 * abs(r.labeled_share - r.records_nondup_share):.1f} points)" for r in off) + "." if off else
@@ -1001,11 +1049,11 @@ def burden_section(base):
     else:
         out += ["", "PolyASite 3.0 proximity (share of labeled molecules by the distance in nt from the site to the nearest atlas "
                     "cleavage site on the same strand; templated molecules also by A band). Proximity is reported, not used to "
-                    "validate the labels: the atlas is built from 10x 3' single-cell reads, oligo(dT) primed like these "
-                    "libraries, so internally primed sites can be in it. The v3.0 documentation describes no filter on A "
+                    "validate the labels: the atlas is built from 10x Genomics scRNA-seq data (PolyASite 3.0, "
+                    "https://polyasite.unibas.ch/atlas_sc), so internally primed sites can be in it. The v3.0 documentation describes no filter on A "
                     "content downstream of a site. The null row takes every molecule of the group with its site moved 1,000 nt "
-                    "upstream in transcript sense on the same ref and strand; its share within 10 nt is the share expected by "
-                    "chance at this atlas density."]
+                    "upstream in transcript sense on the same ref and strand; its share within 10 nt is the local background at "
+                    "that offset, not a uniform chance level."]
         out += ["", _a_content_line(base)]
         for g, d in px.groupby("group", sort=False):
             n = d.groupby(["label", "a_band", "bin"]).n.sum()
@@ -1028,7 +1076,7 @@ def validation_section(base):
     em = _json(p)
     if em is None:
         return "\n".join(out + [_not_run(base, [p])])
-    out += ["Source: `validation/exact_match_m2.json` (stage 20). Removed-record sets (every record the original fetches, "
+    out += ["Source: `validation/exact_match_m2.json` (stage 20). Removed-record sets (every record the original fetches, by our reading of its code, spec 5: "
             "secondary and supplementary included) of the original polyAfilter and the reimplementation. Max RSS is the "
             "largest single process; peak tree RSS the memwatch sum.", ""]
     rows, notes = [], []
