@@ -72,18 +72,43 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
 
     metrics, u_main, removed_by_tag, unit_stats, tail_share = [], {}, {}, {}, {}
+    populations_list = []
+
     for lib in libs:
-        mol, tr, fl, tags = _load(_files(args.base, lib))
+        mol_orig, tr, fl, tags = _load(_files(args.base, lib))
+        for pop, units_mode in [("all", "with_member"), ("all", "all_labeled"), ("cells", "with_member"),
+                                ("cells", "all_labeled"), ("noncells", "with_member"), ("noncells", "all_labeled")]:
+            mol = mol_orig
+            if pop == "cells":
+                if "in_cell" not in mol:
+                    continue
+                mol = mol[mol.in_cell].reset_index(drop=True)
+            elif pop == "noncells":
+                if "in_cell" not in mol:
+                    continue
+                mol = mol[~mol.in_cell].reset_index(drop=True)
+
+            all_labeled = (units_mode == "all_labeled")
+            u = units(mol, tr, fl, tags, MEMBER_CAP, all_labeled=all_labeled)
+            m = evaluate(u, lib, MEMBER_CAP, CUTOFFS, levels=("molecule", "read"))
+            m = m[m.stratum_kind.isin(("all", "a_band", "region"))].reset_index(drop=True)
+            m.insert(len(m.columns) - 3, "population", pop)
+            m.insert(len(m.columns) - 3, "units", units_mode)
+            populations_list.append(m)
+
         if args.population == "cells":
-            if "in_cell" not in mol:
+            if "in_cell" not in mol_orig:
                 print(f"{lib}: --population cells requires in_cell column; skipped")
                 continue
-            mol = mol[mol.in_cell].reset_index(drop=True)
+            mol = mol_orig[mol_orig.in_cell].reset_index(drop=True)
         elif args.population == "noncells":
-            if "in_cell" not in mol:
+            if "in_cell" not in mol_orig:
                 print(f"{lib}: --population noncells requires in_cell column; skipped")
                 continue
-            mol = mol[~mol.in_cell].reset_index(drop=True)
+            mol = mol_orig[~mol_orig.in_cell].reset_index(drop=True)
+        else:
+            mol = mol_orig
+
         tail_share[lib] = ambiguous_tail_share(mol)
         unit_stats[lib] = {}
         for cap in SENS_CAPS:
@@ -99,7 +124,11 @@ def main():
         print(f"{lib}: {len(tags)} tags, units {json.dumps(unit_stats[lib])}")
     metrics = pd.concat(metrics, ignore_index=True)
     metrics.to_parquet(args.out / "metrics.parquet", index=False)
+    if populations_list:
+        populations = pd.concat(populations_list, ignore_index=True)
+        populations.to_parquet(args.out / "populations.parquet", index=False)
 
+    spikein_units_stats = {}
     removed_sel = removed_by_tag.get(SEL_LIB, {})
     modes = {}
     for mode, introns in MODES.items():
@@ -109,6 +138,23 @@ def main():
     pub = {setting_tag(p): {lib: _summary(metrics, setting_tag(p), lib) for lib in libs} for p in published()}
     cap_sens = {str(cap): {mode: select_setting(metrics, removed_sel, introns, SEL_LIB, cap, CUTOFFS, MIN_SPEC)
                            for mode, introns in MODES.items()} for cap in SENS_CAPS}
+
+    mapq_sens = {}
+    for lib in libs:
+        mol_with_q, tr, fl, tags = _load(_files(args.base, lib))
+        if "mapq_min" not in mol_with_q:
+            continue
+        mol_with_q = mol_with_q[mol_with_q.mapq_min == 255].reset_index(drop=True)
+        if len(mol_with_q) == 0:
+            continue
+        m_list = []
+        for cap in SENS_CAPS:
+            u = units(mol_with_q, tr, fl, tags, cap)
+            m_list.append(evaluate(u, lib, cap, CUTOFFS))
+        m = pd.concat(m_list, ignore_index=True)
+        for mode, introns in MODES.items():
+            s = select_setting(m, removed_sel, introns, SEL_LIB, MEMBER_CAP, CUTOFFS, MIN_SPEC)
+            mapq_sens.setdefault(mode, {})[lib] = s
     sweep = []
     for tmin in range(7, 11):
         for nmax in range(2, 7):
@@ -135,7 +181,10 @@ def main():
         if chosen[mode]:
             boot_tags.append(setting_tag(Setting(tag_setting(chosen[mode]).covlen, None, 0, introns)))
         else:
-            print(f"mode {mode}: no setting chosen, so no chosen tag and no remove-all control at its COVLEN are bootstrapped")
+            print(f"mode {mode}: no setting chosen, bootstrapping remove-all controls at published COVLENs")
+            for p in published():
+                if p.introns == introns:
+                    boot_tags.append(setting_tag(Setting(p.covlen, None, 0, introns)))
     boot_tags = list(dict.fromkeys(boot_tags))
     boots, hexes = [], []
     for lib in libs:
@@ -166,6 +215,8 @@ def main():
             continue
         mol, tr, fl, tags = _load(f)
         u = units(mol, tr, fl, tags, MEMBER_CAP, label="spike_label", pos="internal", neg="tail", amb=None)
+        spikein_units_stats[lib] = {"read_units": len(u.reads), "molecule_units": len(u.mols),
+                                    "missing_reads": u.missing_reads, "dropped_molecules": u.dropped_mols}
         s = spikein_metrics(u, tags)
         s.insert(0, "lib", lib)
         s.insert(1, "cap", MEMBER_CAP)
@@ -178,6 +229,10 @@ def main():
            "libraries": libs, "missing": missing, "units": unit_stats, "modes": modes, "published": pub,
            "cap_sensitivity": cap_sens, "cutoff_sweep": sweep, "bootstrapped_tags": boot_tags,
            "ambiguous_tail_share": tail_share}
+    if spikein_units_stats:
+        out["spikein_units"] = spikein_units_stats
+    if mapq_sens:
+        out["mapq_sensitivity"] = mapq_sens
     (args.out / "selection.json").write_text(json.dumps(out, indent=1))
     print(json.dumps({"libraries": libs, "chosen": chosen, "metrics_rows": len(metrics), "bootstrap_tags": len(boot_tags),
                       "spikein_libraries": [s.lib.iloc[0] for s in spikes], "selection_population": args.population,

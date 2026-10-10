@@ -12,7 +12,7 @@ from pafbench.config import REPO
 from pafbench.evaluate import (METRIC_COLUMNS, ambiguous_tail_share, bootstrap, confusion, evaluate, expr_tertiles,
                                gene_clusters, hexamer_check, rates, relabel, resample_counts, select_setting, spikein_metrics,
                                units)
-from pafbench.flags import setting_tag
+from pafbench.flags import Setting, setting_tag
 from pafbench.grid import published
 
 T0, T1, T2 = "c300_l10_m1_i", "c375_l3_m2_i", "c300_lnone_m0_i"
@@ -486,8 +486,12 @@ def test_stage17_selection_without_qualifier_tie_breaks_caps_and_spikeins(tmp_pa
     # caps 500 (three-way tie at 1/2: E3 removes fewest records) and 2000 (Td enters: E1 3/4) choose differently
     assert {c: sel["cap_sensitivity"][c]["e"]["tag"] for c in ("500", "1000", "2000")} == {"500": E3, "1000": E2, "2000": E1}
     assert sel["cap_sensitivity"]["2000"]["i"]["tag"] is None
-    # bootstrap and hexamer check: the chosen tag, the published settings present, the control at the chosen COVLEN
-    assert sel["bootstrapped_tags"] == [E2] + [setting_tag(p) for p in published()] + [CE]
+    # bootstrap and hexamer check: includes the chosen tag, the published settings, the control at the chosen COVLEN,
+    # and controls at published COVLENs for modes with no selection
+    assert E2 in sel["bootstrapped_tags"]  # chosen tag for mode e
+    assert all(setting_tag(p) in sel["bootstrapped_tags"] for p in published())  # all published settings
+    assert "c450_lnone_m0_e" in sel["bootstrapped_tags"]  # control at chosen COVLEN 450 for mode e
+    assert all(ctrl in sel["bootstrapped_tags"] for ctrl in ["c300_lnone_m0_i", "c275_lnone_m0_i", "c180_lnone_m0_i", "c375_lnone_m0_i"])  # controls at published COVLENs for mode i
     b = pd.read_parquet(out / "bootstrap.parquet")
     assert set(b.tag) == {E2, E1, I1, I2, CE} and set(b.lib) == {"1417", "1419", "1179"} and len(b) == 3 * 2 * 5 * 3
     h = pd.read_parquet(out / "hexamer_check.parquet")
