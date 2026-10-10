@@ -1041,35 +1041,23 @@ def test_burden_section_records_by_re_tag_is_an_observation_from_region_counts(b
 
 def test_burden_section_population_and_groups(base):
     s = m2report.burden_section(base)
-    # no molecule counts in selection.json (fixture): the population is not determined, and no summary.json
-    assert "Population of the burden tables: not determined (eval/selection.json has no molecule counts)" in s
+    assert "Population of the burden tables: not run (missing burden/summary.json)" in s
     assert "Groups: not run (missing burden/summary.json)" in s
+    groups = {"1417": ["1417"], "nuclei": ["1417", "1419"], "cells": ["1179"]}
+    _write(base / "burden/summary.json", {"groups": groups})
+    s = m2report.burden_section(base)
+    assert "Population of the burden tables: not recorded (stage 18 predates it)." in s
+    assert "Groups (burden/summary.json): nuclei = 1417 + 1419; cells = 1179. A group with one library holds the same " \
+           "molecules as that library: cells = 1179." in s
+    for pop, name in (("all", "all barcodes"), ("cells", "called cells"), ("noncells", "other barcodes")):
+        _write(base / "burden/summary.json", {"groups": groups, "population": pop})
+        s = m2report.burden_section(base)
+        assert f"Population of the burden tables (burden/summary.json): {name}." in s
+        assert "not recorded" not in s and "inferred" not in s
+    # no inference from eval/selection.json any more, and no mismatch warning
     _add_populations(base)
     s = m2report.burden_section(base)
-    # all/all total of 1417 is 144,474 = the labeled molecules (all barcodes); 'cells' (1,000) matches no library
-    assert ("Population of the burden tables, inferred by matching the molecule count of each library's all/all row to "
-            "eval/selection.json (stage 18 does not record it): 1417 all barcodes (144,474 molecules).") in s
-    assert ("The corrected table below is over called cells, so the two tables are not over the same molecules.") in s
-    assert ("Selection bias compares the labeled share (over all barcodes) with the share of primary records of all barcodes."
-            ) in s
-    sel = json.loads((base / "eval/selection.json").read_text())
-    sel["selection_population"] = "all"
-    (base / "eval/selection.json").write_text(json.dumps(sel))
-    s = m2report.burden_section(base)
-    assert "not over the same molecules" not in s
-    sel["molecules"]["1417"]["in_cell"] = 144474
-    sel["molecules"]["1417"]["labeled"] = 99
-    sel["selection_population"] = "cells"
-    (base / "eval/selection.json").write_text(json.dumps(sel))
-    s = m2report.burden_section(base)
-    assert "1417 called cells (144,474 molecules)" in s and "not over the same molecules" not in s
-    sel["molecules"]["1417"]["in_cell"] = 5
-    (base / "eval/selection.json").write_text(json.dumps(sel))
-    assert "1417 matches no population" in m2report.burden_section(base)
-    _write(base / "burden/summary.json", {"groups": {"1417": ["1417"], "nuclei": ["1417", "1419"], "cells": ["1179"]}})
-    s = m2report.burden_section(base)
-    assert ("Groups (burden/summary.json): nuclei = 1417 + 1419; cells = 1179. A group with one library holds the same "
-            "molecules as that library: cells = 1179.") in s
+    assert "not over the same molecules" not in s and "matches no population" not in s
 
 
 def test_burden_section_without_a_pair(base):

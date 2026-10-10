@@ -4,8 +4,7 @@ same oligo(dT) priming; the v3.0 documentation describes no filter on A content 
 of the atlas sites is counted by scripts/22_polyasite_a_content.py).
 
 --population (default cells, config.SEL_POPULATION) picks the barcodes of all tables except templated_share_population.parquet,
-which holds every population. The population is not written to any output; the results page infers it from the molecule
-counts. Other files: same_site.parquet, same_gene.parquet, selection_bias.parquet (labeled_share, records_share and, when
+which holds every population. summary.json records it in the key "population". Other files: same_site.parquet, same_gene.parquet, selection_bias.parquet (labeled_share, records_share and, when
 stage 13 wrote total_nondup, records_nondup_share; the records are those of all barcodes) and summary.json.
 
 In templated_share.parquet, lo and hi bound share_all, except on the a_band rows: there they bound frac (the band's share
@@ -147,7 +146,7 @@ def main():
         matched = s[s.label_b != "none"]
         site_summary[s.pair.iloc[0]] = {"sites_a": n, "matched": int(matched.n.sum()),
                                         "same_label": int(matched[matched.label_a == matched.label_b].n.sum())}
-    out = {"libraries": list(mols), "groups": members, "share": headline,
+    out = {"population": args.population, "libraries": list(mols), "groups": members, "share": headline,
            "same_gene": {d["pair"]: {"n_genes": d["n_genes"], "spearman_rho": _num(d["spearman_rho"]),
                                      "p_value": _num(d["p_value"])} for d in genes},
            "same_site": site_summary,

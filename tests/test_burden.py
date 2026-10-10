@@ -207,6 +207,7 @@ def test_stage18_population_selects_barcodes_and_reports_all_three(tmp_path):
     for pop in ("all", "cells", "noncells"):
         r = _stage18(base, tmp_path / pop, tmp_path, "--population", pop)
         assert r.returncode == 0, r.stderr
+        assert json.loads((tmp_path / pop / "summary.json").read_text())["population"] == pop
         t = pd.read_parquet(tmp_path / pop / "templated_share.parquet")
         a = t[(t.group == "1417") & (t.stratum_kind == "all")].iloc[0]
         sub = libs["1417"][{"all": slice(None), "cells": libs["1417"].in_cell, "noncells": ~libs["1417"].in_cell}[pop]]

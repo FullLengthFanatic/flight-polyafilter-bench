@@ -931,35 +931,17 @@ def _re_counts_lines(base):
     return _notes(out, notes)
 
 
-def _burden_population(base, share):
-    """(lines, selection-bias note): the population of the burden tables, inferred by matching each library's all/all molecule
-    count (stage 18 records no population) to the counts in eval/selection.json, the group membership from burden/summary.json,
-    and a warning when the tables differ from the selection population."""
-    sel = _json(base / "eval" / "selection.json")
+def _burden_population(base):
+    """Lines naming the population of the burden tables (burden/summary.json "population", written by stage 18) and the
+    groups of libraries."""
     summary = _json(base / "burden" / "summary.json")
-    lines, note = [], ""
-    if sel is None or "molecules" not in sel:
-        lines.append("Population of the burden tables: not determined (" + (
-            "missing eval/selection.json" if sel is None else "eval/selection.json has no molecule counts") + ")")
+    lines = []
+    if summary is None:
+        lines.append(f"Population of the burden tables: {_not_run(base, [base / 'burden' / 'summary.json'])}")
+    elif "population" not in summary:
+        lines.append("Population of the burden tables: not recorded (stage 18 predates it).")
     else:
-        tot = {r.group: r.total for r in share[(share.stratum_kind == "all") & (share.stratum == "all")].itertuples()}
-        found = {}
-        for lib, m in sel["molecules"].items():
-            if lib not in tot:
-                continue
-            counts = {"all": m["labeled"], "cells": m["in_cell"], "noncells": m["labeled"] - m["in_cell"]}
-            found[lib] = next((pop for pop in POP_NAMES if counts[pop] == tot[lib]), None)
-        lines.append("Population of the burden tables, inferred by matching the molecule count of each library's all/all row to "
-                     "eval/selection.json (stage 18 does not record it): " + "; ".join(
-                         f"{lib} {POP_NAMES[pop]} ({_int(tot[lib])} molecules)" if pop else f"{lib} matches no population"
-                         for lib, pop in found.items()) + ".")
-        want = sel.get("selection_population", "all")
-        if any(pop and pop != want for pop in found.values()):
-            lines.append(f"The corrected table below is over {POP_NAMES[want]}, so the two tables are not over the same molecules.")
-        pops = {pop for pop in found.values() if pop}
-        if pops:
-            note = (f"Selection bias compares the labeled share (over {' and '.join(POP_NAMES[x] for x in sorted(pops))}) "
-                         "with the share of primary records of all barcodes.")
+        lines.append(f"Population of the burden tables (burden/summary.json): {POP_NAMES[summary['population']]}.")
     if summary is None:
         lines.append(f"Groups: {_not_run(base, [base / 'burden' / 'summary.json'])}")
     else:
@@ -968,7 +950,7 @@ def _burden_population(base, share):
         same = [f"{k} = {v[0]}" for k, v in grp.items() if len(v) == 1]
         lines.append("Groups (burden/summary.json): " + "; ".join(f"{k} = {' + '.join(v)}" for k, v in grp.items()) + "." + (
             " A group with one library holds the same molecules as that library: " + ", ".join(same) + "." if same else ""))
-    return lines, note
+    return lines
 
 
 def burden_section(base):
@@ -982,7 +964,7 @@ def burden_section(base):
             "difference are confounded. share = templated / all labeled molecules, 95% gene-bootstrap interval in brackets, "
             "molecules in parentheses; resolved = templated / (templated + non-templated).", ""]
     groups = list(dict.fromkeys(share.group))
-    pop_lines, bias_note = _burden_population(base, share)
+    pop_lines = _burden_population(base)
     out += [x for line in pop_lines for x in (line, "")]
     look = {(r.group, r.stratum_kind, r.stratum): r for r in share.itertuples()}
     strata = [("all", "all")] + [("region", g) for g in REGION_NAMES] + [("has_ts", "True"), ("has_ts", "False")]
@@ -1062,8 +1044,6 @@ def burden_section(base):
         out += _table(["Library", "RE", "Labeled share", "Records share"] + (["Records share without PCR duplicates"] if has else []),
                       [[r.lib, r.re, _r(r.labeled_share), _r(r.records_share)] + ([_r(r.records_nondup_share)] if has else [])
                        for r in sb.itertuples()])
-        if bias_note:
-            out += ["", bias_note]
         if not has:
             out += ["", "burden/selection_bias.parquet has no records_nondup_share column: stage 13 predates it, so the spec 11 "
                         "rule below cannot be applied."]
