@@ -215,7 +215,7 @@ def _full_base(tmp_path):
     # constant input), 1419 with the settings at the top level
     _write(b / "1417/spikein/ercc.json", {
         "library": "1417", "provisional": True, "note": NOTE, "concentration_source": "https://x",
-        "selection": {"e": None, "i": I1}, "ercc_contigs": 92, "reads": 120000, "ercc_detected": 61,
+        "selection": {"e": None, "i": I1}, "barcodes": "cells", "ercc_contigs": 92, "reads": 120000, "ercc_detected": 61,
         "ercc_with_concentration": 61, "settings": {
             "unfiltered": {"correlation": {"n": 61, "pearson_log10": 0.9123, "spearman": 0.8876}, "umis": 52000,
                            "umis_kept_share": 1.0},
@@ -865,7 +865,13 @@ def test_ercc_section(base):
     assert "n: ERCCs with a UMI unfiltered and a Mix 1 concentration" in s
     assert "pearson_log10: Pearson correlation of log10(UMIs + 1) with log10(concentration)" in s
     assert "umis_kept_share: umis over the unfiltered umis" in s
-    assert "UMIs are counted over primary records with a called-cell CB and a UB (stage 15), not over every barcode as in section 7" in s
+    assert ("UMIs are counted over primary records with a UB and a CB of the barcode set recorded in ercc.json (stage 15): "
+            "1417 called cells; 1419 not recorded. Section 7 counts every barcode.") in s
+    p = base / "1417/spikein/ercc.json"
+    d = json.loads(p.read_text())
+    for pop, name in (("all", "all barcodes"), ("noncells", "other barcodes")):
+        p.write_text(json.dumps(d | {"barcodes": pop}))
+        assert f"1417 {name}; 1419 not recorded." in m2report.ercc_section(base)
     # the recorded selection (default none, -i c300_l10_m1_i) is the one in eval/selection.json: no note
     assert "predates the current selection" not in s
 

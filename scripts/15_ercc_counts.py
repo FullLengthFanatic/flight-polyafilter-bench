@@ -2,7 +2,8 @@
 
 Per ERCC contig of <base>/star_sorted.bam (stage 14), flags.flag_reference at the 8 published settings plus the tags chosen
 in OUT/eval/selection.json (skipped with a note when the file is absent), joined by fetch order to CB and UB. UMIs count
-(contig, CB, UB) over primary records with a called-cell CB and a UB. The concentration table is downloaded once to
+(contig, CB, UB) over primary records with a called-cell CB (a barcode of filtered_feature_bc_matrix) and a UB; ercc.json
+records this in the key "barcodes": "cells" (config.POPULATIONS vocabulary). The concentration table is downloaded once to
 <ref>/ercc_conc_raw.txt. Writes <out>/ercc_counts.parquet (ercc_id, setting, umis) and <out>/ercc.json.
 """
 import argparse
@@ -58,7 +59,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     counts.to_parquet(out / "ercc_counts.parquet", index=False)
     summary = {"library": args.library, "provisional": True, "note": NOTE, "concentration_source": ERCC_CONC_URL,
-               "selection": chosen, "ercc_contigs": len(contigs),
+               "selection": chosen, "barcodes": "cells", "ercc_contigs": len(contigs),
                "reads": len(reads), "ercc_detected": int((counts.setting == "unfiltered").sum()),
                "ercc_with_concentration": per["unfiltered"]["correlation"]["n"], "settings": per}
     (out / "ercc.json").write_text(json.dumps(summary, indent=1))

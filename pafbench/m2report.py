@@ -771,7 +771,7 @@ def ercc_section(base):
     out = ["## 8. ERCC count accuracy (provisional)", "",
            "Source: `<lib>/spikein/ercc.json` (stage 15): correlation of ERCC UMI counts with input concentration, "
            "unfiltered and per setting. 1179 has no spike-ins, so this section has no 1179 rows.", ""]
-    entries, notes, flags, recorded = [], [], [], {}
+    entries, notes, flags, recorded, barcodes = [], [], [], {}, {}
     for lib in NUCLEI:
         p = base / lib / "spikein" / "ercc.json"
         d = _json(p)
@@ -781,6 +781,7 @@ def ercc_section(base):
         if d.get("provisional"):
             flags.append(f"Provisional ({lib}): {d.get('note', '')}")
         recorded[lib] = d.get("selection")
+        barcodes[lib] = d.get("barcodes")
         src = d.get("settings", d)
         entries += [(lib, k, _flat(v)) for k, v in src.items() if isinstance(v, dict)]
     out += [f"- {f}" for f in flags] + ([""] if flags else [])
@@ -795,7 +796,9 @@ def ercc_section(base):
         out += ["Columns: n: ERCCs with a UMI unfiltered and a Mix 1 concentration; pearson_log10: Pearson correlation of "
                 "log10(UMIs + 1) with log10(concentration); spearman: Spearman correlation of the UMIs with the concentration; "
                 "umis: UMIs left after the setting; umis_kept_share: umis over the unfiltered umis. UMIs are counted over primary "
-                "records with a called-cell CB and a UB (stage 15), not over every barcode as in section 7.", ""]
+                "records with a UB and a CB of the barcode set recorded in ercc.json (stage 15): "
+                + "; ".join(f"{lib} {POP_NAMES[b] if b in POP_NAMES else b}" if b else f"{lib} not recorded"
+                            for lib, b in barcodes.items()) + ". Section 7 counts every barcode.", ""]
     if entries:
         cols = list(dict.fromkeys(k for _, _, f in entries for k in f))
         out += _table(["Library", "Setting"] + cols,

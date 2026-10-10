@@ -269,11 +269,12 @@ def test_stage15_on_synthetic_spikes(synth, tmp_path, monkeypatch, capsys):
     pd.testing.assert_frame_equal(pd.read_csv(ref / "ercc_conc.tsv", sep="\t"), parse_ercc_conc(EXCERPT))
 
     js = json.loads((out / "ercc.json").read_text())
-    assert list(js) == ["library", "provisional", "note", "concentration_source", "selection", "ercc_contigs", "reads",
+    assert list(js) == ["library", "provisional", "note", "concentration_source", "selection", "barcodes", "ercc_contigs", "reads",
                         "ercc_detected", "ercc_with_concentration", "settings"]
     assert (js["library"], js["provisional"], js["note"]) == ("SYN", True, stage.NOTE)
     assert js["concentration_source"] == stage.ERCC_CONC_URL
     assert js["selection"] is None
+    assert js["barcodes"] == "cells"
     assert (js["ercc_contigs"], js["reads"], js["ercc_detected"], js["ercc_with_concentration"]) == (2, n_reads, 2, 2)
     assert list(js["settings"]) == ["unfiltered"] + tags
     base = umis[("ERCC-00108", "unfiltered")] + umis[("ERCC-00130", "unfiltered")]
