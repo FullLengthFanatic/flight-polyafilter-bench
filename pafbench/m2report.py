@@ -913,10 +913,11 @@ def validation_section(base):
                 rows.append([name, tag, _int(r["n_original"]), _int(r["n_reimpl"]), _int(r["only_original"]),
                              _int(r["only_reimpl"]), r["identical"],
                              _r(r["original_elapsed_s"] / 3600 if r["original_elapsed_s"] is not None else None, 2),
-                             _r(r["original_max_rss_gib"], 2), _r(r["original_peak_tree_rss_gib"], 2)])
+                             _r(r["original_max_rss_gib"], 2), _r(r["original_peak_tree_rss_gib"], 2), _int(r.get("n_grid")),
+                             "n/a" if r.get("grid_equal") is None else r["grid_equal"]])
     if rows:
         out += _table(["Library", "Setting", "Original removed", "Reimpl removed", "Only original", "Only reimpl", "Identical",
-                       "Original wall (h)", "Max RSS (GiB)", "Peak tree RSS (GiB)"], rows)
+                       "Original wall (h)", "Max RSS (GiB)", "Peak tree RSS (GiB)", "Stage 13 removed", "Equal to stage 13"], rows)
     out = _notes(out, notes)
     nc = em.get("none_control")
     out += ["", "Remove-all control (MINSNRLEN none) on a reference subset, original run in process:", ""]
@@ -930,6 +931,28 @@ def validation_section(base):
                         _int(nc["only_original"]), _int(nc["only_reimpl"]), nc["identical"], _sec(ct["elapsed_s"]),
                         _r(ct["max_rss_gib"], 2), _sec(sum(nc["seconds"].values()))]])
     out += ["", f"Compared: {em.get('n_compared', 'n/a')}; all identical: {em.get('all_identical', 'n/a')}"]
+    if "complete" not in em:
+        out += ["", "completeness not recorded (file written before 2026-10-10)"]
+        return "\n".join(out)
+    out += ["", f"complete: {'yes' if em['complete'] else 'no'}"]
+    miss = [[lib, m["tag"], "n/a" if m["exit_status"] is None else m["exit_status"], m["reason"]]
+            for lib, ms in em.get("missing", {}).items() for m in ms]
+    if miss:
+        out += ["", "Original runs that are missing (expected for every setting of the library):", ""]
+        out += _table(["Library", "Setting", "Exit status", "Reason"], miss)
+    tie = em.get("engine_tie", {})
+    if tie:
+        out += ["", "Engine tie: stage 13 truth flags against the stage 03 flags of the same primary records (a difference is "
+                    "counted per record and setting):", ""]
+        out += _table(["Library", "Records compared", "Differences (records x settings)", "Missing"],
+                      [[lib, "not computed", "n/a", "n/a"] if t is None else
+                       [lib, _int(t["rows"]), _int(sum(t["mismatches"].values())), _int(t["missing_rows"])]
+                       for lib, t in tie.items()])
+    if em.get("reused"):
+        out += ["", "Stages 03 and 04 reused: " + ", ".join(f"{lib} {'yes' if v else 'no'}" for lib, v in em["reused"].items())]
+    ok = em.get("all_identical") and em["complete"]
+    out += ["", "The reimplementation is validated only when all_identical and complete are both true: " +
+            ("both are true, so the reimplementation is validated on these runs." if ok else "not validated on these runs.")]
     return "\n".join(out)
 
 

@@ -286,10 +286,18 @@ def _full_base(tmp_path):
     # ---- stage 20
     em = {"n_original": 17000000, "n_reimpl": 17000000, "only_original": 0, "only_reimpl": 0, "identical": True, "examples": []}
     _write(b / "validation/exact_match_m2.json", {
-        "1417": {"c275_l9_m1_i": em | {"original_elapsed_s": 7020.0, "original_max_rss_gib": 15.486, "original_peak_tree_rss_gib": 60.5},
+        "1417": {"c275_l9_m1_i": em | {"original_elapsed_s": 7020.0, "original_max_rss_gib": 15.486, "original_peak_tree_rss_gib": 60.5,
+                                       "n_grid": 17000000, "grid_equal": True},
                  I1: em | {"n_original": 17068514, "n_reimpl": 17068514, "original_elapsed_s": 7020.0,
-                           "original_max_rss_gib": 15.5, "original_peak_tree_rss_gib": None}},
+                           "original_max_rss_gib": 15.5, "original_peak_tree_rss_gib": None, "n_grid": 17068514,
+                           "grid_equal": True}},
         "1419": {},
+        "complete": False,
+        "missing": {"1417": [], "1419": [{"tag": "c275_l9_m1_i", "exit_status": 137, "reason": "killed or failed"},
+                                         {"tag": I1, "exit_status": None, "reason": "no output"}]},
+        "engine_tie": {"1417": {"rows": 1000, "tags": ["c275_l9_m1_i", I1], "mismatches": {"c275_l9_m1_i": 0, I1: 3},
+                                "missing_rows": 2}, "1419": None},
+        "reused": {"1417": True, "1419": False},
         "none_control": {"refs": ["chr21", "chr22"], "n_records": 2781871, "setting": "c300_lnone_m0_i", "n_original": 1894573,
                          "n_reimpl": 1894573, "only_original": 0, "only_reimpl": 0, "identical": True, "examples": [],
                          "createTRANS": {"elapsed_s": 412.0, "max_rss_gib": 0.26, "exit_status": 0, "peak_tree_rss_gib": 0.23},
@@ -864,14 +872,54 @@ def test_burden_section_polyasite(base):
 
 def test_validation_section(base):
     s = m2report.validation_section(base)
-    assert "| 1417 | c275_l9_m1_i | 17,000,000 | 17,000,000 | 0 | 0 | True | 1.95 | 15.49 | 60.50 |" in s
-    assert "| 1417 | c300_l10_m1_i | 17,068,514 | 17,068,514 | 0 | 0 | True | 1.95 | 15.50 | n/a |" in s
+    assert "| 1417 | c275_l9_m1_i | 17,000,000 | 17,000,000 | 0 | 0 | True | 1.95 | 15.49 | 60.50 | 17,000,000 | True |" in s
+    assert "| 1417 | c300_l10_m1_i | 17,068,514 | 17,068,514 | 0 | 0 | True | 1.95 | 15.50 | n/a | 17,068,514 | True |" in s
     assert "1419: no completed original run" in s
     assert "1179: not in exact_match_m2.json; the 1179 grid has no original-versus-reimplementation evidence" in s
     # 20 + 412 + 160 + 80 = 672 s
     assert "| c300_lnone_m0_i | chr21, chr22 | 2,781,871 | 1,894,573 | 1,894,573 | 0 | 0 | True | 412 | 0.26 | 672 |" in s
     assert "Compared: 3; all identical: True" in s
     assert "Removed-record sets (every record the original fetches" in s
+
+
+def test_validation_section_completeness(base):
+    s = m2report.validation_section(base)
+    assert "| Library | Setting | Original removed | Reimpl removed | Only original | Only reimpl | Identical | Original wall (h) | " \
+           "Max RSS (GiB) | Peak tree RSS (GiB) | Stage 13 removed | Equal to stage 13 |" in s
+    assert "complete: no" in s
+    # missing runs with their exit status and reason; a run without a time file has no exit status
+    assert "| Library | Setting | Exit status | Reason |" in s
+    assert "| 1419 | c275_l9_m1_i | 137 | killed or failed |" in s
+    assert f"| 1419 | {I1} | n/a | no output |" in s
+    # engine tie: 1,000 records, 0 + 3 differences, 2 without a counterpart; 1419 not computed
+    assert "| Library | Records compared | Differences (records x settings) | Missing |" in s
+    assert "| 1417 | 1,000 | 3 | 2 |" in s
+    assert "| 1419 | not computed | n/a | n/a |" in s
+    assert "validated only when all_identical and complete are both true" in s
+    assert "not validated" in s
+    assert "Stages 03 and 04 reused: 1417 yes, 1419 no" in s
+    p = base / "validation/exact_match_m2.json"
+    em = json.loads(p.read_text())
+    em["complete"], em["missing"] = True, {"1417": [], "1419": []}
+    p.write_text(json.dumps(em))
+    s = m2report.validation_section(base)
+    assert "complete: yes" in s and "Compared: 3; all identical: True" in s
+    assert "| Library | Setting | Exit status | Reason |" not in s
+    assert "the reimplementation is validated" in s and "not validated" not in s
+
+
+def test_validation_section_without_completeness_keys(base):
+    p = base / "validation/exact_match_m2.json"
+    em = json.loads(p.read_text())
+    for k in ("complete", "missing", "engine_tie", "reused"):
+        del em[k]
+    for v in em["1417"].values():
+        del v["n_grid"], v["grid_equal"]
+    p.write_text(json.dumps(em))
+    s = m2report.validation_section(base)
+    assert "completeness not recorded (file written before 2026-10-10)" in s
+    assert "| 1417 | c275_l9_m1_i | 17,000,000 | 17,000,000 | 0 | 0 | True | 1.95 | 15.49 | 60.50 | n/a | n/a |" in s
+    assert "Engine tie" not in s and "validated" not in s.split("completeness not recorded")[1]
 
 
 def test_validation_section_with_the_1179_subset(base):
@@ -887,12 +935,12 @@ def test_validation_section_with_the_1179_subset(base):
     p.write_text(json.dumps(em))
     s = m2report.validation_section(base)
     # the subset rows join the library table: 1800 s = 0.50 h
-    assert "| 1179 (chr21, chr22) | c300_l10_m1_i | 2,000,000 | 2,000,000 | 0 | 0 | True | 0.50 | 3.25 | 6.50 |" in s
-    assert "| 1179 (chr21, chr22) | c300_l10_m1_e | 2,000,000 | 2,000,000 | 2 | 0 | False | 0.50 | 3.25 | 6.50 |" in s
+    assert "| 1179 (chr21, chr22) | c300_l10_m1_i | 2,000,000 | 2,000,000 | 0 | 0 | True | 0.50 | 3.25 | 6.50 | n/a | n/a |" in s
+    assert "| 1179 (chr21, chr22) | c300_l10_m1_e | 2,000,000 | 2,000,000 | 2 | 0 | False | 0.50 | 3.25 | 6.50 | n/a | n/a |" in s
     assert "1179: original tool on the chr21, chr22 subset only (18,382,751 records)" in s
     assert "the 1179 grid has no original-versus-reimplementation evidence" not in s
     # the nuclei rows are unchanged
-    assert "| 1417 | c275_l9_m1_i | 17,000,000 | 17,000,000 | 0 | 0 | True | 1.95 | 15.49 | 60.50 |" in s
+    assert "| 1417 | c275_l9_m1_i | 17,000,000 | 17,000,000 | 0 | 0 | True | 1.95 | 15.49 | 60.50 | 17,000,000 | True |" in s
 
 
 def test_validation_section_on_a_stale_file(base):
