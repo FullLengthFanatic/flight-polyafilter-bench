@@ -18,6 +18,8 @@ LABELS = ("templated", "ambiguous", "nontemplated")
 LABEL_NAMES = {"templated": "templated", "ambiguous": "ambiguous", "nontemplated": "non-templated", "all": "all"}
 MODE_NAMES = {"e": "default", "i": "-i"}
 BANDS = tuple(b[0] for b in A_BANDS)
+POP_NAMES = {"all": "all barcodes", "cells": "called cells", "noncells": "other barcodes"}
+UNIT_NAMES = {"with_member": "molecules with a member read within the cap", "all_labeled": "all labeled molecules"}
 SPIKE_LABELS = ("internal", "tail", "other")
 CUTOFFS = "{templated_min}/{nontemplated_max}".format(**LABEL_CUTOFFS)
 PUBLISHED_TAGS = [setting_tag(s) for s in published()]
@@ -260,6 +262,61 @@ def grid_section(base):
     return "\n".join(out)
 
 
+def _populations_lines(base, sel):
+    """The "Called cells and other barcodes" table and the per-population picks, or a not-run line."""
+    if "populations" not in sel or "molecules" not in sel:
+        return ["Called cells and other barcodes: not run (eval/selection.json has no populations)"]
+    libs, sl = sel["libraries"], sel["selection_library"]
+    p = base / "burden" / "templated_share_population.parquet"
+    share = _parquet(p)
+    look = {} if share is None else {(r.lib, r.population): r for r in share[share.stratum_kind == "all"].itertuples()}
+    rows = []
+    for lib in libs:
+        m = sel["molecules"].get(lib, {})
+        cells = [f"{_r(look[lib, pop].share_all)} ({_int(look[lib, pop].templated)} of {_int(look[lib, pop].total)})"
+                 if (lib, pop) in look else "n/a" for pop in POP_NAMES]
+        rows.append([lib, _int(m.get("labeled")), "n/a" if m.get("in_cell") is None else
+                     f"{_int(m['in_cell'])} ({_pct(m['in_cell'], m['labeled'])})"] + cells)
+    out = ["Called cells and other barcodes: labeled molecules (stage 12), the share of them in cells called by Cell Ranger, "
+           "and the templated share of all labeled molecules in each population (templated molecules, then all, in "
+           "parentheses):", ""]
+    out += _table(["Library", "Labeled molecules", "In called cells"] + [f"Templated share, {n}" for n in POP_NAMES.values()], rows)
+    if share is None:
+        out += ["", f"Templated share by population: {_not_run(base, [p])}"]
+    out += ["", f"The selection rule run on {sl} in each population and with each unit definition (member cap {MEMBER_CAP:,} nt, "
+                f"{CUTOFFS} labels), with the pick's molecule-level sens / spec on every library in the same population and units:", ""]
+    rows = []
+    for pop, units_ in sel["populations"].items():
+        for um, modes in units_.items():
+            for mode, d in modes.items():
+                s = d["selection"]
+                rows.append([POP_NAMES[pop], UNIT_NAMES[um], MODE_NAMES[mode], s["tag"] or "none", s["n_qualifying"]] + [
+                    f"{_r(m['sens'])} / {_r(m['spec'])}" if (m := d["metrics"].get(lib, {}).get("molecule")) else "n/a" for lib in libs])
+    out += _table(["Population", "Units", "Mode", f"Chosen (on {sl})", "Qualifying"] + [f"{lib} sens / spec" for lib in libs], rows)
+    return out
+
+
+def _mapq_lines(sel):
+    if "mapq_sensitivity" not in sel:
+        return ["Molecules with mapq_min below 255 left out: not run (eval/selection.json has no mapq_sensitivity)"]
+    mq, min_spec = sel["mapq_sensitivity"], sel["min_spec"]
+    out = ["Molecules with mapq_min below 255 left out (" + "; ".join(f"{k}: {_int(v)}" for k, v in mq["left_out"].items()) +
+           f"), selection rerun on {sel['selection_library']} and the chosen and published settings, molecule level:", ""]
+    rows = []
+    for mode, d in mq["modes"].items():
+        s = d["selection"]
+        none = "no candidates" if s["n_candidates"] == 0 else f"none reached specificity {min_spec:g}"
+        rows.append([MODE_NAMES[mode], s["tag"] or none, _r(s["sens"]), _r(s["spec"]), f"{s['n_qualifying']} / {s['n_candidates']}"])
+    out += _table(["Mode", "Chosen setting", "Sens", "Spec", "Qualifying / candidates"], rows)
+    rows = []
+    for tag, rs in _chosen(mq).items():
+        for lib in mq["left_out"]:
+            m = _entry(mq, tag, lib).get("molecule")
+            rows.append([tag, ", ".join(rs), lib] + (["n/a"] * 4 if not m else [
+                _int(m["tp"] + m["fn"]), _int(m["tn"] + m["fp"]), _r(m["sens"]), _r(m["spec"])]))
+    return out + [""] + _table(["Setting", "Role", "Library", "Templated", "Non-templated", "Sens", "Spec"], rows)
+
+
 def selection_section(base):
     base = Path(base)
     out = ["## 4. Setting selection", ""]
@@ -268,7 +325,9 @@ def selection_section(base):
     if sel is None:
         return "\n".join(out + [_not_run(base, [p])])
     libs, sl, min_spec = sel["libraries"], sel["selection_library"], sel["min_spec"]
-    out += [f"Source: `eval/selection.json`, `eval/bootstrap.parquet`, `eval/metrics.parquet` (stage 17). Rule: {sel['rule']}", ""]
+    out += [f"Source: `eval/selection.json`, `eval/bootstrap.parquet`, `eval/metrics.parquet` (stage 17). Rule: {sel['rule']}", "",
+            f"Computed on: {POP_NAMES[sel.get('selection_population', 'all')]}, "
+            f"{UNIT_NAMES[sel.get('selection_units', 'with_member')]}.", ""]
     rows, fronts = [], []
     for mode, d in sel["modes"].items():
         s = d["selection"]
@@ -333,6 +392,8 @@ def selection_section(base):
         rows.append([e["templated_min"], e["nontemplated_max"], MODE_NAMES[e["mode"]], e["tag"] or "none", e["n_qualifying"]]
                     + [f"{_r(by[lib]['sens'])} / {_r(by[lib]['spec'])}" if by.get(lib) else "n/a" for lib in libs])
     out += _table(["Templated min", "Non-templated max", "Mode", "Chosen", "Qualifying"] + [f"{lib} sens / spec" for lib in libs], rows)
+
+    out += [""] + _populations_lines(base, sel) + [""] + _mapq_lines(sel)
 
     out += ["", "Intergenic molecules: polyAfilter's windows lie on expressed transcripts, so an intergenic molecule is "
                 "removed only through reads elsewhere. 'Removed at most' is the largest count over all settings in "
@@ -421,7 +482,8 @@ def spikein_section(base):
     base = Path(base)
     out = ["## 7. Spike-ins", "",
            "Source: `<lib>/spikein/truth/molecules_labeled.parquet` (stage 14), `eval/spikein_metrics.parquet` (stage 17). "
-           "spike_label comes from the distance to the annotated 3' end; label from the A count after the site.", ""]
+           "spike_label comes from the distance to the annotated 3' end; label from the A count after the site. Spike-in metrics "
+           "use every barcode, whatever population the setting selection uses: spike-ins are free RNA in every droplet.", ""]
     data, notes = {}, []
     for lib in NUCLEI:
         p = base / lib / "spikein" / "truth" / "molecules_labeled.parquet"

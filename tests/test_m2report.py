@@ -447,6 +447,82 @@ def test_selection_section_chosen_setting_outside_the_published_ones(base):
     assert "| c300_l10_m1_i | published | 1417 | 41,369 | 2,786 | 0.237 [0.207, 0.259] |" in s
 
 
+def _pop_sel(tag, sens, spec, n_q):
+    return {"introns": bool(tag), "selection": _sel(tag, sens, spec, 0.99, n_q) if tag else NONE_E,
+            "metrics": {"1417": {"molecule": _lvl(80, 20, 90, 10)}, "1179": {"molecule": _lvl(30, 70, 95, 5)}} if tag else {}}
+
+
+def _add_populations(base):
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    sel |= {"selection_population": "cells", "selection_units": "all_labeled", "spikein_barcodes": "all",
+            "molecules": {"1417": {"labeled": 144474, "in_cell": 90099, "units": {}},
+                          "1179": {"labeled": 1402589, "in_cell": 1174777, "units": {}}},
+            "populations": {pop: {um: {"e": _pop_sel(None, 0, 0, 0), "i": _pop_sel(f"c{150 + 10 * k}_l9_m2_i", 0.4, 0.96, 100 + k)}
+                                    for k, um in enumerate(("with_member", "all_labeled"))}
+                            for pop in ("all", "cells", "noncells")},
+            "mapq_sensitivity": {"left_out": {"1417": 1200, "1179": 30},
+                                 "modes": {"e": _pop_sel(None, 0, 0, 0),
+                                           "i": {"introns": True, "selection": _sel(I1, 0.25, 0.99, 0.99, 119),
+                                                 "metrics": {"1417": {"molecule": _lvl(100, 300, 200, 10)}}}},
+                                 "published": {I1: {"1417": {"molecule": _lvl(100, 300, 200, 10)}, "1179": {}},
+                                               I3: {"1417": {"molecule": _lvl(300, 100, 150, 60)}, "1179": {}}}}}
+    p.write_text(json.dumps(sel))
+    rows = []
+    for lib, n in (("1417", 100), ("1179", 60)):
+        for pop, f in (("all", 1.0), ("cells", 0.5), ("noncells", 0.5)):
+            t, nt, am = int(n * f * 0.6), int(n * f * 0.3), int(n * f * 0.1)
+            rows.append((lib, pop, "all", "all", t, nt, am, t + nt + am, t / (t + nt + am)))
+    _write(base / "burden/templated_share_population.parquet", pd.DataFrame(
+        rows, columns=["lib", "population", "stratum_kind", "stratum", "templated", "nontemplated", "ambiguous", "total", "share_all"]))
+
+
+def test_selection_section_states_population_and_units(base):
+    s = m2report.selection_section(base)
+    # a selection.json without the keys reads as all barcodes and molecules with a member read
+    assert "Computed on: all barcodes, molecules with a member read within the cap." in s
+    _add_populations(base)
+    s = m2report.selection_section(base)
+    assert "Computed on: called cells, all labeled molecules." in s
+
+
+def test_selection_section_called_cells_table(base):
+    s = m2report.selection_section(base)
+    assert "Called cells and other barcodes: not run (eval/selection.json has no populations)" in s
+    assert "Molecules with mapq_min below 255 left out: not run (eval/selection.json has no mapq_sensitivity)" in s
+    _add_populations(base)
+    s = m2report.selection_section(base)
+    assert "| Library | Labeled molecules | In called cells | Templated share, all barcodes | Templated share, called cells | " \
+        "Templated share, other barcodes |" in s
+    # 90,099 / 144,474 = 62.4%; the templated shares come from burden/templated_share_population.parquet (60 / 100 ...)
+    assert "| 1417 | 144,474 | 90,099 (62.4%) | 0.600 (60 of 100) | 0.600 (30 of 50) | 0.600 (30 of 50) |" in s
+    assert "| 1179 | 1,402,589 | 1,174,777 (83.8%) | 0.600 (36 of 60) | 0.600 (18 of 30) | 0.600 (18 of 30) |" in s
+    assert "| Population | Units | Mode | Chosen (on 1417) | Qualifying | 1417 sens / spec | 1179 sens / spec |" in s
+    assert "| called cells | all labeled molecules | -i | c160_l9_m2_i | 101 | 0.800 / 0.900 | 0.300 / 0.950 |" in s
+    assert "| other barcodes | molecules with a member read within the cap | default | none | 0 | n/a | n/a |" in s
+    assert "| all barcodes | molecules with a member read within the cap | -i | c150_l9_m2_i | 100 | 0.800 / 0.900 | 0.300 / 0.950 |" in s
+    (base / "burden/templated_share_population.parquet").unlink()
+    s = m2report.selection_section(base)
+    assert "Templated share by population: not run (missing burden/templated_share_population.parquet)" in s
+    assert "| 1417 | 144,474 | 90,099 (62.4%) | n/a | n/a | n/a |" in s
+
+
+def test_selection_section_mapq_sensitivity(base):
+    _add_populations(base)
+    s = m2report.selection_section(base)
+    assert "Molecules with mapq_min below 255 left out (1417: 1,200; 1179: 30)" in s
+    assert "| -i | c300_l10_m1_i | 0.250 | 0.990 | 119 / 189 |" in s
+    assert "| default | none reached specificity 0.95 | n/a | n/a | 0 / 189 |" in s
+    # published settings on the reduced set: tp 300 fn 100 tn 150 fp 60
+    assert "| c375_l3_m2_i | published | 1417 | 400 | 210 | 0.750 | 0.714 |" in s
+    assert "| c375_l3_m2_i | published | 1179 | n/a | n/a | n/a | n/a |" in s
+    assert "| c300_l10_m1_i | chosen (-i), published | 1417 | 400 | 210 | 0.250 | 0.952 |" in s
+
+
+def test_spikein_section_states_that_every_barcode_is_used(base):
+    assert "Spike-in metrics use every barcode" in m2report.spikein_section(base)
+
+
 def test_strata_section(base):
     s = m2report.strata_section(base)
     # spec 2,757 / 2,786 = 0.990; sens 100 / 2,000, 1,000 / 6,400 = 0.156, 8,695 / 32,969 = 0.264
