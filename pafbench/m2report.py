@@ -484,7 +484,9 @@ def selection_section(base):
                    "Read"], rows_lvl)
 
     out += ["", f"Remove-all control (MINSNRLEN none, every non-terminal read on an expressed transcript is removed), molecule "
-                f"level, cap {MEMBER_CAP:,} nt, {CUTOFFS} labels, all molecules; 95% gene-bootstrap interval in brackets where "
+                f"level, cap {MEMBER_CAP:,} nt, {CUTOFFS} labels, stratum all of the selection population "
+                f"({POP_NAMES[sel.get('selection_population', 'all')]}, {UNIT_NAMES[sel.get('selection_units', 'with_member')]}); "
+                "95% gene-bootstrap interval in brackets where "
                 "`eval/bootstrap.parquet` has one. The control ignores A content, so it bounds what a mode can reach:", ""]
     if metrics is None:
         out[-2:] = [f"Remove-all control: {_not_run(base, [mp])}"]

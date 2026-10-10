@@ -540,6 +540,13 @@ def test_selection_section_remove_all_control(base):
     assert "| c600_lnone_m0_e | 0.483 | 0.323 | n/a | n/a |" in s
     assert "c300_lnone_m0_i |" not in s.split("Remove-all control")[1].split("Units per member cap")[0]
     assert "ignores A content" in s and "bounds what a mode can reach" in s
+    cap = s.split("Remove-all control")[1].split("Units per member cap")[0]
+    assert "all molecules" not in cap
+    assert "stratum all of the selection population (all barcodes, molecules with a member read within the cap)" in cap
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text()) | {"selection_population": "cells"}
+    p.write_text(json.dumps(sel))
+    assert "stratum all of the selection population (called cells, molecules with a member read" in m2report.selection_section(base)
     (base / "eval/metrics.parquet").unlink()
     assert "Remove-all control: not run (missing eval/metrics.parquet)" in m2report.selection_section(base)
 
