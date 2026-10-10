@@ -30,7 +30,7 @@ POP_NAMES = {"all": "all barcodes", "cells": "called cells", "noncells": "other 
 UNIT_NAMES = {"with_member": "molecules with a member read within the cap", "all_labeled": "all labeled molecules"}
 SPIKE_LABELS = ("internal", "tail", "other")
 EXPR_TERTILES = ("low", "mid", "high", "no_gene")
-READING = f"our reading of the polyAfilter code at commit {POLYAFILTER_COMMIT} (spec 3)"
+READING = f"our reading of the polyAfilter code at commit {POLYAFILTER_COMMIT}, spec 3"
 BAM_TAGS_URL = "https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/outputs/cr-outputs-bam"
 CUTOFFS = "{templated_min}/{nontemplated_max}".format(**LABEL_CUTOFFS)
 PUBLISHED_TAGS = [setting_tag(s) for s in published()]
@@ -153,8 +153,8 @@ def runs_section(base):
            "elsewhere is not found). This includes stage 20's createTRANS run for the remove-all control "
            "(`validation/none_control/`), an original-tool run, and its createTRANS and original-tool runs on the 1179 subset "
            "(`validation/subset_1179/`). Peak RSS is the largest sum over the process tree at a sample, so pages shared by "
-           "forked workers count once per process and a peak between two samples is missed; memwatch samples every "
-           "INTERVAL (interval_s in the files), so the peak of a shorter run reads near zero.", ""]
+           "forked workers count once per process and a peak between two samples is missed, so the peak of a shorter run "
+           "reads near zero. SAMPLING", ""]
     mem = [p for p in base.rglob("*.mem.json") if "original" not in p.relative_to(base).parts[:-1]]
     rows, intervals = [], set()
     for p in mem:
@@ -162,7 +162,8 @@ def runs_section(base):
         intervals.add(d.get("interval_s"))
         rows.append([_command(d["cmd"]), _rel(base, p), _sec(d["elapsed_s"]), _r(d["peak_tree_rss_gib"], 2), d["exit_status"]])
     shown = sorted(f"{x:g} s" for x in intervals if x is not None)
-    out[-2] = out[-2].replace("INTERVAL", " and ".join(shown) if shown else "an interval not recorded in these files")
+    out[-2] = out[-2].replace("SAMPLING", f"memwatch samples every {' and '.join(shown)} (interval_s in the files)." if shown else
+                              "The sampling interval is recorded as interval_s in each file; no file is available here.")
     out += _table(["Command", "File", "Wall (s)", "Peak tree RSS (GiB)", "Exit"], sorted(rows)) if rows else \
         ["not run (missing *.mem.json)"]
 
@@ -900,8 +901,8 @@ def _a_content_line(base):
     kind = "n/a" if real is None or null is None else "is not depleted of" if real >= null else "is depleted of"
     return (f"A content downstream of the atlas sites: our observation (`{_rel(base, p)}`, stage 22, {len(d['refs'])} of "
             f"{len(d['refs']) + len(d['atlas_refs_not_counted'])} atlas references): {_int(t['n_a14'])} of {_int(t['n_full'])} atlas "
-            f"sites with a full {w} nt downstream window ({_pct(t['n_a14'], t['n_full'])}) have {k} or more A's in it, against "
-            f"{_int(t['n_a14_null'])} of {_int(t['n_full_null'])} ({_pct(t['n_a14_null'], t['n_full_null'])}) for the same sites "
+            f"sites with a full {w} nt downstream window ({100 * t['n_a14'] / t['n_full']:.2f}%) have {k} or more A's in it, against "
+            f"{_int(t['n_a14_null'])} of {_int(t['n_full_null'])} ({100 * t['n_a14_null'] / t['n_full_null']:.2f}%) for the same sites "
             f"moved {shift:,} nt upstream; the clusters file {kind} A-rich downstream sequence by this count.")
 
 
@@ -982,7 +983,7 @@ def burden_section(base):
             "molecules in parentheses; resolved = templated / (templated + non-templated).", ""]
     groups = list(dict.fromkeys(share.group))
     pop_lines, bias_note = _burden_population(base, share)
-    out += pop_lines + [""]
+    out += [x for line in pop_lines for x in (line, "")]
     look = {(r.group, r.stratum_kind, r.stratum): r for r in share.itertuples()}
     strata = [("all", "all")] + [("region", g) for g in REGION_NAMES] + [("has_ts", "True"), ("has_ts", "False")]
 

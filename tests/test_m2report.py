@@ -346,6 +346,9 @@ def test_runs_section(base):
     s = m2report.runs_section(base)
     assert "memwatch samples every 2 s (interval_s in the files)" in s
     assert "upper bound" not in s and "a peak between two samples is missed" in s
+    (base / "1417/grid/stage13.mem.json").unlink()
+    (base / "1417/original/c275_l9_m1_i.mem.json").unlink()
+    assert "no file is available here" in m2report.runs_section(base) and "samples every" not in m2report.runs_section(base)
     # memwatch outside original/: command from the script on, paths reduced to names; 1,240.2 s; 19.123 GiB
     assert "| 13_grid_flags.py 1417 --workers 8 | 1417/grid/stage13.mem.json | 1,240 | 19.12 | 0 |" in s
     assert "c275_l9_m1_i.mem.json |" not in s.split("Stage 13")[0]
@@ -948,7 +951,7 @@ def test_burden_section(base):
 
 
 def test_tool_statements_are_cited_or_labeled(base):
-    reading = "our reading of the polyAfilter code at commit 5ce0098 (spec 3)"
+    reading = "our reading of the polyAfilter code at commit 5ce0098, spec 3"
     assert reading in m2report.grid_section(base)
     assert reading in m2report.selection_section(base)
     b = m2report.burden_section(base)
@@ -1095,12 +1098,12 @@ def test_burden_section_polyasite(base):
     s = m2report.burden_section(base)
     # 99 / 990 = 10.0%, 49 / 980 = 5.0%
     assert ("our observation (`burden/polyasite_a_content.json`, stage 22, 2 of 3 atlas references): 99 of 990 atlas sites with a "
-            "full 20 nt downstream window (10.0%) have 14 or more A's in it, against 49 of 980 (5.0%) for the same sites moved 1,000 "
+            "full 20 nt downstream window (10.00%) have 14 or more A's in it, against 49 of 980 (5.00%) for the same sites moved 1,000 "
             "nt upstream; the clusters file is not depleted of A-rich downstream sequence by this count.") in s
     _write(base / "burden/polyasite_a_content.json", {"window_nt": 20, "min_a": 14, "null_shift_nt": 1000, "refs": ["chr1"],
                                                        "atlas_refs_not_counted": [], "total": tot | {"n_a14": 10}, "per_ref": {}})
     s = m2report.burden_section(base)
-    assert "1 of 1 atlas references" in s and "10 of 990 atlas sites" in s and "(1.0%)" in s
+    assert "1 of 1 atlas references" in s and "10 of 990 atlas sites" in s and "(1.01%)" in s
     assert "the clusters file is depleted of A-rich downstream sequence by this count" in s
     assert "screen" not in s
     assert ("The null row takes every molecule of the group with its site moved 1,000 nt upstream in transcript sense on the "
