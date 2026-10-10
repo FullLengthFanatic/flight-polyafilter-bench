@@ -1,12 +1,12 @@
 """Stage 05: primary reads with a Cell Ranger pa tag, with priming-site context."""
 import argparse
-from multiprocessing import Pool
 
 import pandas as pd
 import pysam
 
 from pafbench.config import FASTA, GTF, LIBRARIES, OUT
 from pafbench.genes import load_gene_segments
+from pafbench.pool import map_forked
 from pafbench.sites import PA_COLUMNS, pa_row
 
 _SEG = None
@@ -38,8 +38,7 @@ def main():
     bam = LIBRARIES[args.library]
     with pysam.AlignmentFile(str(bam)) as fh:
         refs = args.refs or [s.contig for s in fh.get_index_statistics() if s.mapped > 0]
-    with Pool(args.workers, initializer=_init) as pool:
-        parts = pool.map(_work, [(bam, r) for r in refs], chunksize=1)
+    parts = map_forked(_work, [(bam, r) for r in refs], args.workers, initializer=_init)
     df = pd.concat(parts, ignore_index=True)
     out = args.out or (OUT / args.library / "pa_sites.parquet")
     df.to_parquet(out, index=False)

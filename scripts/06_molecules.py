@@ -2,7 +2,6 @@
 import argparse
 import json
 from collections import defaultdict
-from multiprocessing import Pool
 
 import pandas as pd
 import pysam
@@ -11,6 +10,7 @@ from pafbench.config import GTF, LIBRARIES, OUT
 from pafbench.exons import load_collapsed_exons
 from pafbench.genes import load_gene_segments
 from pafbench.molecules import MEMBER_COLUMNS, choose_cap, consolidate_sites, member_density, member_rows
+from pafbench.pool import map_forked
 
 _SEG = None
 _BY_K3 = None
@@ -47,8 +47,8 @@ def main():
     with pysam.AlignmentFile(str(bam)) as fh:
         stats = [s for s in fh.get_index_statistics() if s.mapped > 0]
         lengths = {s.contig: fh.get_reference_length(s.contig) for s in stats}
-    with Pool(args.workers, initializer=_init, initargs=(dict(by_k3),)) as pool:
-        parts = pool.map(_work, [(bam, s.contig) for s in stats], chunksize=1)
+    parts = map_forked(_work, [(bam, s.contig) for s in stats], args.workers, initializer=_init,
+                       initargs=(dict(by_k3),))
     members = pd.concat([p[0] for p in parts], ignore_index=True)
     members["spliced"] = members["spliced"].astype(bool)
     members.to_parquet(base / "members.parquet", index=False)

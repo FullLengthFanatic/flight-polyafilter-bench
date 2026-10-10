@@ -19,7 +19,6 @@ import gzip
 import json
 import sys
 import time
-from multiprocessing import get_context
 from pathlib import Path
 
 import pandas as pd
@@ -29,6 +28,7 @@ import pysam
 from pafbench.config import FASTA, GTF, LIBRARIES, OUT
 from pafbench.flags import setting_tag
 from pafbench.grid import all_settings
+from pafbench.pool import map_forked
 from pafbench.stream import merge_parts, scan_to_parts, stale_parts
 from pafbench.transcripts import load_transcripts
 
@@ -82,9 +82,7 @@ def main():
             called = [line.strip() for line in fh]
         jobs = [(bam, s.contig, settings, part_dir, args.chunk, meta) for s in todo]
         # fork hands the parent's transcripts, truth set and cells to the workers without pickling (see _init)
-        with get_context("fork").Pool(args.workers, initializer=_init, initargs=(tx, truth_qnames, called),
-                                      maxtasksperchild=1) as pool:
-            pool.map(_work, jobs, chunksize=1)
+        map_forked(_work, jobs, args.workers, initializer=_init, initargs=(tx, truth_qnames, called))
     summary = merge_parts(part_dir, refs, [setting_tag(s) for s in settings], out_dir)
     summary = {"library": args.library, "settings": len(settings), "workers": args.workers, "scanned": len(todo),
                "seconds": round(time.monotonic() - t0, 1), **summary}
