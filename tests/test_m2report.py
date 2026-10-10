@@ -885,13 +885,43 @@ def test_burden_section_selection_bias_rule(base):
     assert "| Library | RE | Labeled share | Records share | Records share without PCR duplicates |" in s
     assert "| 1417 | E | 0.421 | 0.407 | 0.350 |" in s
     assert "stage 13 predates it" not in s
-    assert "all primary records" in s and "without the PCR-duplicate flag" in s and "intergenic records never carry the flag" in s
+    assert "all primary records" in s and "without the PCR-duplicate flag" in s
+    assert "never carry" not in s
+    assert f"RE is the region type of the alignment (E = exonic, N = intronic, I = intergenic; Cell Ranger documentation, " \
+           f"Barcoded BAM Tags, {m2report.BAM_TAGS_URL})" in s
     # 0.421 - 0.350 = 7.1 points; 0.48 - 0.49 = 1.0 and 0.099 - 0.099 = 0.0 are within 5
     assert "more than 5 percentage points: 1417 E (labeled 0.421, without duplicates 0.350, 7.1 points)." in s
     assert "conclusions there hold for the labeled population only" in s
     sb["records_nondup_share"] = sb.labeled_share
     _write(base / "burden/selection_bias.parquet", sb)
     assert "No library and region pair differs by more than 5 percentage points" in m2report.burden_section(base)
+
+
+def _region_counts(total_nondup=True):
+    rows = [(t, re, rem, tot, nd) for t in ("c150_lnone_m0_e", "c300_l10_m1_i")
+            for re, rem, tot, nd in (("E", 10, 400, 350), ("I", 0, 90, 90), ("N", 5, 510, 400))]
+    df = pd.DataFrame(rows, columns=["tag", "re", "removed", "total", "total_nondup"])
+    return df if total_nondup else df.drop(columns="total_nondup")
+
+
+def test_burden_section_records_by_re_tag_is_an_observation_from_region_counts(base):
+    s = m2report.burden_section(base)
+    # fixture base has no region_counts.parquet
+    assert "Primary records by RE tag: not run (missing 1417/grid/region_counts.parquet, 1419/grid/region_counts.parquet, " \
+           "1179/grid/region_counts.parquet)" in s
+    # without total_nondup (stage 13 predates it): the primary records only, and the line saying so
+    _write(base / "1417/grid/region_counts.parquet", _region_counts(total_nondup=False))
+    s = m2report.burden_section(base)
+    assert "| 1417 | E | 400 | n/a |" in s and "| 1417 | I | 90 | n/a |" in s
+    assert "1417/grid/region_counts.parquet has no total_nondup column: stage 13 predates it" in s
+    # with it: the counts of one tag (not summed over tags), the records without the duplicate flag beside them
+    _write(base / "1417/grid/region_counts.parquet", _region_counts())
+    s = m2report.burden_section(base)
+    assert "| Library | RE | Primary records | Primary records without the duplicate flag |" in s
+    assert "| 1417 | E | 400 | 350 |" in s and "| 1417 | I | 90 | 90 |" in s and "| 1417 | N | 510 | 400 |" in s
+    assert "stage 13 predates it" in s   # the selection_bias.parquet line of the fixture
+    assert "has no total_nondup column" not in s
+    assert "our observation in these BAMs" in s
 
 
 def test_burden_section_without_a_pair(base):

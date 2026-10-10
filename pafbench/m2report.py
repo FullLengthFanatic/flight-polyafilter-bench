@@ -828,6 +828,31 @@ def _a_content_line(base):
             f"moved {shift:,} nt upstream; the clusters file {kind} A-rich downstream sequence by this count.")
 
 
+def _re_counts_lines(base):
+    """Primary records and records without the duplicate flag per RE tag and library, from stage 13's region_counts.parquet."""
+    paths = [base / lib / "grid" / "region_counts.parquet" for lib in LIBS]
+    absent = [p for p in paths if not p.exists()]
+    if len(absent) == len(paths):
+        return [f"Primary records by RE tag: {_not_run(base, absent)}"]
+    out = ["Primary records by RE tag, our observation in these BAMs (`<lib>/grid/region_counts.parquet`, stage 13; the counts of one "
+           "tag, the same for every tag; a record is without the duplicate flag when SAM flag 0x400 is not set; no explanation "
+           "is attempted):", ""]
+    rows, notes = [], []
+    for lib, p in zip(LIBS, paths):
+        if not p.exists():
+            notes.append(f"{lib}: {_not_run(base, [p])}")
+            continue
+        rc = pd.read_parquet(p)
+        has = "total_nondup" in rc
+        if not has:
+            notes.append(f"{_rel(base, p)} has no total_nondup column: stage 13 predates it, so the records without the "
+                         "duplicate flag are not counted")
+        one = rc[rc.tag == rc.tag.iloc[0]].groupby("re")[["total"] + (["total_nondup"] if has else [])].sum()
+        rows += [[lib, re or "none", _int(r.total), _int(r.total_nondup) if has else "n/a"] for re, r in one.iterrows()]
+    out += _table(["Library", "RE", "Primary records", "Primary records without the duplicate flag"], rows)
+    return _notes(out, notes)
+
+
 def burden_section(base):
     base = Path(base)
     out = ["## 10. Burden: templated share of labeled molecules", ""]
@@ -910,9 +935,10 @@ def burden_section(base):
         out += ["", f"Selection bias: {_not_run(base, [p])}"]
     else:
         has = "records_nondup_share" in sb
-        out += ["", "Selection bias: share of labeled molecules versus share of primary records, by RE tag (E exonic, N intronic, "
-                    "I intergenic). records_share is the share among all primary records; the duplicate-free share is the share "
-                    "among primary records without the PCR-duplicate flag, where intergenic records never carry the flag:", ""]
+        out += ["", "Selection bias: share of labeled molecules versus share of primary records, by RE tag (RE is the region type "
+                    f"of the alignment (E = exonic, N = intronic, I = intergenic; Cell Ranger documentation, Barcoded BAM Tags, "
+                    f"{BAM_TAGS_URL}). records_share is the share among all primary records; the duplicate-free share is the "
+                    "share among primary records without the PCR-duplicate flag:", ""]
         out += _table(["Library", "RE", "Labeled share", "Records share"] + (["Records share without PCR duplicates"] if has else []),
                       [[r.lib, r.re, _r(r.labeled_share), _r(r.records_share)] + ([_r(r.records_nondup_share)] if has else [])
                        for r in sb.itertuples()])
@@ -927,6 +953,7 @@ def burden_section(base):
                 f"{r.lib} {r.re} (labeled {_r(r.labeled_share)}, without duplicates {_r(r.records_nondup_share)}, "
                 f"{100 * abs(r.labeled_share - r.records_nondup_share):.1f} points)" for r in off) + "." if off else
                         "No library and region pair differs by more than 5 percentage points.")
+    out += [""] + _re_counts_lines(base)
     p = base / "burden" / "polyasite.parquet"
     px = _parquet(p)
     if px is None:
