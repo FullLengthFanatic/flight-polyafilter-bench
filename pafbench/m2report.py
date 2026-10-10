@@ -344,6 +344,29 @@ def _mapq_lines(sel):
     return out + [""] + _table(["Setting", "Role", "Library", "Templated", "Non-templated", "Sens", "Spec"], rows)
 
 
+def _cells_tuned_lines(sel):
+    """The "Setting tuned on whole cells" table (stage 17 cells_tuned) or a not-run line."""
+    if "cells_tuned" not in sel:
+        return ["Setting tuned on whole cells: not run (eval/selection.json has no cells_tuned)"]
+    sl = sel["selection_library"]
+    rows, tuned_libs = [], []
+    for tuned, modes in sel["cells_tuned"].items():
+        tuned_libs.append(tuned)
+        for mode, d in modes.items():
+            s, other = d["selection"], sel["modes"][mode]
+            m, o = d["metrics"].get(tuned, {}).get("molecule"), other["metrics"].get(tuned, {}).get("molecule")
+            rows.append([MODE_NAMES[mode], s["tag"] or "none", _r(m and m["sens"]), _r(m and m["spec"]),
+                         other["selection"]["tag"] or "none", _r(o and o["sens"]), _r(o and o["spec"])])
+    t = " and ".join(tuned_libs)
+    out = [f"Setting tuned on whole cells (descriptive): the selection rule run on {t} called cells in place of {sl}, next to "
+           f"the setting picked on {sl}; sensitivity and specificity at molecule level on {t}:", ""]
+    out += _table(["Mode", f"Picked on {t}", f"Sens on {t}", f"Spec on {t}", f"Picked on {sl}", f"Sens on {t}", f"Spec on {t}"], rows)
+    out += ["", f"This is not a recommendation: {t} has no second cell library to hold out, and tissue (organoid against adult "
+                "retina) is confounded with material. It shows that the setting tuned on nuclei is safe on cells but leaves "
+                "sensitivity unused."]
+    return out
+
+
 def selection_section(base):
     base = Path(base)
     out = ["## 4. Setting selection", ""]
@@ -369,6 +392,8 @@ def selection_section(base):
                     f"specificity):", ""]
         out += _table(["Setting", "Sens", "Spec"], [[t, _r(a), _r(b)] for t, a, b in front])
 
+    mp = base / "eval" / "metrics.parquet"
+    metrics = _parquet(mp)
     bp = base / "eval" / "bootstrap.parquet"
     boot = _parquet(bp)
     ci = {}
@@ -379,18 +404,27 @@ def selection_section(base):
                 f"labels, 95% gene-bootstrap interval in brackets:", ""]
     roles = _chosen(sel)
     rows, rows_lvl = [], []
+    wt = {} if metrics is None else {(r.lib, r.tag): r for r in metrics[
+        (metrics.cap == MEMBER_CAP) & (metrics.cutoffs == CUTOFFS) & (metrics.level == "molecule_weighted")
+        & (metrics.stratum_kind == "all")].itertuples()}
+
+    def weighted(tag, lib, e):
+        r = e.get("molecule_weighted") or ({"sens": wt[lib, tag].sens, "spec": wt[lib, tag].spec} if (lib, tag) in wt else None)
+        return "n/a" if r is None else f"{_r(r['sens'])} / {_r(r['spec'])}"
+
     for tag, rs in roles.items():
         for lib in libs:
             e = _entry(sel, tag, lib)
             m = e.get("molecule")
             if not m:
                 rows.append([tag, ", ".join(rs), lib] + ["n/a"] * 5)
-                rows_lvl.append([tag, lib] + ["n/a"] * 3)
+                rows_lvl.append([tag, lib] + ["n/a"] * 4)
                 continue
             cells = [_ci(m[k], *ci.get((lib, tag, k), (None, None))) for k in ("sens", "spec", "prec")]
             rows.append([tag, ", ".join(rs), lib, _int(m["tp"] + m["fn"]), _int(m["tn"] + m["fp"])] + cells)
             rows_lvl.append([tag, lib] + [f"{_r(e[lv]['sens'])} / {_r(e[lv]['spec'])}" if lv in e else "n/a"
-                                          for lv in ("molecule", "molecule_majority", "read")])
+                                          for lv in ("molecule", "molecule_majority")] + [weighted(tag, lib, e)] +
+                            [f"{_r(e['read']['sens'])} / {_r(e['read']['spec'])}" if "read" in e else "n/a"])
     out += _table(["Setting", "Role", "Library", "Templated", "Non-templated", "Sens", "Spec", "Prec"], rows)
     if boot is None:
         out += ["", f"Bootstrap: {_not_run(base, [bp])}"]
@@ -398,9 +432,28 @@ def selection_section(base):
         clusters = boot[boot.level == "molecule"].groupby("lib", sort=False).n_clusters.first()
         out += ["", "Bootstrap: 2.5th and 97.5th percentiles over gene-cluster resamples (cluster = gene, or a 10 kb locus "
                     "window for intergenic molecules); clusters " + "; ".join(f"{k} {_int(v)}" for k, v in clusters.items()) + "."]
-    out += ["", "Majority rule (molecule removed when most of its reads are; our extension, spec 5.3) and read level, "
-                "sens / spec:", ""]
-    out += _table(["Setting", "Library", "Molecule (all reads)", "Molecule (majority)", "Read"], rows_lvl)
+    out += ["", "Majority rule (molecule removed when most of its reads are; our extension, spec 5.3), the weighted level "
+                "(each molecule counts 1 / family size, spec 4.1 selection bias) and read level, sens / spec:", ""]
+    out += _table(["Setting", "Library", "Molecule (all reads)", "Molecule (majority)", "Molecule (weighted 1 / family size)",
+                   "Read"], rows_lvl)
+
+    out += ["", f"Remove-all control (MINSNRLEN none, every non-terminal read on an expressed transcript is removed), molecule "
+                f"level, cap {MEMBER_CAP:,} nt, {CUTOFFS} labels, all molecules; 95% gene-bootstrap interval in brackets where "
+                "`eval/bootstrap.parquet` has one. The control ignores A content, so it bounds what a mode can reach:", ""]
+    if metrics is None:
+        out[-2:] = [f"Remove-all control: {_not_run(base, [mp])}"]
+    else:
+        ctl = {(r.lib, r.tag): r for r in metrics[(metrics.cap == MEMBER_CAP) & (metrics.cutoffs == CUTOFFS)
+                                                  & (metrics.level == "molecule") & (metrics.stratum_kind == "all")].itertuples()}
+        rows = []
+        for tag in CONTROL_TAGS:
+            if any((lib, tag) in ctl for lib in libs):
+                rows.append([tag] + [c for lib in libs for c in (
+                    "n/a" if (lib, tag) not in ctl else
+                    (_ci(ctl[lib, tag].sens, *ci[lib, tag, "sens"]) if (lib, tag, "sens") in ci else _r(ctl[lib, tag].sens)),
+                    "n/a" if (lib, tag) not in ctl else
+                    (_ci(ctl[lib, tag].spec, *ci[lib, tag, "spec"]) if (lib, tag, "spec") in ci else _r(ctl[lib, tag].spec)))])
+        out += _table(["Setting"] + [f"{lib} {k}" for lib in libs for k in ("sens", "spec")], rows)
 
     out += ["", "Units per member cap (molecules with a truth read missing from truth_flags are dropped):", ""]
     out += _table(["Library", "Cap (nt)", "Read units", "Molecule units", "Missing reads", "Dropped molecules"],
@@ -422,33 +475,35 @@ def selection_section(base):
 
     out += [""] + _populations_lines(base, sel) + [""] + _mapq_lines(sel)
 
-    out += ["", "Intergenic molecules: polyAfilter's windows lie on expressed transcripts, so an intergenic molecule is "
-                "removed only through reads elsewhere. 'Removed at most' is the largest count over all settings in "
-                f"metrics.parquet (molecule level, cap {MEMBER_CAP:,}, {CUTOFFS}); the ceiling is the stratum-all sensitivity if "
-                "every other templated molecule were removed. Intergenic non-templated molecules count as retained negatives.", ""]
-    mp = base / "eval" / "metrics.parquet"
-    metrics = _parquet(mp)
+    out += [""] + _cells_tuned_lines(sel) + [""]
+    out += ["Intergenic and antisense molecules: polyAfilter's windows lie on expressed transcripts, so such a molecule is "
+            "removed only through reads elsewhere. 'Removed at most' is the largest count over all settings in "
+            f"metrics.parquet (molecule level, cap {MEMBER_CAP:,}, {CUTOFFS}); 'never removed' is the templated count in these "
+            "two regions minus that, and the ceiling is the stratum-all sensitivity if every other templated molecule were "
+            "removed. Intergenic and antisense non-templated molecules count as retained negatives.", ""]
     if metrics is None:
-        out[-2:] = [f"Intergenic molecules: {_not_run(base, [mp])}"]
+        out[-2:] = [f"Intergenic and antisense molecules: {_not_run(base, [mp])}"]
         return "\n".join(out)
     m = metrics[(metrics.cap == MEMBER_CAP) & (metrics.cutoffs == CUTOFFS) & (metrics.level == "molecule")]
     rows, notes = [], []
     for lib in libs:
         a = m[(m.lib == lib) & (m.stratum_kind == "all")]
-        g = m[(m.lib == lib) & (m.stratum_kind == "region") & (m.stratum == "intergenic")]
+        g = m[(m.lib == lib) & (m.stratum_kind == "region") & m.stratum.isin(["intergenic", "antisense"])]
+        g = g.groupby("tag")[["tp", "fn", "tn", "fp"]].sum()
         if a.empty or g.empty:
             continue
         pos, gpos, gneg = a.tp.iloc[0] + a.fn.iloc[0], g.tp.iloc[0] + g.fn.iloc[0], g.tn.iloc[0] + g.fp.iloc[0]
-        rows.append([lib, _int(pos), _int(gpos), _int(g.tp.max()), _r((pos - gpos + g.tp.max()) / pos if pos else None),
-                     _int(gneg), _int(g.fp.max())])
+        rows.append([lib, _int(pos), _int(gpos), _int(g.tp.max()), _int(gpos - g.tp.max()),
+                     _r((pos - gpos + g.tp.max()) / pos if pos else None), _int(gneg), _int(g.fp.max())])
         neg = a.tn.iloc[0] + a.fp.iloc[0]
         if lib == sl and neg > gneg:
-            notes.append(f"While a setting keeps every intergenic non-templated molecule, specificity >= {min_spec:g} over all "
-                         f"{_int(neg)} non-templated units on {sl} is at least ({min_spec:g} x {_int(neg)} - {_int(gneg)}) / "
-                         f"{_int(neg - gneg)} = {_r((min_spec * neg - gneg) / (neg - gneg))} over the {_int(neg - gneg)} genic "
-                         "ones.")
-    out += _table(["Library", "Templated units", "Intergenic templated", "Removed at most", "Sensitivity ceiling",
-                   "Intergenic non-templated", "Removed at most"], rows)
+            notes.append(f"While a setting keeps every intergenic and antisense non-templated molecule, specificity >= "
+                         f"{min_spec:g} over all {_int(neg)} non-templated units on {sl} is at least ({min_spec:g} x {_int(neg)} - "
+                         f"{_int(gneg)}) / {_int(neg - gneg)} = {_r((min_spec * neg - gneg) / (neg - gneg))} over the "
+                         f"{_int(neg - gneg)} genic ones.")
+    out += _table(["Library", "Templated units", "Intergenic and antisense templated", "Removed at most",
+                   "Never removed (intergenic and antisense)", "Sensitivity ceiling", "Intergenic and antisense non-templated",
+                   "Removed at most"], rows)
     return "\n".join(_notes(out, notes))
 
 

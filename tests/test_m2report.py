@@ -16,6 +16,7 @@ from pafbench.validation import parse_tag
 
 REPO = Path(__file__).resolve().parents[1]
 I1, I3, E1 = "c300_l10_m1_i", "c375_l3_m2_i", "c300_l10_m1_e"
+C1, C2 = "c150_lnone_m0_i", "c600_lnone_m0_e"
 NOTE = "Lexogen's ERCC mix identity in SIRV Set 4 is not verified; concentrations are ERCC Mix 1 from Thermo Fisher"
 
 
@@ -156,7 +157,8 @@ def _full_base(tmp_path):
             ("1417", 1000, "molecule", I1, "sens", 0.2368, 0.2074, 0.2588, 13271),
             ("1417", 1000, "molecule", I1, "spec", 0.9896, 0.9854, 0.9932, 13271),
             ("1417", 1000, "molecule", I1, "prec", 0.9970, 0.9959, 0.9981, 13271),
-            ("1417", 1000, "molecule", I3, "sens", 0.6371, 0.5623, 0.6904, 13271)]
+            ("1417", 1000, "molecule", I3, "sens", 0.6371, 0.5623, 0.6904, 13271),
+            ("1417", 1000, "molecule", C1, "spec", 0.1436, 0.1301, 0.1572, 13271)]
     _write(b / "eval/bootstrap.parquet", pd.DataFrame(
         [r[:8] + (1000, r[8]) for r in boot], columns=["lib", "cap", "level", "tag", "metric", "estimate", "lo", "hi", "n_boot", "n_clusters"]))
     rows = []
@@ -167,7 +169,12 @@ def _full_base(tmp_path):
                  _metric("1417", tag, "a_band", "14-20", 8695, 24274, 0, 0),
                  _metric("1417", tag, "region", "intergenic", 0 if tag == I1 else 500, 5182 if tag == I1 else 4682,
                          125 if tag == I1 else 120, 3 if tag == I1 else 8),
+                 _metric("1417", tag, "region", "antisense", 0 if tag == I1 else 100, 2000 if tag == I1 else 1900,
+                         50 if tag == I1 else 48, 0 if tag == I1 else 2),
                  _metric("1417", tag, "region", "3UTR", 5000, 10000, 2000, 20)]
+    rows += [_metric("1417", I1, "all", "all", 8000, 33369, 2700, 86, level="molecule_weighted"),
+             _metric("1417", C1, "all", "all", 30000, 11369, 400, 2386), _metric("1417", C2, "all", "all", 20000, 21369, 900, 1886),
+             _metric("1417", C1, "all", "all", 1, 1, 1, 1, cap=500)]
     # rows the sections must ignore: another cap, other cut-offs, the read level
     rows += [_metric("1417", I1, "region", "intergenic", 99, 5083, 100, 28, cap=500),
              _metric("1417", I1, "region", "intergenic", 77, 5105, 100, 28, cutoffs="7/2"),
@@ -430,7 +437,10 @@ def test_selection_section(base):
     # sens 26,356 / 41,369 = 0.637 with its CI; spec and prec without bootstrap rows
     assert "| c375_l3_m2_i | published | 1417 | 41,369 | 2,786 | 0.637 [0.562, 0.690] | 0.861 [n/a, n/a] |" in s
     assert "| c375_l3_m2_i | published | 1179 | n/a | n/a | n/a | n/a | n/a |" in s
-    assert "| c300_l10_m1_i | 1417 | 0.237 / 0.990 | 0.259 / 0.986 | 0.278 / 0.975 |" in s
+    # molecule_weighted from metrics.parquet: 8,000 / 41,369 = 0.193, 2,700 / 2,786 = 0.969
+    assert "| Setting | Library | Molecule (all reads) | Molecule (majority) | Molecule (weighted 1 / family size) | Read |" in s
+    assert "| c300_l10_m1_i | 1417 | 0.237 / 0.990 | 0.259 / 0.986 | 0.193 / 0.969 | 0.278 / 0.975 |" in s
+    assert "| c375_l3_m2_i | 1417 | 0.637 / 0.861 | 0.656 / 0.848 | n/a | 0.677 / 0.828 |" in s
     # molecule-level clusters only (the read-level row, first in the file, has 13,500)
     assert "clusters 1417 13,271." in s
     assert "| 1417 | 2,000 | 77,966 | 49,827 | 3 | 2 |" in s
@@ -440,13 +450,41 @@ def test_selection_section(base):
     # sens / spec, not prec (0.970)
     assert "| 7 | 2 | -i | c300_l10_m1_i | 100 | 0.200 / 0.990 | n/a |" in s
     assert "| 10 | 6 | default | none | 0 | n/a | n/a |" in s
-    # intergenic: 5,182 of 41,369 templated units, at most 500 removed (c375_l3_m2_i; c300_l10_m1_i removes none) at cap
-    # 1,000 and 8/4 (the cap 500 and 7/2 rows, with 99 and 77 removed, are ignored); ceiling (41,369 - 5,182 + 500) / 41,369
-    # = 0.8868; non-templated tn + fp = 125 + 3 = 128, at most 8 removed
-    assert "| 1417 | 41,369 | 5,182 | 500 | 0.887 | 128 | 8 |" in s
-    # (0.95 x 2,786 - 128) / (2,786 - 128) = 2,518.7 / 2,658 = 0.9476
-    assert ("specificity >= 0.95 over all 2,786 non-templated units on 1417 is at least (0.95 x 2,786 - 128) / 2,658 = "
-            "0.948 over the 2,658 genic ones") in s
+    # intergenic and antisense: 5,182 + 2,000 = 7,182 of 41,369 templated units; at most 500 + 100 = 600 removed (c375_l3_m2_i;
+    # c300_l10_m1_i removes none) at cap 1,000 and 8/4 (the cap 500 and 7/2 rows are ignored); never removed 7,182 - 600 =
+    # 6,582; ceiling (41,369 - 7,182 + 600) / 41,369 = 0.841; non-templated 125 + 3 + 50 + 0 = 178, at most 8 + 2 = 10 removed
+    assert "Never removed (intergenic and antisense)" in s
+    assert "| 1417 | 41,369 | 7,182 | 600 | 6,582 | 0.841 | 178 | 10 |" in s
+    # (0.95 x 2,786 - 178) / (2,786 - 178) = 2,468.7 / 2,608 = 0.9466
+    assert ("specificity >= 0.95 over all 2,786 non-templated units on 1417 is at least (0.95 x 2,786 - 178) / 2,608 = "
+            "0.947 over the 2,608 genic ones") in s
+
+
+def test_selection_section_remove_all_control(base):
+    s = m2report.selection_section(base)
+    assert "| Setting | 1417 sens | 1417 spec | 1179 sens | 1179 spec |" in s
+    # 30,000 / 41,369 = 0.725 and 400 / 2,786 = 0.144 with its interval; 20,000 / 41,369 = 0.483, 900 / 2,786 = 0.323
+    assert "| c150_lnone_m0_i | 0.725 | 0.144 [0.130, 0.157] | n/a | n/a |" in s
+    assert "| c600_lnone_m0_e | 0.483 | 0.323 | n/a | n/a |" in s
+    assert "c300_lnone_m0_i |" not in s.split("Remove-all control")[1].split("Units per member cap")[0]
+    assert "ignores A content" in s and "bounds what a mode can reach" in s
+    (base / "eval/metrics.parquet").unlink()
+    assert "Remove-all control: not run (missing eval/metrics.parquet)" in m2report.selection_section(base)
+
+
+def test_selection_section_cells_tuned(base):
+    s = m2report.selection_section(base)
+    assert "| Mode | Picked on 1179 | Sens on 1179 | Spec on 1179 | Picked on 1417 | Sens on 1179 | Spec on 1179 |" in s
+    # 478 / 1,000 and 95 / 100; the 1417 pick c300_l10_m1_i on 1179: 300 / 1,000 and 95 / 100; default mode: 40 / 179, 58 / 61
+    assert "| -i | c450_l5_m1_i | 0.478 | 0.950 | c300_l10_m1_i | 0.300 | 0.950 |" in s
+    assert "| default | c250_l7_m2_e | 0.223 | 0.951 | none | n/a | n/a |" in s
+    assert "not a recommendation" in s and "no second cell library to hold out" in s
+    assert "leaves sensitivity unused" in s
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    del sel["cells_tuned"]
+    p.write_text(json.dumps(sel))
+    assert "Setting tuned on whole cells: not run (eval/selection.json has no cells_tuned)" in m2report.selection_section(base)
 
 
 def test_selection_section_reads_threshold_and_library_from_the_file(base):
@@ -456,8 +494,8 @@ def test_selection_section_reads_threshold_and_library_from_the_file(base):
     p.write_text(json.dumps(sel))
     s = m2report.selection_section(base)
     assert "| default | none reached specificity 0.9 | n/a | n/a | n/a | 0 / 189 |" in s
-    # (0.9 x 2,786 - 128) / 2,658 = 2,379.4 / 2,658 = 0.8952
-    assert "specificity >= 0.9 over all 2,786 non-templated units on 1417 is at least (0.9 x 2,786 - 128) / 2,658 = 0.895" in s
+    # (0.9 x 2,786 - 178) / 2,608 = 2,329.4 / 2,608 = 0.8932
+    assert "specificity >= 0.9 over all 2,786 non-templated units on 1417 is at least (0.9 x 2,786 - 178) / 2,608 = 0.893" in s
     # no candidate in a mode: no threshold claim and no frontier; another selection library in the headers
     sel["modes"]["e"]["selection"] |= {"n_candidates": 0, "frontier": []}
     sel["selection_library"] = "1419"
@@ -479,7 +517,7 @@ def test_selection_section_without_bootstrap_or_metrics(base):
     assert "| -i | c300_l10_m1_i | 0.237 | 0.990 | 0.997 | 120 / 189 |" in s
     assert "| c300_l10_m1_i | chosen (-i), published | 1417 | 41,369 | 2,786 | 0.237 [n/a, n/a] |" in s
     assert "Bootstrap: not run (missing eval/bootstrap.parquet)" in s
-    assert "Intergenic molecules: not run (missing eval/metrics.parquet)" in s
+    assert "Intergenic and antisense molecules: not run (missing eval/metrics.parquet)" in s
 
 
 def test_selection_section_chosen_setting_outside_the_published_ones(base):
@@ -576,7 +614,7 @@ def test_strata_section(base):
     # spec 2,757 / 2,786 = 0.990; sens 100 / 2,000, 1,000 / 6,400 = 0.156, 8,695 / 32,969 = 0.264
     assert "| c300_l10_m1_i | 1417 | 0.990 | 0.050 | 0.156 | 0.264 |" in s
     # intergenic 0 / 5,182 and 125 / 128; 3UTR 5,000 / 15,000 and 2,000 / 2,020; other regions absent
-    assert "| c300_l10_m1_i | 1417 | 0.000 / 0.977 | n/a | n/a | n/a | n/a | 0.333 / 0.990 | n/a |" in s
+    assert "| c300_l10_m1_i | 1417 | 0.000 / 0.977 | n/a | n/a | n/a | n/a | 0.333 / 0.990 | 0.000 / 1.000 |" in s
     assert "| Setting | Library | intergenic | intron | ncexon | 5UTR | CDS | 3UTR | antisense |" in s
     assert "| 1417 | a_band | 8-9 | 2,000 | 0 |" in s
     assert "| 1417 | region | 3UTR | 15,000 | 2,020 |" in s
