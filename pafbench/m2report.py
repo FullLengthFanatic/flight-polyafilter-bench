@@ -239,12 +239,24 @@ def _band_lines(base, sel, sel_path):
     return out
 
 
+def _beyond_cap(base, lib):
+    """Member candidates of lib (molecules.select_members without the cap: gene match, dist3_exon >= -25) with a 5' start
+    beyond MEMBER_CAP, of all candidates; n/a without <lib>/members.parquet."""
+    p = base / lib / "members.parquet"
+    if not p.exists():
+        return "n/a"
+    m = pd.read_parquet(p, columns=["gene_match", "dist3_exon", "dist5_exon"])
+    c = m[m.gene_match & (m.dist3_exon >= -25)]
+    n = int((c.dist5_exon > MEMBER_CAP).sum())
+    return f"{_int(n)} of {_int(len(c))} ({_pct(n, len(c))})"
+
+
 def truth_section(base):
     base = Path(base)
     out = ["## 2. Truth sets", "",
            "Source: `<lib>/truth/molecules_labeled.parquet` and `<lib>/truth/truth_reads.parquet` (stage 12). "
            f"Labels at {CUTOFFS} A's in the 20 nt after the site; members are selected member reads (gene match, "
-           "dist3_exon >= -25) by exon-aware distance. The truth table and the region table below cover all barcodes (every row "
+           "dist3_exon >= -25) by exon-aware distance; the candidates row counts them in `<lib>/members.parquet` before the cap. The truth table and the region table below cover all barcodes (every row "
            "of molecules_labeled.parquet); the tables that come from `eval/selection.json` name their population.", "",
            f"has_ts: a pa read of the molecule has a 10x ts tag above 0. Cell Ranger documentation, Barcoded BAM Tags ({BAM_TAGS_URL}): "
            "ts is \"The number of template switch oligo (TSO) nucleotides trimmed from the 5' end of read 2.\" Our reading: such a "
@@ -276,6 +288,7 @@ def truth_section(base):
         rows += [["pa reads in pa_sites.parquet"] + [_int(n) for _, _, n in data.values()]]
         rows += [row(f"Members within {cap:,} nt", lambda m, r, cap=cap: _int(((r.role == "member") & (r.dist5_exon <= cap)).sum()))
                  for cap in SENS_CAPS]
+        rows += [[f"Member candidates beyond {MEMBER_CAP:,} nt (left out of the truth set)"] + [_beyond_cap(base, lib) for lib in data]]
         rows += [row(f"Molecules with a member within {MEMBER_CAP:,} nt", lambda m, r: _int((m.n_members > 0).sum())),
                  row("Hexamer rate at A 0-4", lambda m, r: hexa(m.hexamer[m.a20 <= 4])),
                  row("Hexamer rate at A 18-20", lambda m, r: hexa(m.hexamer[m.a20 >= 18]))]
@@ -718,10 +731,10 @@ def spikein_section(base):
         out += _table(["Library", "Spike label", "templated", "ambiguous", "non-templated", "total"], rows)
         out += ["", "Agreement = (internal and templated + tail and non-templated) / internal or tail molecules labeled "
                     "templated or non-templated: " + "; ".join(agree) + ".", "",
-                "- ERCC and long SIRV transcripts end at the contig end, so at their tail sites the 20 nt after the site are "
+                "- Our reading of the spike-in annotation: ERCC and long SIRV transcripts end at the contig end, so at their tail sites the 20 nt after the site are "
                 f"truncated and a20 cannot reach {LABEL_CUTOFFS['templated_min']}: their non-templated (or ambiguous) calls are "
                 "forced, and they lift the pooled agreement. Only SIRV_E0 tails have full windows.",
-                "- A SIRV_E0 tail site can also be internal priming of a longer isoform that runs through a shorter isoform's "
+                "- Our reading, not tested here: a SIRV_E0 tail site can also be internal priming of a longer isoform that runs through a shorter isoform's "
                 "annotated end; the annotation cannot separate the two.", ""]
         rows = []
         for lib, m in data.items():

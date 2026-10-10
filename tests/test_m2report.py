@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from pafbench import m2report
+from pafbench.config import MEMBER_CAP
 from pafbench.evaluate import METRIC_COLUMNS
 from pafbench.labels import a_band
 from pafbench.molecules import MOL_COLUMNS
@@ -488,6 +489,16 @@ def test_truth_section_band_8_9_is_computed(base):
 def test_truth_section_without_pa_sites(base):
     (base / "1417/pa_sites.parquet").unlink()
     assert "| pa reads in pa_sites.parquet | n/a |" in m2report.truth_section(base)
+
+
+def test_truth_section_members_beyond_the_cap(base):
+    row = f"| Member candidates beyond {MEMBER_CAP:,} nt (left out of the truth set) |"
+    assert f"{row} n/a |" in m2report.truth_section(base)
+    # candidates: gene match and dist3_exon >= -25; two of the three lie beyond the cap
+    _write(base / "1417/members.parquet", pd.DataFrame({
+        "gene_match": [True, True, True, False, True], "dist3_exon": [0, 5, -25, 0, -26],
+        "dist5_exon": [MEMBER_CAP, MEMBER_CAP + 1, 5000, 9000, 9000]}))
+    assert f"{row} 2 of 3 (66.7%) |" in m2report.truth_section(base)
 
 
 def test_truth_section_without_ambiguous_estimate(base):
