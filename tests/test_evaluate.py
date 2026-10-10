@@ -10,7 +10,7 @@ import pytest
 
 from pafbench.config import REPO
 from pafbench.evaluate import (METRIC_COLUMNS, STRATA, ambiguous_tail_share, bootstrap, confusion, evaluate, expr_tertiles,
-                               gene_clusters, hexamer_check, rates, relabel, resample_counts, select_setting, spikein_metrics,
+                               gene_clusters, hexamer_check, label_purity, rates, relabel, resample_counts, select_setting, spikein_metrics,
                                units)
 from pafbench.flags import Setting, setting_tag
 from pafbench.grid import published
@@ -361,6 +361,8 @@ def test_stage17_end_to_end(tmp_path):
     assert sel["modes"]["i"]["selection"]["tag"] == T0 and sel["modes"]["e"]["selection"]["tag"] is None
     assert sel["modes"]["e"]["selection"]["n_candidates"] == 0
     assert sel["modes"]["i"]["metrics"]["1419"]["molecule"]["sens"] == 0.5
+    assert sel["cells_tuned"] == {}  # 1179 is absent
+    assert set(sel["label_purity"]) == {"1417", "1419"}
     assert sel["modes"]["i"]["metrics"]["1417"]["molecule_majority"]["tp"] == 2.0
     assert sel["published"][T1]["1417"]["read"]["prec"] == 0.5 and sel["published"]["c180_l11_m2_i"]["1417"] == {}
     assert sel["cap_sensitivity"]["2000"]["i"]["tag"] == T0
@@ -541,18 +543,74 @@ def test_bootstrap_drops_clusters_without_positive_or_negative_units():
 
 def test_ambiguous_tail_share():
     mol = pd.DataFrame({"label": ["templated"] * 10 + ["nontemplated"] * 5 + ["ambiguous"] * 4,
-                        "hexamer": [True] + [False] * 9 + [True] * 4 + [False] + [True, True, False, False]})
+                        "hexamer": [True] + [False] * 9 + [True] * 4 + [False] + [True, True, False, False],
+                        "a20": [20] * 4 + [9] * 6 + [1] * 5 + [6] * 4})
     # rates: templated 1/10, non-templated 4/5, ambiguous 2/4; (0.5 - 0.1) / (0.8 - 0.1) = 4/7
+    # a20 >= 14 reference: the first four molecules, rate 1/4: (0.5 - 0.25) / (0.8 - 0.25) = 5/11
     s = ambiguous_tail_share(mol)
-    assert s == {"estimate": pytest.approx(4 / 7), "rate_templated": 0.1, "rate_nontemplated": 0.8, "rate_ambiguous": 0.5,
+    assert s == {"estimate": pytest.approx(4 / 7), "estimate_ref14": pytest.approx(5 / 11), "rate_templated": 0.1,
+                 "rate_nontemplated": 0.8, "rate_ambiguous": 0.5, "rate_ref14": 0.25,
                  "n_templated": 10, "n_nontemplated": 5, "n_ambiguous": 4}
     # clipped to [0, 1]: ambiguous rates above the non-templated and below the templated rate
-    assert ambiguous_tail_share(mol.assign(hexamer=[True] + [False] * 9 + [True] * 4 + [False] + [True] * 4))["estimate"] == 1.0
-    assert ambiguous_tail_share(mol.assign(hexamer=[True] * 2 + [False] * 8 + [True] * 4 + [False] + [False] * 4))["estimate"] == 0.0
+    hi = mol.assign(hexamer=[True] + [False] * 9 + [True] * 4 + [False] + [True] * 4)
+    assert ambiguous_tail_share(hi)["estimate"] == 1.0 and ambiguous_tail_share(hi)["estimate_ref14"] == 1.0
+    lo = mol.assign(hexamer=[True] * 2 + [False] * 8 + [True] * 4 + [False] + [False] * 4)
+    assert ambiguous_tail_share(lo)["estimate"] == 0.0 and ambiguous_tail_share(lo)["estimate_ref14"] == 0.0
     # undefined: no ambiguous molecule, or equal templated and non-templated rates
     s = ambiguous_tail_share(mol[mol.label != "ambiguous"])
-    assert s["estimate"] is None and s["rate_ambiguous"] is None and s["n_ambiguous"] == 0
-    assert ambiguous_tail_share(mol.assign(hexamer=True))["estimate"] is None
+    assert s["estimate"] is None and s["estimate_ref14"] is None and s["rate_ambiguous"] is None and s["n_ambiguous"] == 0
+    s = ambiguous_tail_share(mol.assign(hexamer=True))
+    assert s["estimate"] is None and s["estimate_ref14"] is None
+    # no molecule with a20 >= 14: no reference rate
+    s = ambiguous_tail_share(mol.assign(a20=5))
+    assert s["rate_ref14"] is None and s["estimate_ref14"] is None and s["estimate"] == pytest.approx(4 / 7)
+
+
+def _purity_mol(spec):
+    """Molecules from (a20, label, n, n with a hexamer) rows."""
+    rows = [(a, lab, i < k) for a, lab, n, k in spec for i in range(n)]
+    return pd.DataFrame(rows, columns=["a20", "label", "hexamer"]).astype({"hexamer": bool})
+
+
+PURITY = [(2, "nontemplated", 10, 6), (6, "ambiguous", 4, 2), (8, "templated", 10, 2), (11, "templated", 10, 1),
+          (16, "templated", 10, 1), (20, "templated", 10, 0)]
+
+
+def test_label_purity():
+    p = label_purity(_purity_mol(PURITY))
+    # rates per band: 0.6, 0.5, 0.2, 0.1, 0.05; reference (a20 >= 14) 0.05; tail-primed share (rate - 0.05) / 0.55
+    assert list(p["bands"]) == ["0-4", "5-7", "8-9", "10-13", "14-20"]
+    assert {b: v["n"] for b, v in p["bands"].items()} == {"0-4": 10, "5-7": 4, "8-9": 10, "10-13": 10, "14-20": 20}
+    assert [v["hexamer_rate"] for v in p["bands"].values()] == pytest.approx([0.6, 0.5, 0.2, 0.1, 0.05])
+    assert [v["tail_primed_share"] for v in p["bands"].values()] == pytest.approx([1, 9 / 11, 3 / 11, 1 / 11, 0])
+    assert p["reference"] == {"n": 20, "hexamer_rate": pytest.approx(0.05)}
+    # classes by label: templated 40 molecules, 4 hexamers (rate 0.1); ambiguous is the 5-7 band
+    assert p["classes"]["templated"] == {"n": 40, "hexamer_rate": pytest.approx(0.1), "tail_primed_share": pytest.approx(1 / 11)}
+    assert p["classes"]["ambiguous"] == {"n": 4, "hexamer_rate": 0.5, "tail_primed_share": pytest.approx(9 / 11)}
+    # templated share over the 54 labeled molecules, then times (1 - 1/11)
+    assert p["n_labeled"] == 54 and p["templated_share"] == pytest.approx(40 / 54)
+    assert p["templated_share_corrected"] == pytest.approx(40 / 54 * 10 / 11)
+
+
+def test_label_purity_clips_and_undefined_cases():
+    # a band above the 0-4 rate clips to 1, below the reference to 0
+    p = label_purity(_purity_mol([(2, "nontemplated", 10, 5), (6, "ambiguous", 4, 4), (8, "templated", 10, 0),
+                                  (16, "templated", 10, 2)]))
+    assert p["bands"]["5-7"]["tail_primed_share"] == 1.0 and p["bands"]["8-9"]["tail_primed_share"] == 0.0
+    # no 0-4 molecule, or a 0-4 rate equal to the reference rate: no estimates, no corrected share
+    for spec in (PURITY[1:], [(2, "nontemplated", 10, 1)] + PURITY[1:4] + [(16, "templated", 10, 1)]):
+        p = label_purity(_purity_mol(spec))
+        assert all(v["tail_primed_share"] is None for v in p["bands"].values())
+        assert p["classes"]["templated"]["tail_primed_share"] is None and p["templated_share_corrected"] is None
+        assert p["templated_share"] == pytest.approx(sum(n for _, lab, n, _ in spec if lab == "templated") / sum(n for _, _, n, _ in spec))
+    # no a20 >= 14 molecule: no reference; an empty band has no rate
+    p = label_purity(_purity_mol(PURITY[:3]))
+    assert p["reference"] == {"n": 0, "hexamer_rate": None} and p["bands"]["14-20"] == {"n": 0, "hexamer_rate": None, "tail_primed_share": None}
+    assert p["bands"]["8-9"]["tail_primed_share"] is None
+    # no molecules at all
+    e = label_purity(_purity_mol([]))
+    assert e["n_labeled"] == 0 and e["templated_share"] is None and e["templated_share_corrected"] is None
+    assert e["classes"]["templated"] == {"n": 0, "hexamer_rate": None, "tail_primed_share": None}
 
 
 E1, E2, E3, CE, I1, I2 = "c300_l10_m1_e", "c450_l9_m1_e", "c150_l20_m0_e", "c450_lnone_m0_e", "c300_l10_m1_i", "c375_l3_m2_i"
@@ -589,7 +647,7 @@ def test_stage17_selection_without_qualifier_tie_breaks_caps_and_spikeins(tmp_pa
     # 1417's record counts break the E1/E2 tie at cap 1000 toward E2 and the three-way tie at cap 500 toward E3;
     # 1419's would break them the other way
     counts = {"1417": {E1: 50, E2: 40, E3: 30, CE: 100, I1: 60, I2: 70}, "1419": {E1: 40, E2: 50, E3: 60, CE: 100, I1: 60, I2: 70}}
-    counts["1179"] = counts["1417"]
+    counts["1179"] = counts["1419"]  # the tie that 1417 breaks toward E2 goes to E1 on 1179
     for lib in ("1417", "1419", "1179"):
         (base / lib / "truth").mkdir(parents=True)
         (base / lib / "grid").mkdir()
@@ -638,3 +696,17 @@ def test_stage17_selection_without_qualifier_tie_breaks_caps_and_spikeins(tmp_pa
     a = sel["ambiguous_tail_share"]
     assert set(a) == {"1417", "1419", "1179"} and a["1417"]["estimate"] == pytest.approx(10 / 17)
     assert (a["1417"]["n_templated"], a["1417"]["n_nontemplated"], a["1417"]["n_ambiguous"]) == (7, 4, 2)
+    # a20 >= 14 reference: the 7 templated molecules (a20 15), rate 1/7, so the same value here
+    assert a["1417"]["rate_ref14"] == pytest.approx(1 / 7) and a["1417"]["estimate_ref14"] == pytest.approx(10 / 17)
+    # label purity per library on the headline population, as label_purity gives it
+    assert set(sel["label_purity"]) == {"1417", "1419", "1179"}
+    assert sel["label_purity"]["1179"] == json.loads(json.dumps(label_purity(mol)))
+    assert sel["label_purity"]["1417"]["bands"]["14-20"] == {"n": 7, "hexamer_rate": pytest.approx(1 / 7), "tail_primed_share": 0.0}
+    # cells_tuned: the same rule run on 1179 (descriptive), ties broken by 1179's own removed records, scored on every library
+    ct = sel["cells_tuned"]
+    assert set(ct) == {"1179"} and set(ct["1179"]) == {"e", "i"}
+    e = ct["1179"]["e"]
+    assert e["introns"] is False and e["selection"]["tag"] == E1 and e["selection"]["n_qualifying"] == 3
+    assert set(e["metrics"]) == {"1417", "1419", "1179"}
+    assert e["metrics"]["1179"]["molecule"]["sens"] == pytest.approx(2 / 3) and e["metrics"]["1417"]["molecule"]["tp"] == 2.0
+    assert ct["1179"]["i"]["selection"]["tag"] is None and ct["1179"]["i"]["metrics"] == {}

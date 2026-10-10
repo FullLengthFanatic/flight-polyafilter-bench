@@ -7,8 +7,8 @@ from pathlib import Path
 import pandas as pd
 
 from pafbench.config import CELLS, MEMBER_CAP, NUCLEI, OUT, POPULATIONS, SEL_POPULATION, SEL_UNITS, SENS_CAPS
-from pafbench.evaluate import (COUNT_COLUMNS, ambiguous_tail_share, bootstrap, evaluate, hexamer_check, relabel, select_setting,
-                               spikein_metrics, tag_setting, units)
+from pafbench.evaluate import (COUNT_COLUMNS, ambiguous_tail_share, bootstrap, evaluate, hexamer_check, label_purity, relabel,
+                               select_setting, spikein_metrics, tag_setting, units)
 from pafbench.flags import Setting, setting_tag
 from pafbench.grid import all_settings, published
 from pafbench.truth import in_population
@@ -80,12 +80,13 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
 
     metrics, u_main, removed_by_tag, unit_stats, tail_share = [], {}, {}, {}, {}
-    pop_metrics, mapq_metrics, mapq_left_out, mol_counts = [], [], {}, {}
+    pop_metrics, mapq_metrics, mapq_left_out, mol_counts, purity = [], [], {}, {}, {}
     sel_all_labeled = args.units == "all_labeled"
     for lib in libs:
         mol_all, tr, fl, tags = _load(_files(args.base, lib))
         mol = _population(mol_all, args.population, lib)
         tail_share[lib] = ambiguous_tail_share(mol)
+        purity[lib] = label_purity(mol)
         unit_stats[lib] = {}
         for cap in SENS_CAPS:
             u = units(mol, tr, fl, tags, cap, all_labeled=sel_all_labeled)
@@ -123,6 +124,15 @@ def main():
         s = select_setting(metrics, removed_sel, introns, SEL_LIB, MEMBER_CAP, CUTOFFS, MIN_SPEC)
         modes[mode] = {"introns": introns, "selection": s,
                        "metrics": {lib: _summary(metrics, s["tag"], lib) for lib in libs} if s["tag"] else {}}
+    # Descriptive only: the spec tunes on 1417. The same rule run on each cell library (population and units as the headline),
+    # ties broken by that library's removed primary records, scored on every library.
+    cells_tuned = {}
+    for tuned in (lib for lib in CELLS if lib in libs):
+        cells_tuned[tuned] = {}
+        for mode, introns in MODES.items():
+            s = select_setting(metrics, removed_by_tag[tuned], introns, tuned, MEMBER_CAP, CUTOFFS, MIN_SPEC)
+            cells_tuned[tuned][mode] = {"introns": introns, "selection": s,
+                                        "metrics": {lib: _summary(metrics, s["tag"], lib) for lib in libs} if s["tag"] else {}}
     pub = {setting_tag(p): {lib: _summary(metrics, setting_tag(p), lib) for lib in libs} for p in published()}
     cap_sens = {str(cap): {mode: select_setting(metrics, removed_sel, introns, SEL_LIB, cap, CUTOFFS, MIN_SPEC)
                            for mode, introns in MODES.items()} for cap in SENS_CAPS}
@@ -217,8 +227,8 @@ def main():
     out = {"rule": RULE, "min_spec": MIN_SPEC, "selection_library": SEL_LIB, "cap": MEMBER_CAP, "cutoffs": CUTOFFS,
            "selection_population": args.population, "selection_units": args.units, "spikein_barcodes": "all",
            "libraries": libs, "missing": missing, "units": unit_stats, "modes": modes, "published": pub,
-           "molecules": mol_counts, "cap_sensitivity": cap_sens, "cutoff_sweep": sweep,
-           "bootstrapped_tags": boot_tags, "ambiguous_tail_share": tail_share, "populations": by_population,
+           "molecules": mol_counts, "cells_tuned": cells_tuned, "cap_sensitivity": cap_sens, "cutoff_sweep": sweep,
+           "bootstrapped_tags": boot_tags, "ambiguous_tail_share": tail_share, "label_purity": purity, "populations": by_population,
            "spikein_units": spikein_units_stats}
     if mapq_sens:
         out["mapq_sensitivity"] = mapq_sens

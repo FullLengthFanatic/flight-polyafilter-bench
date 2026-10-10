@@ -276,18 +276,57 @@ def bootstrap(u, tags, level="molecule", n=1000, seed=0):
     return pd.DataFrame(rows, columns=["tag", "metric", "estimate", "lo", "hi", "n_boot", "n_clusters"])
 
 
+def _tail_estimate(rate, ref, base):
+    """(rate - ref) / (base - ref) clipped to [0, 1]; None when a rate is missing or base equals ref."""
+    if None in (rate, ref, base) or base == ref:
+        return None
+    return float(np.clip((rate - ref) / (base - ref), 0.0, 1.0))
+
+
 def ambiguous_tail_share(mol_labeled):
     """Spec 7: tail-primed share of the ambiguous molecules from AATAAA/ATTAAA rates, a two-component mixture of the
     templated and non-templated rates: (rate_ambiguous - rate_templated) / (rate_nontemplated - rate_templated), clipped to
-    [0, 1]. The estimate is None when a class is empty or the two reference rates are equal."""
+    [0, 1]. estimate_ref14 is the same with the rate of molecules with a20 >= 14 in place of the templated rate, because the
+    templated class itself holds tail-primed molecules in whole cells. An estimate is None when a class is empty or its two
+    reference rates are equal."""
     lab = mol_labeled.label.to_numpy()
     hexa = mol_labeled.hexamer.to_numpy(bool)
     names = ("templated", "nontemplated", "ambiguous")
     n = {k: int((lab == k).sum()) for k in names}
     rate = {k: float(hexa[lab == k].mean()) if n[k] else None for k in names}
     t, nt, a = (rate[k] for k in names)
-    est = None if None in (t, nt, a) or nt == t else float(np.clip((a - t) / (nt - t), 0.0, 1.0))
-    return {"estimate": est} | {f"rate_{k}": rate[k] for k in names} | {f"n_{k}": n[k] for k in names}
+    ref = mol_labeled.a20.to_numpy() >= 14
+    r14 = float(hexa[ref].mean()) if ref.any() else None
+    return {"estimate": _tail_estimate(a, t, nt), "estimate_ref14": _tail_estimate(a, r14, nt)} | \
+        {f"rate_{k}": rate[k] for k in names} | {"rate_ref14": r14} | {f"n_{k}": n[k] for k in names}
+
+
+def label_purity(mol_labeled):
+    """How much tail priming the templated label still holds, from AATAAA/ATTAAA rates (columns a20, label, hexamer).
+    Per A band: molecules, hexamer rate and estimated tail-primed share (rate - rate of a20 >= 14) / (rate of 0-4 - rate of
+    a20 >= 14), clipped to [0, 1]. The same for the templated and ambiguous classes (by label). The templated share of all
+    labeled molecules, also times (1 - tail-primed share of the templated class). Estimates are None where undefined."""
+    a20 = mol_labeled.a20.to_numpy()
+    hexa = mol_labeled.hexamer.to_numpy(bool)
+    lab = mol_labeled.label.to_numpy()
+
+    def rate(m):
+        return float(hexa[m].mean()) if m.any() else None
+
+    ref = rate(a20 >= 14)
+    base = rate(a20 <= A_BANDS[0][2])
+
+    def entry(m):
+        r = rate(m)
+        return {"n": int(m.sum()), "hexamer_rate": r, "tail_primed_share": _tail_estimate(r, ref, base)}
+
+    bands = {name: entry((a20 >= lo) & (a20 <= hi)) for name, lo, hi in A_BANDS}
+    classes = {k: entry(lab == k) for k in ("templated", "ambiguous")}
+    share = float((lab == "templated").mean()) if len(lab) else None
+    tail = classes["templated"]["tail_primed_share"]
+    return {"bands": bands, "reference": {"n": int((a20 >= 14).sum()), "hexamer_rate": ref}, "classes": classes,
+            "n_labeled": int(len(lab)), "templated_share": share,
+            "templated_share_corrected": None if share is None or tail is None else share * (1 - tail)}
 
 
 def _mean(x):
