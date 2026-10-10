@@ -240,8 +240,9 @@ def truth_section(base):
                        "Estimated tail-primed share (reference: a20 >= 14)", "Hexamer rate templated",
                        "Hexamer rate non-templated", "Hexamer rate ambiguous", "Hexamer rate a20 >= 14"] + nkeys, rows)
 
-    out += ["", "Label purity: molecules, AATAAA/ATTAAA rate and estimated tail-primed share per A band over all labeled "
-                "molecules (`eval/selection.json` label_purity, stage 17); the last row of a library is the templated class "
+    out += ["", "Label purity: molecules, AATAAA/ATTAAA rate and estimated tail-primed share per A band over the labeled "
+                f"molecules of {POP_NAMES[(sel or {}).get('selection_population', 'all')]} (`eval/selection.json` label_purity, "
+                "stage 17); the last row of a library is the templated class "
                 "as a whole:", ""]
     if sel is None:
         out[-2:] = [f"Label purity: {_not_run(base, [p])}"]
@@ -786,8 +787,8 @@ def burden_section(base):
                   [[k, s] + [cell(g, k, s, lambda r: _r(r.share_resolved)) for g in groups] for k, s in strata])
     ps = base / "eval" / "selection.json"
     sel = _json(ps)
-    out += ["", "Templated share by label and corrected (`eval/selection.json` label_purity, stage 17; labeled molecules of the "
-                "called cells). The corrected share removes the estimated tail-primed part of the templated class, an estimate "
+    out += ["", "Templated share by label and corrected (`eval/selection.json` label_purity, stage 17; labeled molecules of "
+                f"{POP_NAMES[(sel or {}).get('selection_population', 'all')]}). The corrected share removes the estimated tail-primed part of the templated class, an estimate "
                 "from the hexamer rates (see the label purity table in section 2):", ""]
     if sel is None:
         out[-2:] = [f"Templated share corrected: {_not_run(base, [ps])}"]

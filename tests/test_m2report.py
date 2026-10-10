@@ -399,6 +399,11 @@ def test_truth_section_label_purity(base):
     assert "| 1179 | templated class | 1,200 | 0.056 | 0.084 |" in s
     assert "hexamer rate of the band against the rate at 14 or more A's, scaled by the rate at 0 to 4 A's" in s
     assert "an estimate" in s
+    assert "over the labeled molecules of all barcodes" in s
+    sel = json.loads((base / "eval/selection.json").read_text()) | {"selection_population": "cells"}
+    (base / "eval/selection.json").write_text(json.dumps(sel))
+    assert "over the labeled molecules of called cells" in m2report.truth_section(base)
+    assert "labeled molecules of called cells)" in m2report.burden_section(base)
     assert "chr7:5,527,155 minus strand, 1,976 molecules" in s and "so cells are read by band" in s
     p = base / "eval/selection.json"
     sel = json.loads(p.read_text())
