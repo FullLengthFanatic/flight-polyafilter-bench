@@ -829,8 +829,8 @@ def test_polyasite_wording_in_the_sources():
     for f, n in (("pafbench/polyasite.py", 5), ("scripts/18_burden.py", 5)):
         head = " ".join((REPO / f).read_text().splitlines()[:n])
         assert "describes no filter on A content downstream of a site" in head, f
-        assert "9,544 of 465,261" in head and "3,282" in head, f
-        assert "keeps sites" not in head and "not screened" not in head, f
+        assert "22_polyasite_a_content.py" in head, f
+        assert "9,544" not in head and "465,261" not in head and "keeps sites" not in head and "not screened" not in head, f
 
 
 def test_burden_section_templated_share_by_label_and_corrected(base):
@@ -889,9 +889,23 @@ def test_burden_section_without_a_pair(base):
 def test_burden_section_polyasite(base):
     s = m2report.burden_section(base)
     assert "describes no filter on A content downstream of a site" in s
-    assert ("on chr21 and chr22 the clusters file is not depleted of A-rich downstream sequence (our observation: 9,544 of "
-            "465,261 sites, 2.05%, have 14 or more A's in the 20 nt downstream, against 3,282, 0.71%, for the same sites moved "
-            "1,000 nt upstream)") in s
+    assert "describes no filter on A content downstream of a site" in s
+    assert "9,544" not in s and "465,261" not in s and "chr21" not in s
+    # no json: the not-run line with its file, and no numbers
+    assert "A content downstream of the atlas sites: not run (missing burden/polyasite_a_content.json)" in s
+    tot = {"n_sites": 1000, "n_full": 990, "n_a14": 99, "n_full_null": 980, "n_a14_null": 49}
+    _write(base / "burden/polyasite_a_content.json", {"window_nt": 20, "min_a": 14, "null_shift_nt": 1000, "refs": ["chr1", "chr2"],
+                                                       "atlas_refs_not_counted": ["chrX"], "total": tot, "per_ref": {}})
+    s = m2report.burden_section(base)
+    # 99 / 990 = 10.0%, 49 / 980 = 5.0%
+    assert ("our observation (`burden/polyasite_a_content.json`, stage 22, 2 of 3 atlas references): 99 of 990 atlas sites with a "
+            "full 20 nt downstream window (10.0%) have 14 or more A's in it, against 49 of 980 (5.0%) for the same sites moved 1,000 "
+            "nt upstream; the clusters file is not depleted of A-rich downstream sequence by this count.") in s
+    _write(base / "burden/polyasite_a_content.json", {"window_nt": 20, "min_a": 14, "null_shift_nt": 1000, "refs": ["chr1"],
+                                                       "atlas_refs_not_counted": [], "total": tot | {"n_a14": 10}, "per_ref": {}})
+    s = m2report.burden_section(base)
+    assert "1 of 1 atlas references" in s and "10 of 990 atlas sites" in s and "(1.0%)" in s
+    assert "the clusters file is depleted of A-rich downstream sequence by this count" in s
     assert "screen" not in s
     assert ("The null row takes every molecule of the group with its site moved 1,000 nt upstream in transcript sense on the "
             "same ref and strand; its share within 10 nt is the share expected by chance at this atlas density.") in s

@@ -1,8 +1,7 @@
 """PolyASite 3.0 proximity of priming sites (spec 4.1). Reported next to the labels, never used to validate them: the atlas
-comes from 10x 3' reads primed by the same oligo(dT), the v3.0 documentation describes no filter on A content downstream of a
-site, and on chr21 and chr22 the clusters file is not depleted of A-rich downstream sequence (our observation: 9,544 of
-465,261 sites, 2.05%, have 14 or more A's in the 20 nt downstream, against 3,282, 0.71%, for the same sites moved 1,000 nt
-upstream)."""
+comes from 10x 3' reads primed by the same oligo(dT) and the v3.0 documentation describes no filter on A content downstream of
+a site. The A content downstream of the atlas sites themselves, and of the same sites moved NULL_SHIFT nt upstream, is
+counted by scripts/22_polyasite_a_content.py (a_content below) and printed on the results page."""
 from collections import defaultdict
 
 import numpy as np
@@ -14,6 +13,8 @@ ATLAS_COLUMNS = ["chrom", "start", "end", "id", "score", "strand", "tissues_pct"
 BINS = ("0-10", "11-50", "51-200", ">200", "no atlas site on this ref and strand")
 NULL_SHIFT = 1000            # chance level: the same sites moved this many nt upstream in transcript sense
 NULL_LABEL = "null_shift1kb"
+A_WINDOW = 20               # nt after a site, transcript sense
+A_MIN = 14                  # A's in that window that make a site A-rich
 
 
 def load_polyasite(path, min_score=None):
@@ -78,3 +79,26 @@ def distance_bin(d):
     last bin."""
     a = np.abs(np.asarray(d, np.float64))
     return np.select([a <= 10, a <= 50, a <= 200, a > 200], BINS[:4], BINS[4]).astype(object)
+
+
+def a_content(seq, sites, plus):
+    """A's in the A_WINDOW nt after each site, in transcript sense, for the atlas sites of one reference and strand and for
+    the same sites moved NULL_SHIFT nt upstream. seq is the reference as bytes (case is ignored), sites the priming-site
+    boundaries of load_polyasite on that strand (plus: the window is seq[site:site + 20] and counts A; minus: the window is
+    seq[site - 20:site] and counts T, the complement read in sense). Only full windows count.
+
+    Returns n_sites, n_full (sites with a full window), n_a14 (of those, with at least A_MIN A's) and the same two for the
+    moved sites as n_full_null and n_a14_null."""
+    sites = np.asarray(sites, np.int64)
+    a = np.frombuffer(seq.upper(), np.uint8) == (ord("A") if plus else ord("T"))
+    cum = np.zeros(len(a) + 1, np.int32)
+    np.cumsum(a, out=cum[1:])
+    out = {"n_sites": len(sites)}
+    for key, shift in (("", 0), ("_null", NULL_SHIFT)):
+        s = sites - shift if plus else sites + shift
+        lo = s if plus else s - A_WINDOW
+        full = (lo >= 0) & (lo + A_WINDOW <= len(a))
+        n = cum[lo[full] + A_WINDOW] - cum[lo[full]]
+        out["n_full" + key] = int(full.sum())
+        out["n_a14" + key] = int((n >= A_MIN).sum())
+    return out

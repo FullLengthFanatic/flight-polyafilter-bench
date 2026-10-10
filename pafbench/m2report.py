@@ -803,6 +803,22 @@ def long_read_section(base):
     return "\n".join(_notes(out, notes))
 
 
+def _a_content_line(base):
+    """Our observation of the A content downstream of the atlas sites (stage 22), or the not-run line."""
+    p = base / "burden" / "polyasite_a_content.json"
+    d = _json(p)
+    if d is None:
+        return f"A content downstream of the atlas sites: {_not_run(base, [p])}"
+    t, w, k, shift = d["total"], d["window_nt"], d["min_a"], d["null_shift_nt"]
+    real, null = t["n_a14"] / t["n_full"] if t["n_full"] else None, t["n_a14_null"] / t["n_full_null"] if t["n_full_null"] else None
+    kind = "n/a" if real is None or null is None else "is not depleted of" if real >= null else "is depleted of"
+    return (f"A content downstream of the atlas sites: our observation (`{_rel(base, p)}`, stage 22, {len(d['refs'])} of "
+            f"{len(d['refs']) + len(d['atlas_refs_not_counted'])} atlas references): {_int(t['n_a14'])} of {_int(t['n_full'])} atlas "
+            f"sites with a full {w} nt downstream window ({_pct(t['n_a14'], t['n_full'])}) have {k} or more A's in it, against "
+            f"{_int(t['n_a14_null'])} of {_int(t['n_full_null'])} ({_pct(t['n_a14_null'], t['n_full_null'])}) for the same sites "
+            f"moved {shift:,} nt upstream; the clusters file {kind} A-rich downstream sequence by this count.")
+
+
 def burden_section(base):
     base = Path(base)
     out = ["## 10. Burden: templated share of labeled molecules", ""]
@@ -911,11 +927,10 @@ def burden_section(base):
                     "cleavage site on the same strand; templated molecules also by A band). Proximity is reported, not used to "
                     "validate the labels: the atlas is built from 10x 3' single-cell reads, oligo(dT) primed like these "
                     "libraries, so internally primed sites can be in it. The v3.0 documentation describes no filter on A "
-                    "content downstream of a site, and on chr21 and chr22 the clusters file is not depleted of A-rich "
-                    "downstream sequence (our observation: 9,544 of 465,261 sites, 2.05%, have 14 or more A's in the 20 nt "
-                    "downstream, against 3,282, 0.71%, for the same sites moved 1,000 nt upstream). The null row takes every molecule of the group with its site moved 1,000 nt upstream "
-                    "in transcript sense on the same ref and strand; its share within 10 nt is the share expected by chance "
-                    "at this atlas density."]
+                    "content downstream of a site. The null row takes every molecule of the group with its site moved 1,000 nt "
+                    "upstream in transcript sense on the same ref and strand; its share within 10 nt is the share expected by "
+                    "chance at this atlas density."]
+        out += ["", _a_content_line(base)]
         for g, d in px.groupby("group", sort=False):
             n = d.groupby(["label", "a_band", "bin"]).n.sum()
             keys = ([(lab, "all") for lab in LABELS] + [(NULL_LABEL, "all")]

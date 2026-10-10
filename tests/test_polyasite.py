@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pysam
 
-from pafbench.polyasite import BINS, distance_bin, load_polyasite, nearest_signed, site_distances
+from pafbench.polyasite import A_MIN, A_WINDOW, BINS, NULL_SHIFT, a_content, distance_bin, load_polyasite, nearest_signed, site_distances
 from pafbench.sites import priming_site
 from pafbench.spikein import label_spike_site
 
@@ -122,3 +122,75 @@ def test_distance_bin_edges():
     want = ["0-10"] * 3 + ["11-50"] * 4 + ["51-200"] * 4 + [">200"] * 3 + ["no atlas site on this ref and strand"]
     assert BINS == ("0-10", "11-50", "51-200", ">200", "no atlas site on this ref and strand")
     assert distance_bin(d).tolist() == want
+
+
+def _sense_a(seq, site, plus):
+    """Reference implementation: A's in the 20 nt after the site in transcript sense, None without a full window."""
+    from pafbench.sites import context_from_seq
+    d, _ = context_from_seq(seq, site, not plus, A_WINDOW, 0)
+    return d.count("A") if len(d) == A_WINDOW else None
+
+
+def test_a_content_counts_full_windows_in_transcript_sense():
+    assert (A_WINDOW, A_MIN, NULL_SHIFT) == (20, 14, 1000)
+    rng = np.random.default_rng(5)
+    seq = "".join(rng.choice(list("ACGT"), 5000, p=[0.45, 0.2, 0.15, 0.2]))
+    # A-rich stretches so that both strands reach 14 A's (on minus the genome carries T's)
+    seq = seq[:1200] + "A" * 30 + seq[1230:3000] + "T" * 30 + seq[3030:]
+    plus = np.array([0, 5, 1200, 1210, 1230, 3000, 4980, 4981, 4999, 5000], np.int64)
+    minus = np.array([0, 19, 20, 1200, 3030, 3040, 4000, 4999, 5000, 5001], np.int64)
+    for sites, is_plus in ((plus, True), (minus, False)):
+        got = a_content(seq.encode(), sites, is_plus)
+        for key, shift in (("", 0), ("_null", NULL_SHIFT)):
+            moved = sites - shift if is_plus else sites + shift
+            want = [_sense_a(seq, int(s), is_plus) if 0 <= s <= len(seq) else None for s in moved]
+            full = [w for w in want if w is not None]
+            assert got["n_full" + key] == len(full), (is_plus, key)
+            assert got["n_a14" + key] == sum(w >= 14 for w in full), (is_plus, key)
+        assert got["n_sites"] == len(sites)
+    assert a_content(seq.encode(), plus, True)["n_a14"] >= 2 and a_content(seq.encode(), minus, False)["n_a14"] >= 1
+    # lowercase soft-masked bases count
+    assert a_content(seq.lower().encode(), plus, True) == a_content(seq.encode(), plus, True)
+    assert a_content(seq.encode(), np.array([], np.int64), True) == {
+        "n_sites": 0, "n_full": 0, "n_a14": 0, "n_full_null": 0, "n_a14_null": 0}
+
+
+def test_stage22_counts_per_reference_and_in_total(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    import json
+    import sys
+    from pathlib import Path
+
+    rng = np.random.default_rng(1)
+    seqs = {"chrA": "".join(rng.choice(list("ACGT"), 3000)), "chrB": "A" * 3000}
+    fasta = tmp_path / "g.fa"
+    fasta.write_text("".join(f">{r}\n{s}\n" for r, s in seqs.items()))
+    pysam.faidx(str(fasta))
+    # chrA two plus sites, chrB a plus site (full window, and 1,000 nt upstream: all A) and a minus site (T needed, none),
+    # chrZ is in the atlas only and not in the FASTA
+    bed = _bed(tmp_path / "a.bed.gz", [
+        ("chrA", 99, 100, "chrA:100:+", 1, "+", 1, 1, 1, "TE", "NaN"), ("chrA", 1999, 2000, "chrA:2000:+", 1, "+", 1, 1, 1, "TE", "NaN"),
+        ("chrB", 1499, 1500, "chrB:1500:+", 1, "+", 1, 1, 1, "TE", "NaN"), ("chrB", 1999, 2000, "chrB:2000:-", 1, "-", 1, 1, 1, "TE", "NaN"),
+        ("chrZ", 9, 10, "chrZ:10:+", 1, "+", 1, 1, 1, "TE", "NaN")])
+    spec = importlib.util.spec_from_file_location("stage22", Path(__file__).resolve().parents[1] / "scripts" / "22_polyasite_a_content.py")
+    stage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage)
+    base = tmp_path / "base"
+    monkeypatch.setattr(sys, "argv", ["22", "--base", str(base), "--atlas", str(bed), "--fasta", str(fasta)])
+    stage.main()
+    got = json.loads((base / "burden" / "polyasite_a_content.json").read_text())
+    assert got["refs"] == ["chrA", "chrB"] and got["atlas_refs_not_counted"] == ["chrZ"]
+    assert (got["window_nt"], got["min_a"], got["null_shift_nt"]) == (20, 14, 1000)
+    b = got["per_ref"]["chrB"]
+    # plus site 1500 (id 1500 -> boundary 1500): window all A, and 1,000 nt upstream (500) all A; minus site 2001: no T's, and
+    # 1,000 nt upstream is 3001 > 3000 with no full window
+    assert b == {"n_sites": 2, "n_full": 2, "n_a14": 1, "n_full_null": 1, "n_a14_null": 1}
+    a = got["per_ref"]["chrA"]
+    assert a["n_sites"] == 2 and a["n_full"] == 2 and a["n_full_null"] == 1   # 100 - 1000 < 0
+    assert got["total"]["n_sites"] == 4
+    assert got["total"]["n_a14"] == a["n_a14"] + 1
+    # --refs restricts the count and --out moves the file
+    monkeypatch.setattr(sys, "argv", ["22", "--base", str(base), "--out", str(tmp_path / "o"), "--atlas", str(bed),
+                                      "--fasta", str(fasta), "--refs", "chrB"])
+    stage.main()
+    assert json.loads((tmp_path / "o" / "polyasite_a_content.json").read_text())["total"] == b
