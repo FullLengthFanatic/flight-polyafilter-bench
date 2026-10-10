@@ -404,7 +404,7 @@ def test_truth_section_label_purity(base):
     (base / "eval/selection.json").write_text(json.dumps(sel))
     assert "over the labeled molecules of called cells" in m2report.truth_section(base)
     assert "labeled molecules of called cells)" in m2report.burden_section(base)
-    assert "chr7:5,527,155 minus strand, 1,976 molecules" in s and "so cells are read by band" in s
+    assert "ACTB" not in s and "1,976" not in s and "annotated 3' end" not in s
     p = base / "eval/selection.json"
     sel = json.loads(p.read_text())
     del sel["label_purity"]
@@ -412,6 +412,56 @@ def test_truth_section_label_purity(base):
     assert "Label purity: not run (eval/selection.json has no label_purity)" in m2report.truth_section(base)
     p.unlink()
     assert "Label purity: not run (missing eval/selection.json)" in m2report.truth_section(base)
+
+
+def _cells_truth(base, scale):
+    """1179 labeled molecules for the band 8-9 site table: 5 sites in called cells, a larger one only in other barcodes, one
+    band 5-7 site; sel label_purity of 1179 lifted by scale."""
+    rows, k = [], 0
+    for ref, site, strand, gene, n, n_hex in (("chr8", 5000, "-", "G1", 7, 7), ("chr12", 600, "+", "G2", 6, 3), ("chr7", 70, "-", "", 5, 0),
+                                              ("chr1", 10, "+", "G4", 4, 4), ("chr2", 20, "+", "G5", 3, 1), ("chr3", 30, "+", "G6", 2, 2)):
+        rows += [dict(ref=ref, site=site, strand=strand, gene=gene, a_band="8-9", hexamer=i < n_hex, in_cell=True) for i in range(n)]
+    rows += [dict(ref="chr9", site=1, strand="+", gene="G7", a_band="8-9", hexamer=True, in_cell=False) for _ in range(50)]
+    rows += [dict(ref="chr4", site=1, strand="+", gene="G8", a_band="5-7", hexamer=True, in_cell=True) for _ in range(30)]
+    df = pd.DataFrame(rows)
+    _write(base / "1179/truth/molecules_labeled.parquet", df)
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    sel["label_purity"]["1179"] = _purity(scale=scale)
+    sel["selection_population"] = "cells"
+    p.write_text(json.dumps(sel))
+
+
+def test_truth_section_band_8_9_is_computed(base):
+    _cells_truth(base, scale=5)
+    s = m2report.truth_section(base)
+    # band 8-9 share: 1417 (0.09 - 0.04) / 0.56 = 0.089; 1179 (0.45 - 0.04) / 0.56 = 0.732
+    assert "| Library | Molecules in A band 8-9 | Hexamer rate | Estimated tail-primed share |" in s
+    assert "| 1417 | 300 | 0.090 | 0.089 |" in s and "| 1179 | 300 | 0.450 | 0.732 |" in s
+    assert ("By this estimate most A band 8-9 molecules of 1179 are real poly(A) sites that follow genome-encoded A's, and the 8/4 "
+            "rule labels them templated, so read 1179 by A band.") in s
+    assert "molecules of 1417 are real poly(A)" not in s and "read 1417 by A band" not in s
+    # five largest sites of called cells, in the order of their molecule count; the 50 molecules of other barcodes and the
+    # band 5-7 site are not counted; no gene gives n/a
+    t = s.split("Largest A band 8-9 sites of 1179 in called cells")[1]
+    assert "| Ref | Site | Strand | Gene id | Molecules | Share with the hexamer |" in t
+    rows = [l for l in t.splitlines() if l.startswith("| chr")]
+    assert rows[:5] == ["| chr8 | 5,000 | - | G1 | 7 | 1.000 |", "| chr12 | 600 | + | G2 | 6 | 0.500 |", "| chr7 | 70 | - | none | 5 | 0.000 |",
+                        "| chr1 | 10 | + | G4 | 4 | 1.000 |", "| chr2 | 20 | + | G5 | 3 | 0.333 |"]
+    assert not any(l.startswith(("| chr3", "| chr9", "| chr4")) for l in rows)
+    assert "ACTB" not in s and "annotated 3' end" not in s
+    # no stage 12 population column for the selected population: not run, no numbers
+    df = pd.read_parquet(base / "1179/truth/molecules_labeled.parquet").drop(columns="in_cell")
+    _write(base / "1179/truth/molecules_labeled.parquet", df)
+    assert "Largest A band 8-9 sites of 1179: not run (no in_cell column" in m2report.truth_section(base)
+    (base / "1179/truth/molecules_labeled.parquet").unlink()
+    assert "Largest A band 8-9 sites of 1179: not run (missing 1179/truth/molecules_labeled.parquet)" in m2report.truth_section(base)
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    del sel["label_purity"]
+    p.write_text(json.dumps(sel))
+    s = m2report.truth_section(base)
+    assert "A band 8-9 tail-primed share: not run (eval/selection.json has no label_purity)" in s
 
 
 def test_truth_section_without_pa_sites(base):

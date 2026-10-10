@@ -12,6 +12,7 @@ from .flags import Setting, setting_tag
 from .grid import COVLENS, published
 from .polyasite import BINS, NULL_LABEL
 from .regions import REGION_NAMES
+from .truth import in_population
 from .validation import run_stats
 
 LIBS = NUCLEI + CELLS
@@ -169,6 +170,47 @@ def runs_section(base):
     return "\n".join(out)
 
 
+def _band_lines(base, sel, sel_path):
+    """A band 8-9 in the truth section: the estimated tail-primed share per library from label_purity, the reading of it
+    where the estimate is above 0.5, and the largest sites of band 8-9 in each whole-cell library."""
+    band = BANDS[2]
+    out = [""]
+    purity = (sel or {}).get("label_purity")
+    if purity is None:
+        out.append(f"A band {band} tail-primed share: " + (_not_run(base, [sel_path]) if sel is None else
+                                                          "not run (eval/selection.json has no label_purity)"))
+    else:
+        out += [f"A band {band}, estimated tail-primed share (`eval/selection.json` label_purity):", ""]
+        out += _table(["Library", f"Molecules in A band {band}", "Hexamer rate", "Estimated tail-primed share"],
+                      [[lib, _int(d["bands"][band]["n"]), _r(d["bands"][band]["hexamer_rate"]), _r(d["bands"][band]["tail_primed_share"])]
+                       for lib, d in purity.items()])
+        for lib, d in purity.items():
+            if d["bands"][band]["tail_primed_share"] > 0.5:
+                out += ["", f"By this estimate most A band {band} molecules of {lib} are real poly(A) sites that follow "
+                            f"genome-encoded A's, and the {CUTOFFS} rule labels them templated, so read {lib} by A band."]
+    pop = (sel or {}).get("selection_population", "all")
+    for lib in CELLS:
+        p = base / lib / "truth" / "molecules_labeled.parquet"
+        out.append("")
+        if not p.exists():
+            out.append(f"Largest A band {band} sites of {lib}: {_not_run(base, [p])}")
+            continue
+        m = pd.read_parquet(p, columns=["ref", "strand", "site", "a_band", "gene", "hexamer"] + (["in_cell"] if "in_cell" in pq.read_schema(p).names else []))
+        if pop != "all" and "in_cell" not in m:
+            out.append(f"Largest A band {band} sites of {lib}: not run (no in_cell column in {_rel(base, p)}, rerun stage 12)")
+            continue
+        m = in_population(m, pop)
+        g = m[m.a_band == band].groupby(["ref", "site", "strand"]).agg(n=("hexamer", "size"), hexamer=("hexamer", "mean"),
+                                                                       gene=("gene", "first")).reset_index()
+        g = g.sort_values(["n", "ref", "site"], ascending=[False, True, True]).head(5)
+        out += [f"Largest A band {band} sites of {lib} in {POP_NAMES[pop]} (`{_rel(base, p)}`; site is the priming-site boundary, "
+                "gene the alphabetically first gene id at the last cDNA base, share with the hexamer the share of the site's "
+                "molecules with AATAAA or ATTAAA upstream):", ""]
+        out += _table(["Ref", "Site", "Strand", "Gene id", "Molecules", "Share with the hexamer"],
+                      [[r.ref, _int(r.site), r.strand, r.gene or "none", _int(r.n), _r(r.hexamer)] for r in g.itertuples()])
+    return out
+
+
 def truth_section(base):
     base = Path(base)
     out = ["## 2. Truth sets", "",
@@ -256,9 +298,8 @@ def truth_section(base):
             rows.append([lib, "templated class", _int(t["n"]), _r(t["hexamer_rate"]), _r(t["tail_primed_share"])])
         out += _table(["Library", "A band", "Molecules", "Hexamer rate", "Estimated tail-primed share"], rows)
         out += ["", "The estimated tail-primed share is an estimate, not a count: it compares the hexamer rate of the band against "
-                    "the rate at 14 or more A's, scaled by the rate at 0 to 4 A's, and is limited to 0 to 1.",
-                "In whole cells band 8-9 is mostly real poly(A) sites that follow genome-encoded A's (the largest such site in "
-                "1179 is the annotated 3' end of ACTB, chr7:5,527,155 minus strand, 1,976 molecules), so cells are read by band."]
+                    "the rate at 14 or more A's, scaled by the rate at 0 to 4 A's, and is limited to 0 to 1."]
+    out += _band_lines(base, sel, p)
     return "\n".join(out)
 
 
