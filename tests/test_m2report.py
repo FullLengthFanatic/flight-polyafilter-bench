@@ -546,12 +546,18 @@ def test_selection_section_remove_all_control(base):
 
 def test_selection_section_cells_tuned(base):
     s = m2report.selection_section(base)
-    assert "| Mode | Picked on 1179 | Sens on 1179 | Spec on 1179 | Picked on 1417 | Sens on 1179 | Spec on 1179 |" in s
+    assert "| Mode | Tuned on | Setting | Sens on 1179 | Spec on 1179 |" in s
+    assert "Picked on" not in s
     # 478 / 1,000 and 95 / 100; the 1417 pick c300_l10_m1_i on 1179: 300 / 1,000 and 95 / 100; default mode: 40 / 179, 58 / 61
-    assert "| -i | c450_l5_m1_i | 0.478 | 0.950 | c300_l10_m1_i | 0.300 | 0.950 |" in s
-    assert "| default | c250_l7_m2_e | 0.223 | 0.951 | none | n/a | n/a |" in s
+    assert "| -i | 1179 | c450_l5_m1_i | 0.478 | 0.950 |" in s
+    assert "| -i | 1417 | c300_l10_m1_i | 0.300 | 0.950 |" in s
+    assert "| default | 1179 | c250_l7_m2_e | 0.223 | 0.951 |" in s
+    assert "| default | 1417 | none | n/a | n/a |" in s
+    assert s.index("| default | 1179 |") < s.index("| default | 1417 |") < s.index("| -i | 1179 |") < s.index("| -i | 1417 |")
+    assert ("On 1179, specificity and sensitivity of the setting picked on 1417 next to the setting picked on 1179: default n/a "
+            "and n/a against 0.951 and 0.223; -i 0.950 and 0.300 against 0.950 and 0.478.") in s
     assert "not a recommendation" in s and "no second cell library to hold out" in s
-    assert "leaves sensitivity unused" in s
+    assert "leaves sensitivity unused" not in s and "is safe on cells" not in s
     p = base / "eval/selection.json"
     sel = json.loads(p.read_text())
     del sel["cells_tuned"]

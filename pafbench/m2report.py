@@ -392,21 +392,24 @@ def _cells_tuned_lines(sel):
     if "cells_tuned" not in sel:
         return ["Setting tuned on whole cells: not run (eval/selection.json has no cells_tuned)"]
     sl = sel["selection_library"]
-    rows, tuned_libs = [], []
+    rows, tuned_libs, said = [], [], []
     for tuned, modes in sel["cells_tuned"].items():
         tuned_libs.append(tuned)
         for mode, d in modes.items():
             s, other = d["selection"], sel["modes"][mode]
             m, o = d["metrics"].get(tuned, {}).get("molecule"), other["metrics"].get(tuned, {}).get("molecule")
-            rows.append([MODE_NAMES[mode], s["tag"] or "none", _r(m and m["sens"]), _r(m and m["spec"]),
-                         other["selection"]["tag"] or "none", _r(o and o["sens"]), _r(o and o["spec"])])
+            rows.append([MODE_NAMES[mode], tuned, s["tag"] or "none", _r(m and m["sens"]), _r(m and m["spec"])])
+            rows.append([MODE_NAMES[mode], sl, other["selection"]["tag"] or "none", _r(o and o["sens"]), _r(o and o["spec"])])
+            said.append(f"{MODE_NAMES[mode]} {_r(o and o['spec'])} and {_r(o and o['sens'])} against {_r(m and m['spec'])} and "
+                        f"{_r(m and m['sens'])}")
     t = " and ".join(tuned_libs)
     out = [f"Setting tuned on whole cells (descriptive): the selection rule run on {t} called cells in place of {sl}, next to "
            f"the setting picked on {sl}; sensitivity and specificity at molecule level on {t}:", ""]
-    out += _table(["Mode", f"Picked on {t}", f"Sens on {t}", f"Spec on {t}", f"Picked on {sl}", f"Sens on {t}", f"Spec on {t}"], rows)
-    out += ["", f"This is not a recommendation: {t} has no second cell library to hold out, and tissue (organoid against adult "
-                "retina) is confounded with material. It shows that the setting tuned on nuclei is safe on cells but leaves "
-                "sensitivity unused."]
+    out += _table(["Mode", "Tuned on", "Setting", f"Sens on {t}", f"Spec on {t}"], rows)
+    out += ["", f"On {t}, specificity and sensitivity of the setting picked on {sl} next to the setting picked on {t}: " +
+                "; ".join(said) + ".",
+            f"This is not a recommendation: {t} has no second cell library to hold out, and tissue (organoid against adult "
+            "retina) is confounded with material."]
     return out
 
 
