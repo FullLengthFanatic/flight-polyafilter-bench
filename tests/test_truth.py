@@ -1,3 +1,4 @@
+import gzip
 import json
 import os
 import subprocess
@@ -231,9 +232,16 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 """
 
 
+def _barcodes(path, cbs=("c1", "c3")):
+    with gzip.open(path, "wt") as fh:
+        fh.write("".join(f"{cb}\n" for cb in cbs))
+    return path
+
+
 def _stage12(tmp_path, mol, *extra):
     base = tmp_path / "lib"
     base.mkdir()
+    barcodes = _barcodes(tmp_path / "barcodes.tsv.gz")
     pa = pd.DataFrame(PA_ROWS, columns=PA_COLS)
     pa.to_parquet(base / "pa_sites.parquet")
     mol.to_parquet(base / "molecules.parquet")
@@ -244,7 +252,7 @@ def _stage12(tmp_path, mol, *extra):
             fh.write(f"chrZ\tt\t{ft}\t{s}\t{e}\t.\t{strand}\t.\tgene_id \"g_{tid}\"; transcript_id \"{tid}\";\n")
     env = dict(os.environ, PYTHONPATH=str(REPO))
     r = subprocess.run([sys.executable, "-c", GTF_RUNNER, str(gtf), str(REPO / "scripts" / "12_truth_sets.py"), "X1",
-                        "--base", str(base), *extra], env=env, capture_output=True, text=True)
+                        "--base", str(base), "--barcodes", str(barcodes), *extra], env=env, capture_output=True, text=True)
     return base, r
 
 
@@ -254,13 +262,30 @@ def test_script_writes_truth_sets_under_base(tmp_path, data):
     assert r.returncode == 0, r.stderr
     out = base / "truth"  # --base without --out writes to <base>/truth
     labeled = label_truth_molecules(mol, pa, members, seg)
-    labeled = mark_in_cell(labeled, tmp_path / "nonexistent_barcodes.tsv.gz")
+    labeled = mark_in_cell(labeled, tmp_path / "barcodes.tsv.gz")
     reads = truth_reads(mol, pa, members)
     pd.testing.assert_frame_equal(pd.read_parquet(out / "molecules_labeled.parquet"), labeled)
     pd.testing.assert_frame_equal(pd.read_parquet(out / "truth_reads.parquet"), reads)
     curve = pd.read_csv(out / "hexamer_curve.tsv", sep="\t")
     assert curve.n.sum() == 5 and curve.set_index("a20").n[[3, 6, 9, 12, 15]].tolist() == [1, 1, 1, 1, 1]
     assert r.stdout.strip().splitlines() == [json.dumps({"library": "X1"} | truth_summary(labeled, reads))]
+    assert labeled.in_cell.tolist() == [True, True, False, False, True] and json.loads(r.stdout)["in_cell"] == 3
+
+
+def test_mark_in_cell_matches_barcodes_exactly(data, tmp_path):
+    mol = data[0]
+    got = mark_in_cell(mol, _barcodes(tmp_path / "b.tsv.gz", ("c2", "c3-1")))
+    assert got.in_cell.dtype == bool and got.in_cell.tolist() == [False, False, True, True, False]  # no suffix stripping
+    assert got.drop(columns="in_cell").equals(mol)
+    with pytest.raises(FileNotFoundError):
+        mark_in_cell(mol, tmp_path / "absent.tsv.gz")
+
+
+def test_script_needs_barcodes_for_a_library_without_a_cell_ranger_run(tmp_path, data):
+    base, r = _stage12(tmp_path, data[0])
+    out = subprocess.run([sys.executable, str(REPO / "scripts" / "12_truth_sets.py"), "X1", "--base", str(base)],
+                         env=dict(os.environ, PYTHONPATH=str(REPO)), capture_output=True, text=True)
+    assert out.returncode != 0 and "--barcodes" in out.stderr
 
 
 def test_script_checks_pa_counts_before_writing(tmp_path, data):

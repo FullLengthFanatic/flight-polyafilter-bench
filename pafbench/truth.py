@@ -1,5 +1,4 @@
 import gzip
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -20,23 +19,11 @@ def _pa_join(mol, pa):
     return d.merge(mol[["mol"] + MOL_KEY], on=MOL_KEY, how="inner")
 
 
-def load_called_cell_barcodes(barcodes_path):
-    """Read barcodes from filtered_feature_bc_matrix/barcodes.tsv.gz."""
-    barcodes = set()
-    with gzip.open(barcodes_path, "rt") as f:
-        for line in f:
-            bc = line.rstrip("\n")
-            barcodes.add(bc)
-    return barcodes
-
-
 def mark_in_cell(mol, barcodes_path):
-    """Add in_cell boolean column: True if molecule's CB is in the called cells (from filtered_feature_bc_matrix/barcodes.tsv.gz)."""
-    if not Path(barcodes_path).exists():
-        return mol.assign(in_cell=False)
-    called_barcodes = load_called_cell_barcodes(barcodes_path)
-    in_cell = mol.cb.isin(called_barcodes).to_numpy(bool)
-    return mol.assign(in_cell=in_cell)
+    """mol plus in_cell: the molecule's cb is listed in a Cell Ranger barcodes.tsv.gz (entries compared as written)."""
+    with gzip.open(barcodes_path, "rt") as fh:
+        called = {line.rstrip("\n") for line in fh}
+    return mol.assign(in_cell=mol.cb.isin(called).to_numpy(bool))
 
 
 def label_truth_molecules(mol, pa, members, segments, cutoffs=LABEL_CUTOFFS):
