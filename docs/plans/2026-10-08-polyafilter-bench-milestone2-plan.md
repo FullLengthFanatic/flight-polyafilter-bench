@@ -8852,6 +8852,17 @@ git -c user.name="Simone Picelli" -c user.email="simone.picelli@iob.ch" commit -
 
 ---
 
+## Changes after 2026-10-10
+
+The user decisions of 2026-10-10 (spec 4.1, Population and units; Whole cells) changed Tasks 2, 6 and 9 as written above. Where they differ, this list wins.
+
+- Stage 12 adds `in_cell` (the molecule's barcode is in Cell Ranger's `barcodes.tsv.gz`).
+- Stage 17 takes `--population` (default `cells`) and `--units` (default `with_member`), and writes `populations.parquet` and, in `selection.json`, `selection_population`, `selection_units`, `molecules`, `cells_tuned`, `populations`, `mapq_sensitivity`, `ambiguous_tail_share` and `label_purity`. Spike-in metrics use every barcode.
+- Stage 18 takes `--population` (default `cells`) and writes `templated_share_population.parquet`; `selection_bias.parquet` gains `records_nondup_share` from stage 13's `total_nondup`.
+- Stage 21 gains the headline block, the band 8-9 reading and its largest sites, the setting tuned on whole cells, and the A content of the PolyASite sites read from `burden/polyasite_a_content.json`.
+- Stage 22 (`scripts/22_polyasite_a_content.py`) counts the A content downstream of the PolyASite atlas sites.
+- The expected test count of Task 9 step 5 (237) is superseded; run `pytest -q` for the current number.
+
 ## After the plan
 
 Milestone 3 (not in this plan): the parts of spec 4.1, 4.3 and 8 deferred on 2026-10-10 (labeled against unlabeled molecules by gene, distance to the annotated 3' end and cell type; whole-isoform context of long-read ends; site sequence, hexamer and distance at matched sites), per-cell UMI matrices after filtering from `grid/cell_counts.parquet` and a BAM recount that reproduces the Cell Ranger matrix, clustering, cell types from retinal marker genes, and the final report as an Artifact page.

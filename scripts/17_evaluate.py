@@ -1,4 +1,14 @@
-"""Stage 17: grid metrics per library and member cap, setting selection (spec 7), bootstrap, hexamer check, spike-in metrics."""
+"""Stage 17: grid metrics per library and member cap, setting selection (spec 7), bootstrap, hexamer check, spike-in metrics.
+
+--population (default cells, config.SEL_POPULATION) picks the barcodes of the selection and of every headline number: all,
+cells (in_cell True) or noncells. --units (default with_member, config.SEL_UNITS) picks the molecule units: molecules with a
+member read within the cap, or all labeled molecules. Spike-in metrics use every barcode whatever the population.
+
+Writes metrics.parquet, populations.parquet, bootstrap.parquet, hexamer_check.parquet, spikein_metrics.parquet and
+selection.json. selection.json holds the rule, selection_population, selection_units, the chosen settings per mode and the
+metrics of the chosen and published settings, plus molecules (labeled and called-cell counts), cells_tuned (the rule run on
+the cells library), cap_sensitivity, cutoff_sweep, populations (the rule per population and units), mapq_sensitivity,
+ambiguous_tail_share and label_purity (hexamer-based estimates of the tail-primed share)."""
 import argparse
 import json
 import time

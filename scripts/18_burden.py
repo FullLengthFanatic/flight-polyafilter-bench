@@ -3,6 +3,11 @@ PolyASite 3.0 proximity of the labeled sites (reported only, not a label check: 
 same oligo(dT) priming; the v3.0 documentation describes no filter on A content downstream of a site; the A content downstream
 of the atlas sites is counted by scripts/22_polyasite_a_content.py).
 
+--population (default cells, config.SEL_POPULATION) picks the barcodes of all tables except templated_share_population.parquet,
+which holds every population. The population is not written to any output; the results page infers it from the molecule
+counts. Other files: same_site.parquet, same_gene.parquet, selection_bias.parquet (labeled_share, records_share and, when
+stage 13 wrote total_nondup, records_nondup_share; the records are those of all barcodes) and summary.json.
+
 In templated_share.parquet, lo and hi bound share_all, except on the a_band rows: there they bound frac (the band's share
 of the molecules), because the labels are defined from the A count and fix share_all within a band.
 
