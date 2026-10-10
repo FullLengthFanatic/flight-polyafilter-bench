@@ -71,6 +71,17 @@ I1_1179 = {"molecule": _lvl(300, 700, 95, 5), "molecule_majority": {"sens": 0.35
            "read": {"sens": 0.4, "spec": 0.8, "prec": 0.97}}
 
 
+def _purity(scale=1):
+    """label_purity of one library as stage 17 writes it; scale lifts the hexamer rates (a cell-like library)."""
+    rates = {"0-4": 0.6, "5-7": 0.2, "8-9": 0.09, "10-13": 0.06, "14-20": 0.04}
+    bands = {b: {"n": 100 * (k + 1), "hexamer_rate": min(1.0, r * scale), "tail_primed_share":
+                 min(1.0, max(0.0, (r * scale - 0.04) / (0.6 - 0.04)))} for k, (b, r) in enumerate(rates.items())}
+    return {"bands": bands, "reference": {"n": 500, "hexamer_rate": 0.04},
+            "classes": {"templated": {"n": 1200, "hexamer_rate": 0.056, "tail_primed_share": 0.0279 * scale},
+                        "ambiguous": {"n": 200, "hexamer_rate": 0.2, "tail_primed_share": 0.2857}},
+            "n_labeled": 1500, "templated_share": 0.8, "templated_share_corrected": 0.8 * (1 - 0.0279 * scale)}
+
+
 def _full_base(tmp_path):
     b = tmp_path / "base"
     # ---- stage 12, 1417 only; 1419 and 1179 absent
@@ -86,6 +97,7 @@ def _full_base(tmp_path):
     mem = pd.DataFrame({"qname": [f"m{i}" for i in range(6)], "mol": [0, 0, 1, 1, 3, 4], "role": "member",
                         "dist5_exon": [100.0, 700.0, 1000.0, 1500.0, 400.0, 2000.0], "dist_mode": "exon", "spliced": False})
     _write(b / "1417/truth/truth_reads.parquet", pd.concat([pa, mem], ignore_index=True))
+    _write(b / "1417/pa_sites.parquet", pd.DataFrame({"qname": [f"s{i}" for i in range(8)]}))
     # ---- stage 13
     _write(b / "1417/grid/summary.json", {
         "library": "1417", "settings": 396, "workers": 8, "scanned": 116, "seconds": 1234.4,
@@ -128,8 +140,15 @@ def _full_base(tmp_path):
                          {"templated_min": 10, "nontemplated_max": 6, "mode": "e", "tag": None, "n_qualifying": 0,
                           "by_library": {}}],
         "bootstrapped_tags": [I1, I3],
-        "ambiguous_tail_share": {"1417": {"estimate": 0.458, "rate_templated": 0.069, "rate_nontemplated": 0.772,
-                                          "rate_ambiguous": 0.391, "n_templated": 4, "n_nontemplated": 1, "n_ambiguous": 1}},
+        "ambiguous_tail_share": {"1417": {"estimate": 0.458, "estimate_ref14": 0.481, "rate_templated": 0.069,
+                                          "rate_nontemplated": 0.772, "rate_ambiguous": 0.391, "rate_ref14": 0.04,
+                                          "n_templated": 4, "n_nontemplated": 1, "n_ambiguous": 1}},
+        "label_purity": {"1417": _purity(), "1179": _purity(scale=3)},
+        "cells_tuned": {"1179": {
+            "e": {"introns": False, "selection": _sel("c250_l7_m2_e", 0.2232, 0.9507, 0.93, 168),
+                  "metrics": {"1179": {"molecule": _lvl(40, 139, 58, 3)}}},
+            "i": {"introns": True, "selection": _sel("c450_l5_m1_i", 0.4782, 0.9501, 0.9658, 155),
+                  "metrics": {"1179": {"molecule": _lvl(478, 522, 95, 5)}}}}},
     }
     _write(b / "eval/selection.json", sel)
     # the read-level row comes first and has its own cluster count (clusters without a unit at a level are left out)
@@ -322,7 +341,9 @@ def test_truth_section(base):
     assert "| non-templated | 1 (16.7%) |" in s
     assert "| With a ts read (has_ts) | 1 |" in s
     assert "| Multi-gene (gene = alphabetically first id) | 1 |" in s
-    assert "| pa reads | 6 |" in s
+    assert "| pa reads in labeled molecules | 6 |" in s
+    # pa_sites.parquet row count from the parquet metadata
+    assert "| pa reads in pa_sites.parquet | 8 |" in s
     # member dist5_exon 100, 700, 1000, 1500, 400, 2000
     assert "| Members within 500 nt | 2 |" in s
     assert "| Members within 1,000 nt | 4 |" in s
@@ -336,10 +357,37 @@ def test_truth_section(base):
     assert "| 1417 | antisense | 1 | 0 | 0 | 1 | 1.000 |" in s
     assert "| 1417 | CDS | 0 | 0 | 0 | 0 | n/a |" in s
     assert "1179: not run (missing 1179/truth/molecules_labeled.parquet, 1179/truth/truth_reads.parquet)" in s
-    assert "| 1417 | 0.458 | 0.069 | 0.772 | 0.391 | 4 | 1 | 1 |" in s
+    assert "| 1417 | 0.458 | 0.481 | 0.069 | 0.772 | 0.391 | 0.040 | 4 | 1 | 1 |" in s
     assert "over all labeled molecules" in s
-    assert "| Library | Estimated tail-primed share | Hexamer rate templated | Hexamer rate non-templated | " \
-           "Hexamer rate ambiguous | n_templated | n_nontemplated | n_ambiguous |" in s
+    assert "| Library | Estimated tail-primed share (reference: templated class) | " \
+           "Estimated tail-primed share (reference: a20 >= 14) | Hexamer rate templated | Hexamer rate non-templated | " \
+           "Hexamer rate ambiguous | Hexamer rate a20 >= 14 | n_templated | n_nontemplated | n_ambiguous |" in s
+
+
+def test_truth_section_label_purity(base):
+    s = m2report.truth_section(base)
+    assert "| Library | A band | Molecules | Hexamer rate | Estimated tail-primed share |" in s
+    # 1417 band 8-9: 300 molecules, rate 0.09, (0.09 - 0.04) / (0.6 - 0.04) = 0.089; 1179 (rates x 3): 0.27, 0.411
+    assert "| 1417 | 8-9 | 300 | 0.090 | 0.089 |" in s
+    assert "| 1179 | 8-9 | 300 | 0.270 | 0.411 |" in s
+    assert "| 1417 | 14-20 | 500 | 0.040 | 0.000 |" in s
+    assert "| 1417 | templated class | 1,200 | 0.056 | 0.028 |" in s
+    assert "| 1179 | templated class | 1,200 | 0.056 | 0.084 |" in s
+    assert "hexamer rate of the band against the rate at 14 or more A's, scaled by the rate at 0 to 4 A's" in s
+    assert "an estimate" in s
+    assert "chr7:5,527,155 minus strand, 1,976 molecules" in s and "so cells are read by band" in s
+    p = base / "eval/selection.json"
+    sel = json.loads(p.read_text())
+    del sel["label_purity"]
+    p.write_text(json.dumps(sel))
+    assert "Label purity: not run (eval/selection.json has no label_purity)" in m2report.truth_section(base)
+    p.unlink()
+    assert "Label purity: not run (missing eval/selection.json)" in m2report.truth_section(base)
+
+
+def test_truth_section_without_pa_sites(base):
+    (base / "1417/pa_sites.parquet").unlink()
+    assert "| pa reads in pa_sites.parquet | n/a |" in m2report.truth_section(base)
 
 
 def test_truth_section_without_ambiguous_estimate(base):

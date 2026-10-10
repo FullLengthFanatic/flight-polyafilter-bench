@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from .config import A_BANDS, CELLS, LABEL_CUTOFFS, LONG_READS, MEMBER_CAP, NUCLEI, SENS_CAPS
 from .evaluate import MODULES
@@ -180,11 +181,13 @@ def truth_section(base):
         if absent:
             notes.append(f"{lib}: {_not_run(base, absent)}")
             continue
+        sites = base / lib / "pa_sites.parquet"
         data[lib] = (pd.read_parquet(paths[0], columns=["label", "region", "has_ts", "a20", "hexamer", "genes", "n_members"]),
-                     pd.read_parquet(paths[1], columns=["role", "dist5_exon"]))
+                     pd.read_parquet(paths[1], columns=["role", "dist5_exon"]),
+                     pq.ParquetFile(sites).metadata.num_rows if sites.exists() else None)
     if data:
         def row(name, f):
-            return [name] + [f(m, r) for m, r in data.values()]
+            return [name] + [f(m, r) for m, r, _ in data.values()]
 
         def hexa(s):
             return f"{_r(s.mean() if len(s) else None)} (n {_int(len(s))})"
@@ -194,7 +197,8 @@ def truth_section(base):
                  for k in LABELS]
         rows += [row("With a ts read (has_ts)", lambda m, r: _int(m.has_ts.sum())),
                  row("Multi-gene (gene = alphabetically first id)", lambda m, r: _int(m.genes.str.contains(";").sum())),
-                 row("pa reads", lambda m, r: _int((r.role == "pa").sum()))]
+                 row("pa reads in labeled molecules", lambda m, r: _int((r.role == "pa").sum()))]
+        rows += [["pa reads in pa_sites.parquet"] + [_int(n) for _, _, n in data.values()]]
         rows += [row(f"Members within {cap:,} nt", lambda m, r, cap=cap: _int(((r.role == "member") & (r.dist5_exon <= cap)).sum()))
                  for cap in SENS_CAPS]
         rows += [row(f"Molecules with a member within {MEMBER_CAP:,} nt", lambda m, r: _int((m.n_members > 0).sum())),
@@ -205,7 +209,7 @@ def truth_section(base):
     if data:
         out += ["", "Region at the last cDNA base, by label (molecules):", ""]
         rows = []
-        for lib, (m, _) in data.items():
+        for lib, (m, _, _) in data.items():
             c = pd.crosstab(m.region, m.label).reindex(index=list(REGION_NAMES), columns=list(LABELS), fill_value=0)
             for region, t in c.iterrows():
                 resolved = t.templated + t.nontemplated
@@ -214,11 +218,13 @@ def truth_section(base):
         out += _table(["Library", "Region", "templated", "ambiguous", "non-templated", "total",
                        "templated / (templated + non-templated)"], rows)
 
-    out += ["", "Ambiguous molecules: hexamer-based estimate of their tail-primed share over all labeled molecules, not only "
-                f"the cap {MEMBER_CAP:,} units the metrics use (`eval/selection.json` ambiguous_tail_share, stage 17; "
-                "(rate ambiguous - rate templated) / (rate non-templated - rate templated), clipped to [0, 1]):", ""]
     p = base / "eval" / "selection.json"
     sel = _json(p)
+    out += ["", "Ambiguous molecules: hexamer-based estimate of their tail-primed share over all labeled molecules, not only "
+                f"the cap {MEMBER_CAP:,} units the metrics use (`eval/selection.json` ambiguous_tail_share, stage 17). Two "
+                "estimates, each (rate ambiguous - rate of the reference) / (rate non-templated - rate of the reference), "
+                "clipped to [0, 1]; they differ in the reference: the templated class, or the molecules with 14 or more A's "
+                "(a20 >= 14), because in whole cells the templated class itself holds tail-primed molecules:", ""]
     if sel is None:
         out.append(_not_run(base, [p]))
     elif "ambiguous_tail_share" not in sel:
@@ -226,10 +232,31 @@ def truth_section(base):
     else:
         ats = sel["ambiguous_tail_share"]
         nkeys = list(dict.fromkeys(k for d in ats.values() for k in d if k.startswith("n_")))
-        rows = [[lib, _r(d.get("estimate")), _r(d.get("rate_templated")), _r(d.get("rate_nontemplated")),
-                 _r(d.get("rate_ambiguous"))] + [_int(d.get(k)) for k in nkeys] for lib, d in ats.items()]
-        out += _table(["Library", "Estimated tail-primed share", "Hexamer rate templated", "Hexamer rate non-templated",
-                       "Hexamer rate ambiguous"] + nkeys, rows)
+        rows = [[lib, _r(d.get("estimate")), _r(d.get("estimate_ref14")), _r(d.get("rate_templated")),
+                 _r(d.get("rate_nontemplated")), _r(d.get("rate_ambiguous")), _r(d.get("rate_ref14"))]
+                + [_int(d.get(k)) for k in nkeys] for lib, d in ats.items()]
+        out += _table(["Library", "Estimated tail-primed share (reference: templated class)",
+                       "Estimated tail-primed share (reference: a20 >= 14)", "Hexamer rate templated",
+                       "Hexamer rate non-templated", "Hexamer rate ambiguous", "Hexamer rate a20 >= 14"] + nkeys, rows)
+
+    out += ["", "Label purity: molecules, AATAAA/ATTAAA rate and estimated tail-primed share per A band over all labeled "
+                "molecules (`eval/selection.json` label_purity, stage 17); the last row of a library is the templated class "
+                "as a whole:", ""]
+    if sel is None:
+        out[-2:] = [f"Label purity: {_not_run(base, [p])}"]
+    elif "label_purity" not in sel:
+        out[-2:] = ["Label purity: not run (eval/selection.json has no label_purity)"]
+    else:
+        rows = []
+        for lib, d in sel["label_purity"].items():
+            rows += [[lib, band, _int(e["n"]), _r(e["hexamer_rate"]), _r(e["tail_primed_share"])] for band, e in d["bands"].items()]
+            t = d["classes"]["templated"]
+            rows.append([lib, "templated class", _int(t["n"]), _r(t["hexamer_rate"]), _r(t["tail_primed_share"])])
+        out += _table(["Library", "A band", "Molecules", "Hexamer rate", "Estimated tail-primed share"], rows)
+        out += ["", "The estimated tail-primed share is an estimate, not a count: it compares the hexamer rate of the band against "
+                    "the rate at 14 or more A's, scaled by the rate at 0 to 4 A's, and is limited to 0 to 1.",
+                "In whole cells band 8-9 is mostly real poly(A) sites that follow genome-encoded A's (the largest such site in "
+                "1179 is the annotated 3' end of ACTB, chr7:5,527,155 minus strand, 1,976 molecules), so cells are read by band."]
     return "\n".join(out)
 
 
