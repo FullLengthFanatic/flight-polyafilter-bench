@@ -12,7 +12,7 @@ import pytest
 from pafbench.molecules import MOL_COLUMNS, consolidate_sites
 from pafbench.regions import load_region_segments, regions_at
 from pafbench.sites import last_aligned_base, priming_site
-from pafbench.truth import check_pa_counts, label_truth_molecules, truth_reads, truth_summary
+from pafbench.truth import check_pa_counts, label_truth_molecules, mark_in_cell, truth_reads, truth_summary
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -254,6 +254,7 @@ def test_script_writes_truth_sets_under_base(tmp_path, data):
     assert r.returncode == 0, r.stderr
     out = base / "truth"  # --base without --out writes to <base>/truth
     labeled = label_truth_molecules(mol, pa, members, seg)
+    labeled = mark_in_cell(labeled, tmp_path / "nonexistent_barcodes.tsv.gz")
     reads = truth_reads(mol, pa, members)
     pd.testing.assert_frame_equal(pd.read_parquet(out / "molecules_labeled.parquet"), labeled)
     pd.testing.assert_frame_equal(pd.read_parquet(out / "truth_reads.parquet"), reads)

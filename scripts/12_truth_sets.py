@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from pafbench.config import GTF, OUT
+from pafbench.config import GTF, LIBRARIES, OUT
 from pafbench.labels import hexamer_curve
 from pafbench.regions import load_region_segments
-from pafbench.truth import check_pa_counts, label_truth_molecules, truth_reads, truth_summary
+from pafbench.truth import check_pa_counts, label_truth_molecules, mark_in_cell, truth_reads, truth_summary
 
 
 def main():
@@ -27,6 +27,8 @@ def main():
     pa = pd.read_parquet(base / "pa_sites.parquet")
     members = pd.read_parquet(base / "members.parquet")
     labeled = label_truth_molecules(mol, pa, members, load_region_segments(GTF))
+    barcodes_path = LIBRARIES.get(args.library, Path("")).parent / "filtered_feature_bc_matrix" / "barcodes.tsv.gz"
+    labeled = mark_in_cell(labeled, barcodes_path)
     reads = truth_reads(mol, pa, members)
     check_pa_counts(mol, reads)
     out.mkdir(parents=True, exist_ok=True)

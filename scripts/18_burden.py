@@ -37,13 +37,26 @@ def main():
     ap.add_argument("--base", type=Path, default=OUT)
     ap.add_argument("--out", type=Path, default=OUT / "burden")
     ap.add_argument("--atlas", type=Path, default=POLYASITE)
+    ap.add_argument("--population", choices=["all", "cells", "noncells"], default="all",
+                    help="which barcodes to use: all, cells (in_cell=True), or noncells (in_cell=False)")
     args = ap.parse_args()
     t0 = time.time()
     mols = {}
     for lib in NUCLEI + CELLS:
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if p.exists():
-            mols[lib] = pd.read_parquet(p, columns=COLUMNS)
+            m = pd.read_parquet(p, columns=COLUMNS)
+            if args.population == "cells":
+                if "in_cell" not in m:
+                    print(f"{lib}: --population cells requires in_cell column; skipped")
+                    continue
+                m = m[m.in_cell].reset_index(drop=True)
+            elif args.population == "noncells":
+                if "in_cell" not in m:
+                    print(f"{lib}: --population noncells requires in_cell column; skipped")
+                    continue
+                m = m[~m.in_cell].reset_index(drop=True)
+            mols[lib] = m
         else:
             print(f"{lib}: skipped, missing {p}")
     if not mols:

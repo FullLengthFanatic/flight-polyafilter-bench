@@ -1,3 +1,6 @@
+import gzip
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -15,6 +18,27 @@ def _pa_join(mol, pa):
     """pa reads of each molecule: rows with CB and UB, inner-joined to mol on the molecule key (pa row order kept)."""
     d = pa[pa.cb.notna() & pa.ub.notna()]
     return d.merge(mol[["mol"] + MOL_KEY], on=MOL_KEY, how="inner")
+
+
+def load_called_cell_barcodes(barcodes_path):
+    """Read barcodes from filtered_feature_bc_matrix/barcodes.tsv.gz; strip trailing -1 suffix."""
+    barcodes = set()
+    with gzip.open(barcodes_path, "rt") as f:
+        for line in f:
+            bc = line.rstrip("\n")
+            if bc.endswith("-1"):
+                bc = bc[:-2]
+            barcodes.add(bc)
+    return barcodes
+
+
+def mark_in_cell(mol, barcodes_path):
+    """Add in_cell boolean column: True if molecule's CB is in the called cells (from filtered_feature_bc_matrix/barcodes.tsv.gz)."""
+    if not Path(barcodes_path).exists():
+        return mol.assign(in_cell=False)
+    called_barcodes = load_called_cell_barcodes(barcodes_path)
+    in_cell = mol.cb.isin(called_barcodes).to_numpy(bool)
+    return mol.assign(in_cell=in_cell)
 
 
 def label_truth_molecules(mol, pa, members, segments, cutoffs=LABEL_CUTOFFS):
@@ -56,7 +80,7 @@ def truth_summary(labeled, reads):
     """Counts printed by stage 12; members within each sensitivity cap come from the member rows of reads."""
     member = reads[reads.role == "member"]
     with_members = labeled[labeled.n_members > 0].label.value_counts()
-    return {
+    out = {
         "molecules": len(labeled),
         "labels": {k: int((labeled.label == k).sum()) for k in LABELS},
         "regions": {k: int((labeled.region == k).sum()) for k in REGION_NAMES},
@@ -65,3 +89,6 @@ def truth_summary(labeled, reads):
         "members_within_cap": {str(c): int((member.dist5_exon <= c).sum()) for c in SENS_CAPS},
         "molecules_with_members": {k: int(with_members.get(k, 0)) for k in LABELS},
     }
+    if "in_cell" in labeled:
+        out["in_cell"] = int(labeled.in_cell.sum())
+    return out

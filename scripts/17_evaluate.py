@@ -19,6 +19,8 @@ RULE = ("On 1417, in each mode, the grid setting (remove-all control and off-gri
 MIN_SPEC = 0.95
 SEL_LIB = "1417"
 CUTOFFS = "8/4"
+SEL_POPULATION = "all"
+SEL_UNITS = "with_member"
 MODES = {"e": False, "i": True}
 SUMMARY_LEVELS = ("molecule", "molecule_majority", "read")
 BOOT_LEVELS = ("molecule", "read")
@@ -50,6 +52,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", type=Path, default=OUT)
     ap.add_argument("--out", type=Path, default=OUT / "eval")
+    ap.add_argument("--population", choices=["all", "cells", "noncells"], default=SEL_POPULATION,
+                    help="which barcodes to use: all, cells (in_cell=True), or noncells (in_cell=False)")
+    ap.add_argument("--units", choices=["with_member", "all_labeled"], default=SEL_UNITS,
+                    help="which molecules to include: with_member (have >= 1 member read) or all_labeled (with or without members)")
     args = ap.parse_args()
     t0 = time.time()
     libs, missing = [], {}
@@ -68,10 +74,21 @@ def main():
     metrics, u_main, removed_by_tag, unit_stats, tail_share = [], {}, {}, {}, {}
     for lib in libs:
         mol, tr, fl, tags = _load(_files(args.base, lib))
+        if args.population == "cells":
+            if "in_cell" not in mol:
+                print(f"{lib}: --population cells requires in_cell column; skipped")
+                continue
+            mol = mol[mol.in_cell].reset_index(drop=True)
+        elif args.population == "noncells":
+            if "in_cell" not in mol:
+                print(f"{lib}: --population noncells requires in_cell column; skipped")
+                continue
+            mol = mol[~mol.in_cell].reset_index(drop=True)
         tail_share[lib] = ambiguous_tail_share(mol)
         unit_stats[lib] = {}
         for cap in SENS_CAPS:
-            u = units(mol, tr, fl, tags, cap)
+            all_labeled = (args.units == "all_labeled")
+            u = units(mol, tr, fl, tags, cap, all_labeled=all_labeled)
             metrics.append(evaluate(u, lib, cap, CUTOFFS))
             unit_stats[lib][str(cap)] = {"read_units": len(u.reads), "molecule_units": len(u.mols),
                                          "missing_reads": u.missing_reads, "dropped_molecules": u.dropped_mols}
@@ -157,12 +174,14 @@ def main():
         pd.concat(spikes, ignore_index=True).to_parquet(args.out / "spikein_metrics.parquet", index=False)
 
     out = {"rule": RULE, "min_spec": MIN_SPEC, "selection_library": SEL_LIB, "cap": MEMBER_CAP, "cutoffs": CUTOFFS,
+           "selection_population": args.population, "selection_units": args.units,
            "libraries": libs, "missing": missing, "units": unit_stats, "modes": modes, "published": pub,
            "cap_sensitivity": cap_sens, "cutoff_sweep": sweep, "bootstrapped_tags": boot_tags,
            "ambiguous_tail_share": tail_share}
     (args.out / "selection.json").write_text(json.dumps(out, indent=1))
     print(json.dumps({"libraries": libs, "chosen": chosen, "metrics_rows": len(metrics), "bootstrap_tags": len(boot_tags),
-                      "spikein_libraries": [s.lib.iloc[0] for s in spikes], "seconds": round(time.time() - t0, 1)}))
+                      "spikein_libraries": [s.lib.iloc[0] for s in spikes], "selection_population": args.population,
+                      "selection_units": args.units, "seconds": round(time.time() - t0, 1)}))
 
 
 if __name__ == "__main__":
