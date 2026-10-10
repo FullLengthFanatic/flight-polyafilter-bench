@@ -150,12 +150,12 @@ def runs_section(base):
     base = Path(base)
     out = ["## 1. Runs", "",
            "Stage runs under memwatch (every `*.mem.json` under the base directory outside `*/original/`; a JSON written "
-           "elsewhere is not found). This includes stage 20's createTRANS run for the remove-all control "
+           "elsewhere is not found; folders kept aside from earlier runs (name containing `_pre_fix_`) are left out). This includes stage 20's createTRANS run for the remove-all control "
            "(`validation/none_control/`), an original-tool run, and its createTRANS and original-tool runs on the 1179 subset "
            "(`validation/subset_1179/`). Peak RSS is the largest sum over the process tree at a sample, so pages shared by "
            "forked workers count once per process and a peak between two samples is missed, so the peak of a shorter run "
            "reads near zero. SAMPLING", ""]
-    mem = [p for p in base.rglob("*.mem.json") if "original" not in p.relative_to(base).parts[:-1]]
+    mem = [p for p in base.rglob("*.mem.json") if not any(d == "original" or "_pre_fix_" in d for d in p.relative_to(base).parts[:-1])]
     rows, intervals = [], set()
     for p in mem:
         d = json.loads(p.read_text())

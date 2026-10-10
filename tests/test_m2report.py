@@ -343,6 +343,16 @@ def test_empty_base_renders_every_section_as_not_run(tmp_path):
     assert m2report.render(tmp_path / "absent") == text.replace(str(tmp_path), str(tmp_path / "absent"))
 
 
+def test_runs_section_skips_kept_aside_folders(base):
+    n = m2report.runs_section(base).count("stage13.mem.json")
+    aside = base / "1417/grid_pre_fix_20261010/stage13.mem.json"
+    aside.parent.mkdir()
+    aside.write_text((base / "1417/grid/stage13.mem.json").read_text())
+    s = m2report.runs_section(base)
+    assert s.count("stage13.mem.json") == n and "pre_fix_20261010" not in s
+    assert "folders kept aside from earlier runs (name containing `_pre_fix_`) are left out" in s
+
+
 def test_runs_section(base):
     s = m2report.runs_section(base)
     assert "memwatch samples every 2 s (interval_s in the files)" in s
