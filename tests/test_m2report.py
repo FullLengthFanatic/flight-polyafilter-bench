@@ -723,9 +723,19 @@ def test_long_read_section(base):
     # 4 / 7 = 0.571; ratio 2.29. Exclusive cut-offs would give 0.400, 0.500, 0.000 and 0.667.
     assert "| BD67 | 8/4 | 28,473 / 6,469 / 7,228 | 0.106 | 0.541 | 0.443 | 5.12 | True | 0.333 | 0.667 | 2.00 |" in s
     assert "| BD67 | 14/8 | 11,551 / 16,279 / 14,340 | 0.046 | 0.456 | 0.200 | 9.95 | True | 0.250 | 0.571 | 2.29 |" in s
-    assert "about 7%" in s
+    assert "The spec expects about 7% of reads dropped. In this run BD67 dropped 11.1% of the reads used" in s
+    assert "about 12%" not in s
     assert "| BD67 | 16,408 | 0.615 | 0.491 / 0.907 / 0.805 | 0.993 / 0.996 / 0.994 |" in s
     assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s
+
+
+def test_long_read_section_drop_rates_come_from_the_files(base):
+    d = json.loads((base / "BD67/long_read_acceptance.json").read_text())
+    d["dropped_fraction"] = 0.1188
+    (base / "BD67/long_read_acceptance.json").write_text(json.dumps(d))
+    _write(base / "BD70/long_read_acceptance.json", d | {"library": "BD70", "dropped_fraction": 0.0953})
+    s = m2report.long_read_section(base)
+    assert "BD67 dropped 11.9% of the reads used and BD70 9.5%" in s
 
 
 def test_burden_section(base):

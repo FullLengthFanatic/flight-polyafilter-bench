@@ -724,9 +724,11 @@ def long_read_section(base):
                      _pct(d["dropped_fraction"], 1), _int(d["duplicate_qnames"])])
     out += _table(["Library", "References", "Records", "Secondary or supplementary", "MAPQ < 20", "Used", "Accepted", "Short run",
                    "Short after", "Both", "Dropped", "Duplicate qnames"], rows)
-    out += ["", "- The spec expects about 7% of reads dropped. BD67 drops more in every build check (11.1% on chr21 and chr22, "
-                "12.4% on chr1; BD70 7.7% and 9.1%), from more short-run and both-fail reads, so expect about 12% genome-wide; "
-                "that is the library, not a failure of the acceptance rule."]
+    (first, (d0, _)), *rest = data.items()
+    drops = f"{first} dropped {_pct(d0['dropped_fraction'], 1)} of the reads used" + "".join(
+        f" and {lib} {_pct(d['dropped_fraction'], 1)}" for lib, (d, _) in rest)
+    out += ["", f"- The spec expects about 7% of reads dropped. In this run {drops} (`dropped_fraction` in each acceptance file, "
+                "over the references stage 16 processed)."]
     out += ["", "Hexamer rates (sites T / NT / amb counted per unique site with an accepted read):", ""]
     rows = []
     for lib, (d, sites) in data.items():
