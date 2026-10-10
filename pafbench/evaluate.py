@@ -72,15 +72,19 @@ def expr_tertiles(mol):
 
 
 def units(mol_labeled, truth_reads, truth_flags, tags, cap, label="label", pos="templated", neg="nontemplated",
-          amb="ambiguous"):
+          amb="ambiguous", all_labeled=False):
     """Read and molecule units at a member cap. `label` names the label column; molecules whose label is not pos, neg or
-    amb (amb None: not pos or neg) are left out. Molecules with a read absent from the primary rows of truth_flags drop out."""
+    amb (amb None: not pos or neg) are left out. Molecules with a read absent from the primary rows of truth_flags drop out.
+    With all_labeled=True, include molecules without a member read (their reads are their pa reads only)."""
     classes = [pos, neg] + ([] if amb is None else [amb])
     mol = mol_labeled[mol_labeled[label].isin(classes)]
     mol = mol.assign(label=mol[label].to_numpy(), expr_tertile=expr_tertiles(mol))
     tr = truth_reads[truth_reads.mol.isin(mol.mol)]
     mem = tr[(tr.role == "member") & (tr.dist5_exon <= cap)]
-    reads = pd.concat([tr[(tr.role == "pa") & tr.mol.isin(mem.mol)], mem], ignore_index=True)
+    if all_labeled:
+        reads = pd.concat([tr[tr.role == "pa"], mem], ignore_index=True)
+    else:
+        reads = pd.concat([tr[(tr.role == "pa") & tr.mol.isin(mem.mol)], mem], ignore_index=True)
     fl = truth_flags[(truth_flags.flag.to_numpy() & 0x900) == 0]
     row = pd.Index(fl.qname).get_indexer(reads.qname)
     missing = row < 0

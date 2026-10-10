@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from pafbench.config import CELLS, MEMBER_CAP, NUCLEI, OUT, SENS_CAPS
+from pafbench.config import CELLS, MEMBER_CAP, NUCLEI, OUT, POPULATIONS, SEL_POPULATION, SEL_UNITS, SENS_CAPS
 from pafbench.evaluate import (COUNT_COLUMNS, ambiguous_tail_share, bootstrap, evaluate, hexamer_check, relabel, select_setting,
                                spikein_metrics, tag_setting, units)
 from pafbench.flags import Setting, setting_tag
 from pafbench.grid import all_settings, published
+from pafbench.truth import in_population
 
 RULE = ("On 1417, in each mode, the grid setting (remove-all control and off-grid published settings excluded) with the "
         "highest molecule-level sensitivity subject to specificity >= 0.95, at member cap 1000 nt and 8/4 labels; ties broken "
@@ -19,6 +20,8 @@ RULE = ("On 1417, in each mode, the grid setting (remove-all control and off-gri
 MIN_SPEC = 0.95
 SEL_LIB = "1417"
 CUTOFFS = "8/4"
+UNITS = ("with_member", "all_labeled")
+POP_KINDS = ("all", "a_band", "region")
 MODES = {"e": False, "i": True}
 SUMMARY_LEVELS = ("molecule", "molecule_majority", "read")
 BOOT_LEVELS = ("molecule", "read")
@@ -40,9 +43,16 @@ def _load(f):
     return pd.read_parquet(f["mol"]), pd.read_parquet(f["reads"]), fl, tags
 
 
-def _summary(metrics, tag, lib):
+def _population(mol, population, lib):
+    try:
+        return in_population(mol, population)
+    except ValueError as e:
+        raise SystemExit(f"{lib}: {e}")
+
+
+def _summary(metrics, tag, lib, levels=SUMMARY_LEVELS):
     m = metrics[(metrics.tag == tag) & (metrics.lib == lib) & (metrics.cap == MEMBER_CAP) & (metrics.cutoffs == CUTOFFS)
-                & (metrics.stratum_kind == "all") & metrics.level.isin(SUMMARY_LEVELS)]
+                & (metrics.stratum_kind == "all") & metrics.level.isin(levels)]
     return {r["level"]: {k: _num(r[k]) for k in COUNT_COLUMNS + ["sens", "spec", "prec"]} for _, r in m.iterrows()}
 
 
@@ -50,6 +60,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", type=Path, default=OUT)
     ap.add_argument("--out", type=Path, default=OUT / "eval")
+    ap.add_argument("--population", choices=["all", "cells", "noncells"], default=SEL_POPULATION,
+                    help="which barcodes to use: all, cells (in_cell=True), or noncells (in_cell=False)")
+    ap.add_argument("--units", choices=["with_member", "all_labeled"], default=SEL_UNITS,
+                    help="which molecules to include: with_member (have >= 1 member read) or all_labeled (with or without members)")
     args = ap.parse_args()
     t0 = time.time()
     libs, missing = [], {}
@@ -66,22 +80,42 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
 
     metrics, u_main, removed_by_tag, unit_stats, tail_share = [], {}, {}, {}, {}
+    pop_metrics, mapq_metrics, mapq_left_out, mol_counts = [], [], {}, {}
+    sel_all_labeled = args.units == "all_labeled"
     for lib in libs:
-        mol, tr, fl, tags = _load(_files(args.base, lib))
+        mol_all, tr, fl, tags = _load(_files(args.base, lib))
+        mol = _population(mol_all, args.population, lib)
         tail_share[lib] = ambiguous_tail_share(mol)
         unit_stats[lib] = {}
         for cap in SENS_CAPS:
-            u = units(mol, tr, fl, tags, cap)
+            u = units(mol, tr, fl, tags, cap, all_labeled=sel_all_labeled)
             metrics.append(evaluate(u, lib, cap, CUTOFFS))
             unit_stats[lib][str(cap)] = {"read_units": len(u.reads), "molecule_units": len(u.mols),
                                          "missing_reads": u.missing_reads, "dropped_molecules": u.dropped_mols}
             if cap == MEMBER_CAP:
                 u_main[lib] = u
+        has_cells = "in_cell" in mol_all
+        mol_counts[lib] = {"labeled": len(mol_all), "in_cell": int(mol_all.in_cell.sum()) if has_cells else None, "units": {}}
+        for pop in POPULATIONS if has_cells else ("all",):
+            sub = _population(mol_all, pop, lib)
+            for um in UNITS:
+                u = u_main[lib] if (pop, um) == (args.population, args.units) else units(sub, tr, fl, tags, MEMBER_CAP, all_labeled=um == "all_labeled")
+                n = u.mols.label.value_counts()
+                mol_counts[lib]["units"].setdefault(pop, {})[um] = {k: int(n.get(k, 0)) for k in ("templated", "nontemplated", "ambiguous")}
+                m = evaluate(u, lib, MEMBER_CAP, CUTOFFS, levels=("molecule", "read"), kinds=POP_KINDS)
+                pop_metrics.append(m.assign(population=pop, units=um))
+        if "mapq_min" in mol:
+            keep = ~(mol.mapq_min < 255).to_numpy()
+            mapq_left_out[lib] = int((~keep).sum())
+            u = units(mol[keep].reset_index(drop=True), tr, fl, tags, MEMBER_CAP, all_labeled=sel_all_labeled)
+            mapq_metrics.append(evaluate(u, lib, MEMBER_CAP, CUTOFFS, levels=("molecule",), kinds=("all",)))
         rc = pd.read_parquet(args.base / lib / "grid" / "region_counts.parquet")
         removed_by_tag[lib] = {k: int(v) for k, v in rc.groupby("tag").removed.sum().items()}
         print(f"{lib}: {len(tags)} tags, units {json.dumps(unit_stats[lib])}")
     metrics = pd.concat(metrics, ignore_index=True)
     metrics.to_parquet(args.out / "metrics.parquet", index=False)
+    populations = pd.concat(pop_metrics, ignore_index=True)
+    populations.to_parquet(args.out / "populations.parquet", index=False)
 
     removed_sel = removed_by_tag.get(SEL_LIB, {})
     modes = {}
@@ -92,6 +126,24 @@ def main():
     pub = {setting_tag(p): {lib: _summary(metrics, setting_tag(p), lib) for lib in libs} for p in published()}
     cap_sens = {str(cap): {mode: select_setting(metrics, removed_sel, introns, SEL_LIB, cap, CUTOFFS, MIN_SPEC)
                            for mode, introns in MODES.items()} for cap in SENS_CAPS}
+
+    by_population = {}
+    for (pop, um), d in populations.groupby(["population", "units"], sort=False):
+        by_population.setdefault(pop, {})[um] = {}
+        for mode, introns in MODES.items():
+            s = select_setting(d, removed_sel, introns, SEL_LIB, MEMBER_CAP, CUTOFFS, MIN_SPEC)
+            by_population[pop][um][mode] = {"introns": introns, "selection": s, "metrics": {
+                lib: _summary(d, s["tag"], lib, ("molecule",)) for lib in libs} if s["tag"] else {}}
+
+    mapq_sens = {}
+    if mapq_metrics:
+        mq = pd.concat(mapq_metrics, ignore_index=True)
+        mapq_sens = {"left_out": mapq_left_out, "modes": {}, "published": {
+            setting_tag(p): {lib: _summary(mq, setting_tag(p), lib, ("molecule",)) for lib in mapq_left_out} for p in published()}}
+        for mode, introns in MODES.items():
+            s = select_setting(mq, removed_sel, introns, SEL_LIB, MEMBER_CAP, CUTOFFS, MIN_SPEC)
+            mapq_sens["modes"][mode] = {"introns": introns, "selection": s, "metrics": {
+                lib: _summary(mq, s["tag"], lib, ("molecule",)) for lib in mapq_left_out} if s["tag"] else {}}
     sweep = []
     for tmin in range(7, 11):
         for nmax in range(2, 7):
@@ -118,7 +170,10 @@ def main():
         if chosen[mode]:
             boot_tags.append(setting_tag(Setting(tag_setting(chosen[mode]).covlen, None, 0, introns)))
         else:
-            print(f"mode {mode}: no setting chosen, so no chosen tag and no remove-all control at its COVLEN are bootstrapped")
+            print(f"mode {mode}: no setting chosen, bootstrapping remove-all controls at published COVLENs")
+            for p in published():
+                if p.introns == introns:
+                    boot_tags.append(setting_tag(Setting(p.covlen, None, 0, introns)))
     boot_tags = list(dict.fromkeys(boot_tags))
     boots, hexes = [], []
     for lib in libs:
@@ -140,7 +195,7 @@ def main():
     pd.concat(boots, ignore_index=True).to_parquet(args.out / "bootstrap.parquet", index=False)
     pd.concat(hexes, ignore_index=True).to_parquet(args.out / "hexamer_check.parquet", index=False)
 
-    spikes = []
+    spikes, spikein_units_stats = [], {}
     for lib in NUCLEI:
         f = _files(args.base, lib, "spikein")
         absent = [str(p) for p in f.values() if not p.exists()]
@@ -148,7 +203,10 @@ def main():
             print(f"{lib}: spike-in metrics skipped, missing {', '.join(absent)}")
             continue
         mol, tr, fl, tags = _load(f)
-        u = units(mol, tr, fl, tags, MEMBER_CAP, label="spike_label", pos="internal", neg="tail", amb=None)
+        u = units(mol, tr, fl, tags, MEMBER_CAP, label="spike_label", pos="internal", neg="tail", amb=None,
+                  all_labeled=sel_all_labeled)
+        spikein_units_stats[lib] = {"read_units": len(u.reads), "molecule_units": len(u.mols),
+                                    "missing_reads": u.missing_reads, "dropped_molecules": u.dropped_mols}
         s = spikein_metrics(u, tags)
         s.insert(0, "lib", lib)
         s.insert(1, "cap", MEMBER_CAP)
@@ -157,12 +215,17 @@ def main():
         pd.concat(spikes, ignore_index=True).to_parquet(args.out / "spikein_metrics.parquet", index=False)
 
     out = {"rule": RULE, "min_spec": MIN_SPEC, "selection_library": SEL_LIB, "cap": MEMBER_CAP, "cutoffs": CUTOFFS,
+           "selection_population": args.population, "selection_units": args.units, "spikein_barcodes": "all",
            "libraries": libs, "missing": missing, "units": unit_stats, "modes": modes, "published": pub,
-           "cap_sensitivity": cap_sens, "cutoff_sweep": sweep, "bootstrapped_tags": boot_tags,
-           "ambiguous_tail_share": tail_share}
+           "molecules": mol_counts, "cap_sensitivity": cap_sens, "cutoff_sweep": sweep,
+           "bootstrapped_tags": boot_tags, "ambiguous_tail_share": tail_share, "populations": by_population,
+           "spikein_units": spikein_units_stats}
+    if mapq_sens:
+        out["mapq_sensitivity"] = mapq_sens
     (args.out / "selection.json").write_text(json.dumps(out, indent=1))
     print(json.dumps({"libraries": libs, "chosen": chosen, "metrics_rows": len(metrics), "bootstrap_tags": len(boot_tags),
-                      "spikein_libraries": [s.lib.iloc[0] for s in spikes], "seconds": round(time.time() - t0, 1)}))
+                      "spikein_libraries": [s.lib.iloc[0] for s in spikes], "selection_population": args.population,
+                      "selection_units": args.units, "seconds": round(time.time() - t0, 1)}))
 
 
 if __name__ == "__main__":

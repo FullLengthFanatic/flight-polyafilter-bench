@@ -12,7 +12,7 @@ from pafbench.config import REPO
 from pafbench.evaluate import (METRIC_COLUMNS, ambiguous_tail_share, bootstrap, confusion, evaluate, expr_tertiles,
                                gene_clusters, hexamer_check, rates, relabel, resample_counts, select_setting, spikein_metrics,
                                units)
-from pafbench.flags import setting_tag
+from pafbench.flags import Setting, setting_tag
 from pafbench.grid import published
 
 T0, T1, T2 = "c300_l10_m1_i", "c375_l3_m2_i", "c300_lnone_m0_i"
@@ -105,6 +105,19 @@ def test_units_reads_molecules_and_missing():
     # the cap is inclusive: r0c sits at dist5_exon 900
     assert units(mol, tr, fl, TAGS, cap=900).mols.n_reads.tolist()[0] == 4
     assert units(mol, tr, fl, TAGS, cap=899).mols.n_reads.tolist()[0] == 3
+
+
+def test_units_all_labeled_adds_molecules_without_member_reads():
+    mol, tr, fl = _tables()
+    u, a = units(mol, tr, fl, TAGS, cap=1000), units(mol, tr, fl, TAGS, cap=1000, all_labeled=True)
+    # m4 (only member beyond the cap) and m6 (no member) become units with their pa read; m5 still drops out
+    assert a.mols.mol.tolist() == [0, 1, 2, 3, 4, 6] and a.mols.n_reads.tolist() == [4, 3, 2, 2, 1, 1]
+    assert a.K[4:].tolist() == [[0, 0, 1], [0, 0, 1]] and a.K[:4].tolist() == u.K.tolist()
+    assert a.missing_reads == 1 and a.dropped_mols == 1
+    # read-level units do not change
+    pd.testing.assert_frame_equal(a.reads.drop(columns="mi"), u.reads.drop(columns="mi"))
+    assert (a.R == u.R).all()
+    assert units(mol, tr, fl, TAGS, cap=1000, all_labeled=False).mols.mol.tolist() == [0, 1, 2, 3]
 
 
 def test_expr_tertiles_match_qcut():
@@ -306,10 +319,12 @@ def test_spikein_labels_and_modules():
     assert s[(s.stratum == "long_SIRV")][["tp", "fn", "tn", "fp"]].to_numpy().sum() == 0
 
 
-def _run_stage(script, base, out):
+def _run_stage(script, base, out, *extra, check=True):
     env = dict(os.environ, PYTHONPATH=str(REPO))
-    r = subprocess.run([sys.executable, str(REPO / "scripts" / script), "--base", str(base), "--out", str(out)],
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / script), "--base", str(base), "--out", str(out), *extra],
                        capture_output=True, text=True, env=env, cwd=REPO)
+    if not check:
+        return r
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -366,6 +381,109 @@ def test_stage17_end_to_end(tmp_path):
     pd.testing.assert_frame_equal(s.drop(columns=["lib", "cap"]), ref, check_dtype=False)
     r = s[(s.level == "molecule") & (s.stratum == "all") & (s.tag == T0)].iloc[0]
     assert _counts(r) == [1, 1, 1, 0, 0, 0]  # m0 internal removed, m1 internal kept, m2 tail kept
+
+
+IN_CELL = [True, True, False, False, True, True, False]
+POP_MOLS = {"all": [0, 1, 2, 3, 4, 5, 6], "cells": [0, 1, 4, 5], "noncells": [2, 3, 6]}
+COMBOS = [(p, u) for p in ("all", "cells", "noncells") for u in ("with_member", "all_labeled")]
+
+
+def _pop_base(tmp_path, mol, tr, fl):
+    base = tmp_path / "base"
+    for lib in ("1417", "1419"):
+        (base / lib / "truth").mkdir(parents=True)
+        (base / lib / "grid").mkdir()
+        mol.to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
+        tr.to_parquet(base / lib / "truth" / "truth_reads.parquet")
+        fl.to_parquet(base / lib / "grid" / "truth_flags.parquet")
+        pd.DataFrame({"tag": TAGS, "re": "E", "removed": [10, 20, 30], "total": 100}).to_parquet(
+            base / lib / "grid" / "region_counts.parquet")
+    # spike-in molecules sit in no called cell: the spike-in metrics must not depend on --population
+    spike = mol.assign(spike_label=["internal", "internal", "tail", "other", "tail", "internal", "internal"], module="ERCC",
+                       in_cell=False)
+    for sub in ("truth", "grid"):
+        (base / "1417" / "spikein" / sub).mkdir(parents=True)
+    spike.to_parquet(base / "1417" / "spikein" / "truth" / "molecules_labeled.parquet")
+    tr.to_parquet(base / "1417" / "spikein" / "truth" / "truth_reads.parquet")
+    fl.to_parquet(base / "1417" / "spikein" / "grid" / "truth_flags.parquet")
+    return base, spike
+
+
+def test_stage17_population_and_units_options(tmp_path):
+    mol, tr, fl = _tables()
+    mol = mol.assign(in_cell=IN_CELL, mapq_min=[255, 255, 3, 255, 255, 255, 255])
+    base, spike = _pop_base(tmp_path, mol, tr, fl)
+    tags = [T2, T0, T1]
+    runs = {}
+    for pop, um in (("all", "with_member"), ("cells", "all_labeled"), ("noncells", "with_member")):
+        out = tmp_path / f"eval_{pop}_{um}"
+        _run_stage("17_evaluate.py", base, out, "--population", pop, "--units", um)
+        runs[pop, um] = sel = json.loads((out / "selection.json").read_text())
+        assert (sel["selection_population"], sel["selection_units"], sel["spikein_barcodes"]) == (pop, um, "all")
+        sub = mol[mol.mol.isin(POP_MOLS[pop])].reset_index(drop=True)
+        m = pd.read_parquet(out / "metrics.parquet")
+        got = m[(m.lib == "1419") & (m.cap == 1000)].reset_index(drop=True)
+        u = units(sub, tr, fl, tags, 1000, all_labeled=um == "all_labeled")
+        pd.testing.assert_frame_equal(got, evaluate(u, "1419", 1000), check_dtype=False)
+        assert sel["units"]["1419"]["1000"]["molecule_units"] == len(u.mols)
+        s = pd.read_parquet(out / "spikein_metrics.parquet")
+        us = units(spike, tr, fl, tags, 1000, label="spike_label", pos="internal", neg="tail", amb=None, all_labeled=um == "all_labeled")
+        pd.testing.assert_frame_equal(s.drop(columns=["lib", "cap"]), spikein_metrics(us, tags), check_dtype=False)
+        assert sel["spikein_units"] == {"1417": {"read_units": len(us.reads), "molecule_units": len(us.mols),
+                                                 "missing_reads": us.missing_reads, "dropped_molecules": us.dropped_mols}}
+    assert runs["all", "with_member"]["spikein_units"]["1417"]["molecule_units"] == 3  # m0, m1, m2: m4 and m6 have no member
+    assert runs["cells", "all_labeled"]["spikein_units"]["1417"]["molecule_units"] == 5  # plus m4 and m6, not m5 (read missing)
+    # populations.parquet and the "populations" block do not depend on the selection population and units
+    pops = [pd.read_parquet(tmp_path / f"eval_{p}_{u}" / "populations.parquet") for p, u in runs]
+    pd.testing.assert_frame_equal(pops[0], pops[1])
+    pd.testing.assert_frame_equal(pops[0], pops[2])
+    assert list(pops[0].columns) == METRIC_COLUMNS + ["population", "units"]
+    assert set(zip(pops[0].population, pops[0].units)) == set(COMBOS)
+    assert set(pops[0].cap) == {1000} and set(pops[0].cutoffs) == {"8/4"} and set(pops[0].lib) == {"1417", "1419"}
+    assert set(pops[0].level) == {"molecule", "read"} and set(pops[0].stratum_kind) == {"all", "a_band", "region"}
+    for pop, um in COMBOS:
+        sub = mol[mol.mol.isin(POP_MOLS[pop])].reset_index(drop=True)
+        ref = evaluate(units(sub, tr, fl, tags, 1000, all_labeled=um == "all_labeled"), "1417", 1000, levels=("molecule", "read"),
+                       kinds=("all", "a_band", "region"))
+        got = pops[0][(pops[0].population == pop) & (pops[0].units == um) & (pops[0].lib == "1417")]
+        pd.testing.assert_frame_equal(got.drop(columns=["population", "units"]).reset_index(drop=True), ref, check_dtype=False)
+    assert runs["all", "with_member"]["populations"] == runs["cells", "all_labeled"]["populations"] == \
+        runs["noncells", "with_member"]["populations"]
+    block = runs["all", "with_member"]["populations"]
+    assert set(block) == {"all", "cells", "noncells"} and all(set(v) == {"with_member", "all_labeled"} for v in block.values())
+    assert block["all"]["with_member"]["i"]["selection"] == runs["all", "with_member"]["modes"]["i"]["selection"]
+    # cells with a member: no negative unit, so no setting has a specificity; cells with all labeled: m4 is a kept negative
+    assert block["cells"]["with_member"]["i"]["selection"]["tag"] is None and block["cells"]["with_member"]["i"]["metrics"] == {}
+    c = block["cells"]["all_labeled"]["i"]
+    assert c["selection"]["tag"] == T0 and c["introns"] is True and c["selection"]["n_qualifying"] == 2  # T1 keeps the negative too, sens 0
+    assert c["metrics"]["1419"]["molecule"] == {"tp": 1.0, "fn": 1.0, "tn": 1.0, "fp": 0.0, "n_amb": 0.0, "amb_removed": 0.0,
+                                                "sens": 0.5, "spec": 1.0, "prec": 1.0}
+    # molecule counts per library: labeled, in called cells, molecule units by label for each population and units
+    cnt = runs["all", "with_member"]["molecules"]["1417"]
+    assert cnt["labeled"] == 7 and cnt["in_cell"] == 4
+    lab = lambda t, n, a: {"templated": t, "nontemplated": n, "ambiguous": a}  # noqa: E731
+    assert cnt["units"] == {"all": {"with_member": lab(2, 1, 1), "all_labeled": lab(3, 2, 1)},
+                            "cells": {"with_member": lab(2, 0, 0), "all_labeled": lab(2, 1, 0)},
+                            "noncells": {"with_member": lab(0, 1, 1), "all_labeled": lab(1, 1, 1)}}
+    # molecules with mapq_min below 255 (m2) left out: the tail unit that T1 removed is gone
+    mq = runs["all", "with_member"]["mapq_sensitivity"]
+    assert mq["left_out"] == {"1417": 1, "1419": 1} and mq["modes"]["i"]["selection"]["tag"] is None
+    assert runs["all", "with_member"]["published"][T1]["1417"]["molecule"]["fp"] == 1.0
+    assert mq["published"][T1]["1417"]["molecule"]["fp"] == 0.0 and mq["published"][T1]["1417"]["molecule"]["fn"] == 2.0
+    assert set(mq["published"][T1]["1417"]) == {"molecule"}
+
+
+def test_stage17_population_without_in_cell_is_refused(tmp_path):
+    mol, tr, fl = _tables()
+    base, _ = _pop_base(tmp_path, mol, tr, fl)
+    r = _run_stage("17_evaluate.py", base, tmp_path / "eval", "--population", "cells", check=False)
+    assert r.returncode != 0 and "in_cell" in r.stderr and not (tmp_path / "eval" / "selection.json").exists()
+    out = tmp_path / "eval_all"
+    _run_stage("17_evaluate.py", base, out)  # the default population does not need in_cell
+    sel = json.loads((out / "selection.json").read_text())
+    assert set(pd.read_parquet(out / "populations.parquet").population) == {"all"}
+    assert set(sel["populations"]) == {"all"} and "mapq_sensitivity" not in sel
+    assert sel["molecules"]["1417"]["in_cell"] is None
 
 
 def test_select_setting_reads_only_stratum_all_and_its_cutoffs():
@@ -486,8 +604,10 @@ def test_stage17_selection_without_qualifier_tie_breaks_caps_and_spikeins(tmp_pa
     # caps 500 (three-way tie at 1/2: E3 removes fewest records) and 2000 (Td enters: E1 3/4) choose differently
     assert {c: sel["cap_sensitivity"][c]["e"]["tag"] for c in ("500", "1000", "2000")} == {"500": E3, "1000": E2, "2000": E1}
     assert sel["cap_sensitivity"]["2000"]["i"]["tag"] is None
-    # bootstrap and hexamer check: the chosen tag, the published settings present, the control at the chosen COVLEN
-    assert sel["bootstrapped_tags"] == [E2] + [setting_tag(p) for p in published()] + [CE]
+    # bootstrap and hexamer check: the chosen tag, the published settings, the control at the chosen COVLEN, and, for mode i
+    # (nothing chosen), the controls at the COVLENs of its published settings
+    assert sel["bootstrapped_tags"] == [E2] + [setting_tag(p) for p in published()] + [CE] + \
+        [f"c{c}_lnone_m0_i" for c in (300, 275, 180, 375)]
     b = pd.read_parquet(out / "bootstrap.parquet")
     assert set(b.tag) == {E2, E1, I1, I2, CE} and set(b.lib) == {"1417", "1419", "1179"} and len(b) == 3 * 2 * 5 * 3
     h = pd.read_parquet(out / "hexamer_check.parquet")

@@ -19,10 +19,12 @@ import time
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from pafbench.burden import near_shares, proximity_table, same_gene, same_site, selection_bias, share_ci, share_table
-from pafbench.config import CELLS, NUCLEI, OUT, POLYASITE
+from pafbench.config import CELLS, NUCLEI, OUT, POLYASITE, POPULATIONS, SEL_POPULATION
 from pafbench.polyasite import NULL_SHIFT, load_polyasite, site_distances
+from pafbench.truth import in_population
 
 KINDS = (None, "region", "a_band", "has_ts")
 COLUMNS = ["mol", "ref", "strand", "site", "label", "a_band", "region", "gene", "has_ts", "re"]
@@ -37,13 +39,21 @@ def main():
     ap.add_argument("--base", type=Path, default=OUT)
     ap.add_argument("--out", type=Path, default=OUT / "burden")
     ap.add_argument("--atlas", type=Path, default=POLYASITE)
+    ap.add_argument("--population", choices=POPULATIONS, default=SEL_POPULATION,
+                    help="which barcodes to use: all, cells (in_cell=True), or noncells (in_cell=False)")
     args = ap.parse_args()
     t0 = time.time()
-    mols = {}
+    mols, by_population = {}, {}
     for lib in NUCLEI + CELLS:
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if p.exists():
-            mols[lib] = pd.read_parquet(p, columns=COLUMNS)
+            m = pd.read_parquet(p, columns=COLUMNS + (["in_cell"] if "in_cell" in pq.read_schema(p).names else []))
+            by_population[lib] = {pop: in_population(m, pop) for pop in POPULATIONS} if "in_cell" in m else {"all": m}
+            try:
+                m = in_population(m, args.population)
+            except ValueError as e:
+                raise SystemExit(f"{lib}: {e}")
+            mols[lib] = m
         else:
             print(f"{lib}: skipped, missing {p}")
     if not mols:
@@ -64,6 +74,17 @@ def main():
             tables.append(t)
     share = pd.concat(tables, ignore_index=True)
     share.to_parquet(args.out / "templated_share.parquet", index=False)
+
+    pop_share = []
+    for lib, pops in by_population.items():
+        for pop, mol in pops.items():
+            for by in (None, "region"):
+                t = share_table(mol, by).drop(columns=["frac", "share_resolved"])
+                t.insert(0, "lib", lib)
+                t.insert(1, "population", pop)
+                t.insert(2, "stratum_kind", by or "all")
+                pop_share.append(t)
+    pd.concat(pop_share, ignore_index=True).to_parquet(args.out / "templated_share_population.parquet", index=False)
 
     pairs = []
     if "1417" in mols and "1419" in mols:
