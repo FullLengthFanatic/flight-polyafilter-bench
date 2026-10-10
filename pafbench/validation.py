@@ -8,6 +8,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 import pysam
 
 from .config import REPO, VENDOR_POLYAFILTER
@@ -19,6 +21,13 @@ from .vendor import polyafilter_modules
 _TAG = re.compile(r"c(\d+)_l(none|[1-9]\d*)_m(\d+)_([ie])")
 _SIGNAL = re.compile(r"^Command terminated by signal (\d+)$", re.M)
 TRASH = ("gio", "trash")
+# the original runs stage 20 must find: milestone 1's three on 1417 plus the chains of scripts/19_validation_runs.sh
+EXPECTED_RUNS = {
+    "1417": ("c300_l10_m1_i", "c375_l3_m2_i", "c300_l10_m1_e", "c275_l9_m1_i", "c275_l9_m1_e", "c180_l11_m2_i", "c180_l11_m2_e",
+             "c300_l10_m0_i", "c600_l10_m1_i", "c375_l3_m2_e"),
+    "1419": ("c300_l10_m1_i", "c375_l3_m2_i", "c300_l10_m1_e", "c275_l9_m1_i", "c275_l9_m1_e", "c180_l11_m2_i", "c180_l11_m2_e",
+             "c375_l3_m2_e"),
+}
 
 
 def parse_tag(tag):
@@ -58,6 +67,99 @@ def discover_settings(orig_dir):
         if tfile.exists() and time_exit_status(tfile) == 0:
             out.append(parse_tag(bam.stem))
     return out
+
+
+def missing_runs(orig_dir, tags):
+    """{tag, exit_status, reason} of every tag in tags that discover_settings does not return for orig_dir, in tags order.
+
+    reason: "no output" (no BAM), "no time file" (BAM but no time file; still running or lost), "killed or failed".
+    exit_status is that of the time file, None without one.
+    """
+    found = {setting_tag(s) for s in discover_settings(orig_dir)}
+    out = []
+    for tag in tags:
+        if tag in found:
+            continue
+        bam, prefix = Path(orig_dir) / f"{tag}.bam", Path(orig_dir) / tag
+        has_time = Path(f"{prefix}.time.txt").exists()
+        reason = "no output" if not bam.exists() else "no time file" if not has_time else "killed or failed"
+        out.append({"tag": tag, "exit_status": run_stats(prefix)["exit_status"] if has_time else None, "reason": reason})
+    return out
+
+
+def reusable(lib_dir, settings):
+    """True when lib_dir/exact_match.json holds exactly the tags of settings, reimpl_flags/summary.json lists the same
+    settings, and exact_match.json is newer than that summary and than every BAM in original/ (stages 03 and 04 can be skipped)."""
+    lib_dir = Path(lib_dir)
+    summary, match = lib_dir / "reimpl_flags" / "summary.json", lib_dir / "exact_match.json"
+    if not summary.exists() or not match.exists():
+        return False
+    tags = {setting_tag(s) for s in settings}
+    if set(json.loads(match.read_text())) != tags or set(json.loads(summary.read_text())["settings"]) != tags:
+        return False
+    newest = max([summary.stat().st_mtime, *(b.stat().st_mtime for b in (lib_dir / "original").glob("*.bam"))])
+    return match.stat().st_mtime > newest
+
+
+def grid_removed(grid_dir, tag, refs=None):
+    """Removed primary records of tag in a stage 13 grid: summary.json "removed" (refs None), or the sum over the per-reference
+    parts/<ref>.region.parquet of refs. None when a file is missing or the tag is not in the summary or a part."""
+    grid_dir = Path(grid_dir)
+    if refs is None:
+        path = grid_dir / "summary.json"
+        return json.loads(path.read_text())["removed"].get(tag) if path.exists() else None
+    paths = [grid_dir / "parts" / f"{ref}.region.parquet" for ref in refs]
+    if not all(p.exists() for p in paths):
+        return None
+    total = 0
+    for p in paths:
+        reg = pq.read_table(p, columns=["tag", "removed"]).to_pandas()
+        if not (reg.tag == tag).any():
+            return None
+        total += int(reg.removed[reg.tag == tag].sum())
+    return total
+
+
+def engine_tie(lib_dir, tags):
+    """Stage 13 against stage 03 on the primary record of every truth read: the tag columns of grid/truth_flags.parquet
+    against reimpl_flags/<ref>.parquet, matched on (qname, flag, pos) within the reference (equal keys by order of
+    appearance), one reference at a time and only the needed columns.
+
+    Returns {rows, tags, mismatches: {tag: n}, missing_rows}. Rows without a counterpart are missing_rows and are not
+    compared; a tag column absent from either table counts every row as a mismatch.
+    """
+    lib_dir, tags = Path(lib_dir), list(tags)
+    truth_path = lib_dir / "grid" / "truth_flags.parquet"
+    refs = pc.unique(pq.read_table(truth_path, columns=["ref"]).column("ref")).to_pylist()
+    key = ["qname", "flag", "pos"]
+    rows, missing, mism = 0, 0, dict.fromkeys(tags, 0)
+    for ref in refs:
+        truth = pq.read_table(truth_path, filters=[("ref", "==", ref)]).drop_columns(["ref"])
+        rows += truth.num_rows
+        path = lib_dir / "reimpl_flags" / f"{ref}.parquet"
+        have = set(truth.column_names) - set(key)
+        if path.exists():
+            have &= set(pq.read_schema(path).names)
+        use = [t for t in tags if t in have]
+        for t in tags:
+            if t not in use:
+                mism[t] += truth.num_rows
+        if not path.exists():
+            missing += truth.num_rows
+            continue
+        got = pq.read_table(path, columns=[*key, *use])
+        got = got.filter(pc.and_(pc.equal(pc.bit_wise_and(got.column("flag"), 0x900), 0),
+                                 pc.is_in(got.column("qname"), value_set=truth.column("qname").combine_chunks())))
+        want = truth.select([*key, *use]).to_pandas()
+        got = got.to_pandas()
+        for df in (want, got):
+            df["_n"] = df.groupby(key).cumcount()
+        m = want.merge(got, on=[*key, "_n"], how="left", suffixes=("", "_r"), indicator=True)
+        both = m._merge == "both"
+        missing += int((~both).sum())
+        for t in use:
+            mism[t] += int((m.loc[both, t] != m.loc[both, f"{t}_r"]).sum())
+    return {"rows": rows, "tags": tags, "mismatches": mism, "missing_rows": missing}
 
 
 def subset_bam(bam, refs, out_bam):
@@ -121,6 +223,7 @@ def none_control(bam, refs, out_dir, db, fasta, gtf, covlen=300, threads=4):
     """Remove-all control in intron mode on a reference subset: subset BAM, createTRANS -i, original in-process, comparison.
 
     Files in out_dir are prefixed with the joined reference names; existing subset, TRANS and filtered BAM are reused.
+    The original writes <label>.<tag>.tmp.bam, renamed when it returns, so a filtered BAM is never a truncated one.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -128,6 +231,7 @@ def none_control(bam, refs, out_dir, db, fasta, gtf, covlen=300, threads=4):
     st = Setting(covlen, None, 0, True)
     sub, trans = out_dir / f"{label}.bam", out_dir / f"{label}.trans_i.pkl"
     filtered = out_dir / f"{label}.{setting_tag(st)}.bam"
+    partial = out_dir / f"{label}.{setting_tag(st)}.tmp.bam"
     secs = {}
     t0 = time.monotonic()
     if not Path(f"{sub}.bai").exists():
@@ -138,7 +242,11 @@ def none_control(bam, refs, out_dir, db, fasta, gtf, covlen=300, threads=4):
         create_trans(db, sub, trans, True, out_dir / f"{label}.createTRANS_i")
     secs["createTRANS"] = time.monotonic() - t0
     t0 = time.monotonic()
-    run_original(sub, trans, db, fasta, filtered, st, threads=threads)
+    if not filtered.exists():
+        if partial.exists():
+            subprocess.run([*TRASH, str(partial)], check=True)
+        run_original(sub, trans, db, fasta, partial, st, threads=threads)
+        partial.rename(filtered)
     secs["original"] = time.monotonic() - t0
     t0 = time.monotonic()
     res = compare_subset(sub, filtered, fasta, load_transcripts(gtf), st)
@@ -215,3 +323,4 @@ def main(argv):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+
