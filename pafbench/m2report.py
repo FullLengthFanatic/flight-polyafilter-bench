@@ -32,6 +32,9 @@ SPIKE_LABELS = ("internal", "tail", "other")
 EXPR_TERTILES = ("low", "mid", "high", "no_gene")
 READING = f"our reading of the polyAfilter code at commit {POLYAFILTER_COMMIT}, spec 3"
 BAM_TAGS_URL = "https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/outputs/cr-outputs-bam"
+DUP_FLAG_SOURCE = ("Cell Ranger sets the duplicate flag only on reads that it counts, that is reads with a valid UMI that are "
+                   "confidently mapped to one gene, and among those not on the read that stands for the UMI (cellranger 9.0.1 source, "
+                   "lib/rust/tx_annotation/src/mark_dups.rs lines 288 to 291 and read.rs lines 560 to 568).")
 CUTOFFS = "{templated_min}/{nontemplated_max}".format(**LABEL_CUTOFFS)
 PUBLISHED_TAGS = [setting_tag(s) for s in published()]
 N_CANDIDATES = len(COVLENS) * len(MINLENS) * len(MISMS)
@@ -948,8 +951,7 @@ def _re_counts_lines(base):
     if len(absent) == len(paths):
         return [f"Primary records by RE tag: {_not_run(base, absent)}"]
     out = ["Primary records by RE tag, our observation in these BAMs (`<lib>/grid/region_counts.parquet`, stage 13; the counts of one "
-           "tag, the same for every tag; a record is without the duplicate flag when SAM flag 0x400 is not set; no explanation "
-           "is attempted):", ""]
+           "tag, the same for every tag; a record is without the duplicate flag when SAM flag 0x400 is not set):", ""]
     rows, notes = [], []
     for lib, p in zip(LIBS, paths):
         if not p.exists():
@@ -964,6 +966,40 @@ def _re_counts_lines(base):
         rows += [[lib, re or "none", _int(r.total), _int(r.total_nondup) if has else "n/a"] for re, r in one.iterrows()]
     out += _table(["Library", "RE", "Primary records", "Primary records without the duplicate flag"], rows)
     return _notes(out, notes)
+
+
+def _dup_flag_caveat(base):
+    """Why the duplicate-free shares remove duplicates among counted reads only. The statement about Cell Ranger is from its
+    source; which regions have no flagged record in these BAMs is read from stage 13's region_counts.parquet."""
+    none = {}
+    for lib in LIBS:
+        p = base / lib / "grid" / "region_counts.parquet"
+        rc = pd.read_parquet(p) if p.exists() else None
+        if rc is None or "total_nondup" not in rc:
+            continue
+        one = rc[rc.tag == rc.tag.iloc[0]].groupby("re")[["total", "total_nondup"]].sum()
+        for re, r in one.iterrows():
+            if r.total > 0 and r.total == r.total_nondup:
+                none.setdefault(re, []).append(lib)
+    parts = []
+    for re, name in (("I", "intergenic"), ("N", "intronic"), ("E", "exonic")):
+        libs = none.get(re)
+        if not libs:
+            continue
+        if len(libs) == len(LIBS):
+            parts.append(f"on every {name} record")
+        elif parts:
+            parts.append(f"in {' and '.join(libs)}, on every {name} record")
+        else:
+            parts.append(f"on every {name} record of {' and '.join(libs)}")
+    if parts:
+        where = parts[0] + "".join((" and, " if q.startswith("in ") else " and ") + q for q in parts[1:])
+        absent = (f"The flag is therefore absent {where}, so the shares without PCR duplicates remove duplicates only among "
+                  "counted reads.")
+    else:
+        absent = "The shares without PCR duplicates therefore remove duplicates only among counted reads."
+    return (f"{DUP_FLAG_SOURCE} {absent} Milestone 3 repeats the comparison within called cells with a unit defined the same "
+            "way in every region.")
 
 
 def _burden_population(base):
@@ -1097,6 +1133,7 @@ def burden_section(base):
             out += ["", "burden/selection_bias.parquet has no records_nondup_share column: stage 13 predates it, so the spec 11 "
                         "rule below cannot be applied."]
         else:
+            out += ["", _dup_flag_caveat(base)]
             off = [r for r in sb.itertuples() if abs(r.labeled_share - r.records_nondup_share) > 0.05]
             out += ["", "Spec 11 says that where labeled and unlabeled molecules differ strongly, conclusions are stated for the "
                         "labeled population only; the threshold used here, a difference of more than 5 percentage points, is our "

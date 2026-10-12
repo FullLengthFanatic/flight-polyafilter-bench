@@ -48,7 +48,7 @@ Stage runs under memwatch (every `*.mem.json` under the base directory outside `
 | 18_burden.py | runs/18_burden.mem.json | 124 | 1.94 | 0 |
 | 20_validation_compare.py | runs/20_validation_compare.mem.json | 22,160 | 90.07 | 0 |
 | 20_validation_compare.py --reuse | runs/20_validation_reuse.mem.json | 137 | 4.14 | 0 |
-| 21_m2_summary.py | runs/21_m2_summary.mem.json | 4 | 0.72 | 0 |
+| 21_m2_summary.py | runs/21_m2_summary.mem.json | 4 | 0.73 | 0 |
 | 22_polyasite_a_content.py | runs/22_polyasite_a_content.mem.json | 75 | 2.65 | 0 |
 | polyAfilter.py createTRANS -i genes_2024A.db chr21_chr22.bam chr21_chr22.trans_i.pkl | validation/none_control/chr21_chr22.createTRANS_i.mem.json | 590 | 0.22 | 0 |
 | polyAfilter.py createTRANS -i genes_2024A.db chr21_chr22.bam chr21_chr22.trans_i.pkl | validation/subset_1179/chr21_chr22.createTRANS_i.mem.json | 2,532 | 0.22 | 0 |
@@ -1330,9 +1330,11 @@ Selection bias: share of labeled molecules versus share of primary records, by R
 | 1179 | I | 0.055 | 0.062 | 0.076 |
 | 1179 | N | 0.162 | 0.236 | 0.289 |
 
+Cell Ranger sets the duplicate flag only on reads that it counts, that is reads with a valid UMI that are confidently mapped to one gene, and among those not on the read that stands for the UMI (cellranger 9.0.1 source, lib/rust/tx_annotation/src/mark_dups.rs lines 288 to 291 and read.rs lines 560 to 568). The flag is therefore absent on every intergenic record and, in 1179, on every intronic record, so the shares without PCR duplicates remove duplicates only among counted reads. Milestone 3 repeats the comparison within called cells with a unit defined the same way in every region.
+
 Spec 11 says that where labeled and unlabeled molecules differ strongly, conclusions are stated for the labeled population only; the threshold used here, a difference of more than 5 percentage points, is our choice (the milestone 1 region check uses the same value). Pairs with a difference of more than 5 percentage points: 1419 E (labeled 0.419, without duplicates 0.366, 5.2 points); 1179 E (labeled 0.783, without duplicates 0.635, 14.8 points); 1179 N (labeled 0.162, without duplicates 0.289, 12.7 points).
 
-Primary records by RE tag, our observation in these BAMs (`<lib>/grid/region_counts.parquet`, stage 13; the counts of one tag, the same for every tag; a record is without the duplicate flag when SAM flag 0x400 is not set; no explanation is attempted):
+Primary records by RE tag, our observation in these BAMs (`<lib>/grid/region_counts.parquet`, stage 13; the counts of one tag, the same for every tag; a record is without the duplicate flag when SAM flag 0x400 is not set):
 
 | Library | RE | Primary records | Primary records without the duplicate flag |
 |---|---|---|---|

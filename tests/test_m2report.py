@@ -1033,6 +1033,7 @@ def test_burden_section_selection_bias_without_the_duplicate_free_baseline(base)
     assert "| Library | RE | Labeled share | Records share |" in s
     assert "records_nondup_share" in s and "stage 13 predates it" in s
     assert "cannot be applied" in s
+    assert "Cell Ranger sets the duplicate flag" not in s   # the caveat belongs to the duplicate-free column
 
 
 def test_burden_section_selection_bias_rule(base):
@@ -1059,6 +1060,40 @@ def test_burden_section_selection_bias_rule(base):
     sb["records_nondup_share"] = sb.labeled_share
     _write(base / "burden/selection_bias.parquet", sb)
     assert "No library and region pair differs by more than 5 percentage points" in m2report.burden_section(base)
+
+
+def test_burden_section_duplicate_flag_caveat(base):
+    sb = pd.DataFrame([("1417", "E", 0.421, 0.407, 0.350)],
+                      columns=["lib", "re", "labeled_share", "records_share", "records_nondup_share"])
+    _write(base / "burden/selection_bias.parquet", sb)
+    source = ("Cell Ranger sets the duplicate flag only on reads that it counts, that is reads with a valid UMI that are "
+              "confidently mapped to one gene, and among those not on the read that stands for the UMI (cellranger 9.0.1 source, "
+              "lib/rust/tx_annotation/src/mark_dups.rs lines 288 to 291 and read.rs lines 560 to 568).")
+    last = ("Milestone 3 repeats the comparison within called cells with a unit defined the same way in every region.")
+    # no region_counts.parquet: the source statement and its consequence, no claim about these BAMs
+    s = m2report.burden_section(base)
+    assert f"{source} The shares without PCR duplicates therefore remove duplicates only among counted reads. {last}" in s
+    assert "absent on every" not in s
+    assert s.index(source) < s.index("Spec 11 says")   # under the table, before the rule
+    # the regions without one flagged record are read from stage 13's counts: I everywhere, N in 1179 only
+    for lib in ("1417", "1419"):
+        _write(base / lib / "grid/region_counts.parquet", _region_counts())
+    cells = _region_counts()
+    cells.loc[cells.re == "N", "total_nondup"] = cells.loc[cells.re == "N", "total"]
+    _write(base / "1179/grid/region_counts.parquet", cells)
+    s = m2report.burden_section(base)
+    assert (f"{source} The flag is therefore absent on every intergenic record and, in 1179, on every intronic record, so "
+            f"the shares without PCR duplicates remove duplicates only among counted reads. {last}") in s
+    # one library only: the claim names it
+    (base / "1419/grid/region_counts.parquet").unlink()
+    (base / "1179/grid/region_counts.parquet").unlink()
+    s = m2report.burden_section(base)
+    assert "The flag is therefore absent on every intergenic record of 1417, so the shares" in s
+    # a library whose intergenic records do carry the flag is not named
+    flagged = _region_counts()
+    flagged.loc[flagged.re == "I", "total_nondup"] = 80
+    _write(base / "1417/grid/region_counts.parquet", flagged)
+    assert "absent on every" not in m2report.burden_section(base)
 
 
 def _region_counts(total_nondup=True):
