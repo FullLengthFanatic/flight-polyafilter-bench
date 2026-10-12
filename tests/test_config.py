@@ -49,7 +49,8 @@ def test_thresholds():
     for name, value in want.items():
         assert getattr(config, name) == value, name
     assert config.CLUSTER == {"target_sum": 10_000, "n_hvg": 2000, "n_pcs": 30, "k": 15, "resolution": 1.0,
-                              "resolutions_alt": (0.5, 2.0), "seeds": tuple(range(10))}
+                              "resolutions_alt": (0.5, 2.0), "seeds": tuple(range(10)), "leiden_flavor": "igraph",
+                              "leiden_n_iterations": 2}
     assert not hasattr(config, "RULE_VERSION")
 
 

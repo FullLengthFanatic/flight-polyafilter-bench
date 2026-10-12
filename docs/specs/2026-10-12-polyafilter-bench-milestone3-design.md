@@ -144,11 +144,13 @@ Stage numbers continue from 22. Scope item to stage: read groups, recount and ma
 |---|---|
 | h5py | read `molecule_info.h5` for the recount acceptance check |
 | anndata, scanpy | count container; normalisation, variable genes, PCA, neighbour graph, Leiden, UMAP, gene scores |
-| leidenalg, igraph | Leiden backend |
+| leidenalg, igraph | Leiden backend (igraph is the one called, see the note below the table) |
 | scikit-learn | adjusted Rand index, kNN classifier, cross-validation, ROC AUC |
 | umap-learn | UMAP coordinates, display only |
 | plotly | figures of the report page |
 | scikit-image (through the `scrublet` extra of scanpy) | only if D9 is answered "flag only": the doublet score |
+
+Note added on 2026-10-12, after the review of the first plan task. Stage 25 calls `scanpy.tl.leiden` with `flavor="igraph"`, `n_iterations=2` and `directed=False`, written out in `config.CLUSTER` as `leiden_flavor` and `leiden_n_iterations`. It is the call the toy test of that task ran (`tests/test_scanpy_stack.py`) and the one scanpy 1.11.5 names as its future default: its default call warns "In the future, the default backend for leiden will be igraph instead of leidenalg." and "To achieve the future defaults please pass: flavor="igraph" and n_iterations=2.  directed must also be False to work with igraph's implementation." (`scanpy/tools/_leiden.py`). The flavour is part of the result: on the neighbour graph of the test's toy matrix at seed 0 both flavours find the three planted classes at resolution 1.0, and at resolution 2.0 igraph gives 12 clusters and leidenalg 9, adjusted Rand index 0.449 (our observation, 2026-10-12). leidenalg stays installed and is not called. `CLUSTER` also holds `target_sum: 10000`, the `normalize_total` target of 3.3 step 2.
 
 Dry resolution today, nothing installed ([C] `req_m3_v2.in`, `req_m3_v2.resolved.txt`; `uv pip compile req_m3_v2.in --python-version 3.11`): scanpy 1.11.5, anndata 0.12.6, scikit-learn 1.9.1, leidenalg 0.12.0, igraph 1.0.0, h5py 3.16.0, plotly 7.1.0, umap-learn 0.5.12 resolve with the venv's pins unchanged (pandas 3.0.6, numpy 2.4.6, numba 0.68.0, scipy 1.17.1, pyarrow 25.0.1, pysam 0.24.1); the `scrublet` extra adds scikit-image 0.26.0, imageio, lazy-loader and tifffile. Resolution is not a run: the first plan task imports scanpy and runs its pipeline on a toy matrix. If it fails with pandas 3, stages 25 and 26 get their own venv (`.venv_sc`) and read the `.npz` and Parquet outputs of stage 24.
 

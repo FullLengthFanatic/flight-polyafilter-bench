@@ -46,8 +46,10 @@ XF_RECOUNT_TOLERANCE = 0
 RULE_AGREEMENT_MAX = 1e-6
 A4_PARALLEL = 4
 UNIT_BIN = 1000
+# leiden_flavor and leiden_n_iterations are the scanpy.tl.leiden call that tests/test_scanpy_stack.py checks; the igraph and
+# the leidenalg flavour give different partitions
 CLUSTER = {"target_sum": 10_000, "n_hvg": 2000, "n_pcs": 30, "k": 15, "resolution": 1.0, "resolutions_alt": (0.5, 2.0),
-           "seeds": tuple(range(10))}
+           "seeds": tuple(range(10)), "leiden_flavor": "igraph", "leiden_n_iterations": 2}
 CLASS_MARGIN = 0.1
 KNN_K = 15
 KNN_FOLDS = 5

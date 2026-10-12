@@ -30,9 +30,14 @@ def _leiden(a, seed, resolution):
     # "Cluster cells into subgroups"; resolution: "A parameter value controlling the coarseness of the clustering.";
     # random_state: "Change the initialization of the optimization."
     # https://scanpy.readthedocs.io/en/stable/generated/scanpy.tl.leiden.html
-    # Our observation with scanpy 1.11.5: without flavor="igraph", n_iterations=2 and directed=False the call raises a
-    # FutureWarning ("In the future, the default backend for leiden will be igraph instead of leidenalg.").
-    sc.tl.leiden(a, resolution=resolution, random_state=seed, flavor="igraph", n_iterations=2, directed=False)
+    # flavor: "Which package's implementation to use."; n_iterations: "How many iterations of the Leiden clustering
+    # algorithm to perform." (same page). The flavour is part of the result, so both come from config.CLUSTER: on the graph
+    # of this toy at resolution 2.0 and seed 0, igraph gives 12 clusters and leidenalg 9, adjusted Rand index 0.449 (our
+    # observation with scanpy 1.11.5). The values are those scanpy names as its future defaults, in the FutureWarning of
+    # its default call: "To achieve the future defaults please pass: flavor="igraph" and n_iterations=2.  directed must
+    # also be False to work with igraph's implementation." (scanpy 1.11.5, scanpy/tools/_leiden.py).
+    sc.tl.leiden(a, resolution=resolution, random_state=seed, flavor=CLUSTER["leiden_flavor"],
+                 n_iterations=CLUSTER["leiden_n_iterations"], directed=False)
     return a.obs["leiden"].to_numpy().astype(str)
 
 
