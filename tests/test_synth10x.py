@@ -17,30 +17,35 @@ from tests.synth import CELLS_10X, SETTINGS_10X, UNCALLED_10X, build_10x, run_or
 TAGS = [setting_tag(s) for s in SETTINGS_10X]
 GENES = ["g1", "g2", "g3", "g4"]
 CELL = {v: k for k, v in CELLS_10X.items()}
-# designed read groups per case: {gene: (n_reads, n_winner_reads, n_pa, re_class, reads removed at each of TAGS)}
+# designed read groups per case: {gene: (n_reads, n_winner_reads, n_pa, re_class, end3, end3_nonpa, reads removed at each
+# of TAGS)}. end3 is the 3'-most aligned base of the group in transcript sense, 0-based: start + 89 of the last 90 nt read
+# of g1 and g3, the lowest start of g2 (minus strand); end3_nonpa the same over the reads without pa, -1 without any.
 GROUPS = {
-    "one_inside": {"g1": (1, 1, 0, 1, 1, 1, 1, 1)},
-    "two_one_inside": {"g1": (2, 2, 0, 1, 1, 1, 2, 2)},
-    "spliced": {"g1": (3, 3, 0, 1, 1, 1, 3, 3)},
-    "protected": {"g1": (1, 1, 0, 1, 0, 0, 0, 0)},
-    "intronic": {"g1": (1, 1, 0, 2, 0, 1, 0, 1)},
-    "exon_intron": {"g1": (2, 2, 0, 3, 0, 1, 1, 2)},
-    "pa_only": {"g1": (1, 1, 1, 1, 0, 0, 1, 1)},
-    "pa_and_member": {"g1": (2, 2, 1, 1, 0, 0, 1, 1)},
-    "three_vs_one": {"g1": (3, 3, 0, 3, 2, 3, 2, 3), "g3": (1, 0, 0, 1, 0, 0, 0, 0)},
-    "leads_by_one": {"g1": (2, 2, 0, 1, 1, 1, 2, 2), "g2": (1, 0, 0, 1, 0, 0, 0, 0)},
-    "tie": {"g1": (2, 0, 0, 1, 0, 0, 0, 0), "g2": (2, 0, 0, 1, 0, 0, 0, 0)},
-    "tie_broken": {"g1": (2, 0, 0, 3, 0, 1, 0, 1), "g2": (2, 0, 0, 1, 0, 0, 0, 0)},
-    "g3_two": {"g3": (2, 2, 0, 1, 0, 0, 2, 2)},
-    "three_genes": {"g1": (3, 3, 0, 3, 1, 2, 1, 2), "g2": (2, 0, 0, 3, 0, 1, 0, 1), "g3": (2, 0, 0, 1, 0, 0, 0, 0)},
-    "three_vs_two": {"g1": (3, 3, 0, 1, 2, 2, 2, 2), "g2": (2, 0, 0, 1, 0, 0, 0, 0)},
-    "g2_inside": {"g2": (1, 1, 0, 1, 1, 1, 1, 1)},
-    "alone_xf19": {"g3": (1, 0, 0, 1, 0, 0, 0, 0)},
-    "alone_xf19_partner": {"g1": (4, 4, 0, 1, 0, 0, 0, 0)},
-    "g2_partial": {"g2": (2, 2, 0, 1, 1, 1, 2, 2)},
-    "chain": {"g1": (1, 1, 0, 1, 0, 0, 0, 0), "g2": (1, 0, 0, 1, 0, 0, 0, 0), "g3": (1, 0, 0, 1, 0, 0, 0, 0)},
-    "chain_end": {"g1": (4, 4, 0, 1, 0, 0, 0, 0)},
-    "minus_pa": {"g2": (2, 2, 1, 1, 0, 0, 0, 0)},
+    "one_inside": {"g1": (1, 1, 0, 1, 1239, 1239, 1, 1, 1, 1)},
+    "two_one_inside": {"g1": (2, 2, 0, 1, 2239, 2239, 1, 1, 2, 2)},
+    "spliced": {"g1": (3, 3, 0, 1, 3109, 3109, 1, 1, 3, 3)},
+    "protected": {"g1": (1, 1, 0, 1, 2594, 2594, 0, 0, 0, 0)},
+    "intronic": {"g1": (1, 1, 0, 2, 1539, 1539, 0, 1, 0, 1)},
+    "exon_intron": {"g1": (2, 2, 0, 3, 1539, 1539, 0, 1, 1, 2)},
+    "pa_only": {"g1": (1, 1, 1, 1, 3659, -1, 0, 0, 1, 1)},
+    "pa_and_member": {"g1": (2, 2, 1, 1, 3939, 3789, 0, 0, 1, 1)},
+    "three_vs_one": {"g1": (3, 3, 0, 3, 3439, 3439, 2, 3, 2, 3), "g3": (1, 0, 0, 1, 1489, 1489, 0, 0, 0, 0)},
+    "leads_by_one": {"g1": (2, 2, 0, 1, 3109, 3109, 1, 1, 2, 2), "g2": (1, 0, 0, 1, 4290, 4290, 0, 0, 0, 0)},
+    "tie": {"g1": (2, 0, 0, 1, 3969, 3969, 0, 0, 0, 0), "g2": (2, 0, 0, 1, 4210, 4210, 0, 0, 0, 0)},
+    "tie_broken": {"g1": (2, 0, 0, 3, 2594, 2594, 0, 1, 0, 1), "g2": (2, 0, 0, 1, 4210, 4210, 0, 0, 0, 0)},
+    "g3_two": {"g3": (2, 2, 0, 1, 989, 989, 0, 0, 2, 2)},
+    "three_genes": {"g1": (3, 3, 0, 3, 2594, 2594, 1, 2, 1, 2), "g2": (2, 0, 0, 3, 4250, 4250, 0, 1, 0, 1),
+                    "g3": (2, 0, 0, 1, 1489, 1489, 0, 0, 0, 0)},
+    "three_vs_two": {"g1": (3, 3, 0, 1, 3969, 3969, 2, 2, 2, 2), "g2": (2, 0, 0, 1, 4210, 4210, 0, 0, 0, 0)},
+    "g2_inside": {"g2": (1, 1, 0, 1, 4550, 4550, 1, 1, 1, 1)},
+    "alone_xf19": {"g3": (1, 0, 0, 1, 1489, 1489, 0, 0, 0, 0)},
+    "alone_xf19_partner": {"g1": (4, 4, 0, 1, 3979, 3979, 0, 0, 0, 0)},
+    "g2_partial": {"g2": (2, 2, 0, 1, 5350, 5350, 1, 1, 2, 2)},
+    "chain": {"g1": (1, 1, 0, 1, 3889, 3889, 0, 0, 0, 0), "g2": (1, 0, 0, 1, 4250, 4250, 0, 0, 0, 0),
+              "g3": (1, 0, 0, 1, 1489, 1489, 0, 0, 0, 0)},
+    "chain_end": {"g1": (4, 4, 0, 1, 3994, 3994, 0, 0, 0, 0)},
+    # the pa read is the 3'-most of its group (lowest start on the minus strand), the member ends 80 nt upstream of it
+    "minus_pa": {"g2": (2, 2, 1, 1, 4210, 4290, 0, 0, 0, 0)},
 }
 # the matrix Cell Ranger would write, from the designed xf bits
 MATRIX = {("c1", "g1"): 8, ("c2", "g1"): 2, ("c2", "g3"): 1, ("c3", "g1"): 2, ("c3", "g2"): 1, ("c4", "g1"): 1, ("c4", "g2"): 1,
@@ -177,15 +182,20 @@ def test_groups_table_is_the_designed_one_and_equals_a_naive_count_of_the_bam(sy
     naive = {}
     for r in recs:
         if _in_group(r):
-            g = naive.setdefault((r["CB"], r["UB"], r["GX"]), {"n": 0, "win": 0, "pa": 0, "re": set(), "rm": [0] * len(TAGS)})
+            g = naive.setdefault((r["CB"], r["UB"], r["GX"]),
+                                 {"n": 0, "win": 0, "pa": 0, "re": set(), "last": [], "last_nonpa": [], "rm": [0] * len(TAGS)})
             g["n"] += 1
             g["win"] += not r["xf"] & 2
             g["pa"] += r.get("pa", 0) > 0
             g["re"].add(r["RE"])
+            g["most"] = min if r["flag"] & 16 else max       # the 3'-most base is the lowest one on the minus strand
+            g["last"].append(r["pos"] if r["flag"] & 16 else r["end"] - 1)
+            g["last_nonpa"] += [] if "pa" in r else g["last"][-1:]
             g["rm"] = [k + int(x) for k, x in zip(g["rm"], removed.loc[r["qname"]])]
-    naive = {k: (g["n"], g["win"], g["pa"], ("E" in g["re"]) + 2 * ("N" in g["re"]), *g["rm"]) for k, g in naive.items()}
+    naive = {k: (g["n"], g["win"], g["pa"], ("E" in g["re"]) + 2 * ("N" in g["re"]), g["most"](g["last"]),
+                 g["most"](g["last_nonpa"], default=-1), *g["rm"]) for k, g in naive.items()}
     t = synth10x.groups
-    columns = ["case", "cb", "ub", "gene", "n_reads", "n_winner_reads", "n_pa", "re_class"]
+    columns = ["case", "cb", "ub", "gene", "n_reads", "n_winner_reads", "n_pa", "re_class", "end3", "end3_nonpa"]
     assert list(t.columns) == columns + [f"rm_{x}" for x in TAGS]
     table = {(r.cb, r.ub, r.gene): tuple(int(x) for x in r[4:]) for r in t.itertuples(index=False)}
     assert table == naive and len(t) == len(naive) == 31
@@ -241,7 +251,7 @@ def test_molecule_info_rows_equal_the_counted_groups(synth10x, recs):
     assert [bar[i] + "-1" for i in pf[:, 0]] == sorted(CELL)
     # the uncalled barcode sorts second, so a barcode index is not a row of barcodes.tsv.gz
     assert pf[:, 0].tolist() == [0, 2, 3, 4, 5]
-    order =list(zip(cols["barcode_idx"].tolist(), cols["feature_idx"].tolist(), cols["umi"].tolist()))
+    order = list(zip(cols["barcode_idx"].tolist(), cols["feature_idx"].tolist(), cols["umi"].tolist()))
     assert order == sorted(order) and len(set(order)) == len(order)
     support = Counter((r["CB"], r["GX"], r["UB"]) for r in recs if "CB" in r and "UB" in r and r["xf"] in (17, 25))
     code = lambda umi: sum("ACGT".index(b) << 2 * i for i, b in enumerate(reversed(umi)))

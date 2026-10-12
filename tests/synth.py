@@ -196,7 +196,8 @@ RULE_10X = {
 class Synth10x(Synth):
     outs: Path           # the BAM's folder, with filtered_feature_bc_matrix/ and molecule_info.h5 as Cell Ranger writes them
     reads: pd.DataFrame  # one row per record: qname, case, ref, pos, end, reverse, cb, ur, ub, gx, re, xf, pa, removed per tag
-    groups: pd.DataFrame  # one row per read group: case, cb, ub, gene, n_reads, n_winner_reads, n_pa, re_class, rm_<tag>
+    # one row per read group: case, cb, ub, gene, n_reads, n_winner_reads, n_pa, re_class, end3, end3_nonpa, rm_<tag>
+    groups: pd.DataFrame
     events: pd.DataFrame  # designed, one row per cell, UMI and tag: case, cb, ub, tag, before, after, lost, gained, switched
 
 
@@ -437,11 +438,18 @@ def build_10x(tmp: Path) -> Synth10x:
     _outs_10x(outs, reads, genes)
     # read groups (design 3.1): called cell, UB, one gene of the feature list in GX, xf bit 1
     g = reads[reads.cb.isin(list(CELLS_10X.values())) & reads.ub.notna() & reads.gx.isin(genes) & ((reads.xf & 1) == 1)]
-    g = g.assign(winner=(g.xf & 2) == 0, has_pa=g.pa > 0, e=g.re == "E", n=g.re == "N")
+    # end3 (design 3.1) is the 3'-most aligned base in transcript sense, 0-based: the last base of a forward record, the
+    # first of a reverse one. Negated on the reverse strand, so that the 3'-most base of a group is a maximum on both.
+    last = (g.end - 1).where(~g.reverse, -g.pos)
+    g = g.assign(winner=(g.xf & 2) == 0, has_pa=g.pa > 0, e=g.re == "E", n=g.re == "N", last=last,
+                 last_nonpa=last.where(g.pa == 0))
     groups = g.groupby(["case", "cb", "ub", "gx"], sort=False).agg(
         n_reads=("xf", "size"), n_winner_reads=("winner", "sum"), n_pa=("has_pa", "sum"), e=("e", "any"), n=("n", "any"),
+        end3=("last", "max"), end3_nonpa=("last_nonpa", "max"),
         **{f"rm_{t}": (t, "sum") for t in tags}).reset_index().rename(columns={"gx": "gene"})
     groups.insert(7, "re_class", groups.pop("e") + 2 * groups.pop("n"))
+    for c in ("end3", "end3_nonpa"):  # -1: no record without pa
+        groups[c] = groups[c].abs().fillna(-1).astype(int)
     units = groups.drop_duplicates(["cb", "ub"])
     events = pd.DataFrame([(u.case, u.cb, u.ub, tag, RULE_10X[u.case][0], after) for u in units.itertuples()
                            for tag, after in zip(tags, RULE_10X[u.case][1:])],
