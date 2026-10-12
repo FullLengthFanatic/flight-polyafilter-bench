@@ -28,7 +28,9 @@ def test_inputs_exist():
 
 
 def test_dependencies_are_declared_and_installed():
-    deps = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["dependencies"]
+    project = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]
+    assert project["requires-python"] == ">=3.11"  # tomllib, read here, is in the standard library from 3.11
+    deps = project["dependencies"]
     assert {"scanpy[scrublet]", "anndata", "scikit-learn", "leidenalg", "igraph", "h5py", "plotly", "umap-learn"} <= set(deps)
     for d in deps:
         assert version(d.split("[")[0]), d
