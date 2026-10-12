@@ -305,8 +305,10 @@ def _reads_10x(rng, hdr):
     # chr21:33 to 36 Mb: 5,025 of 88,073 records carry GX and AN, 4,946 of them with xf 25 or 17, for example GX
     # ENSG00000227757, RE N, AN ENSG00000205930,-, xf 25). No gene of this annotation overlaps g1; the tag names g2.
     add("intronic", "c1", "CCGGAATTCCGG", "g1", 1450, 25, re="N", an="g2,-")
-    add("exon_intron", "c1", "CGATCGATTAGC", "g1", 1005, 25)
+    # the intronic read has the smaller name; the exonic one is still the UMI count (transcriptomic reads come first in
+    # UmiSelectKey, cellranger 9.0.1, lib/rust/tx_annotation/src/mark_dups.rs lines 110 to 114 and 137 to 146)
     add("exon_intron", "c1", "CGATCGATTAGC", "g1", 1450, 17, re="N")
+    add("exon_intron", "c1", "CGATCGATTAGC", "g1", 1005, 25)
     # pa reads: alone in their group (no read without pa), and as the 3'-most read of a group on each strand. 60 nt are
     # aligned and the 30 at the 3' end of the read soft-clipped, so the 3'-most aligned base is not start + 89.
     add("pa_only", "c1", "GAGATCTCTAGA", "g1", 3600, 25, cigar="60M30S", pa=30)

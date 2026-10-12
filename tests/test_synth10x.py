@@ -389,10 +389,18 @@ def test_designed_events_equal_the_rule_on_the_reads_that_survive(synth10x, recs
 
 
 def _cell_ranger(reads):
-    """Port of correct_umis and determine_low_support_umigenes for the reads of one barcode, [(raw UMI, gene)], to
-    [(corrected UMI, low support)] (cellranger 9.0.1, lib/rust/tx_annotation/src/mark_dups.rs, lines 19 to 59, 86 to 108
-    and 226 to 239: one read of each corrected group is moved before low support is decided)."""
-    counts = Counter(reads)
+    """Port of the duplicate marking of one barcode, [(read name, raw UMI, gene, exonic)] to [(corrected UMI, xf, duplicate
+    flag)] (cellranger 9.0.1, lib/rust/tx_annotation/src/mark_dups.rs: correct_umis, lines 19 to 59;
+    determine_low_support_umigenes, lines 86 to 108, after one read of each corrected group has moved, lines 226 to 239;
+    the smallest UmiSelectKey of each raw UMI and gene, lines 137 to 152, handed to the corrected UMI, lines 248 to 268;
+    the read with that name is the UMI count unless its group is low support, lines 304 to 325. The key orders
+    transcriptomic before other reads, `Txomic, NonTxomic` in lib/rust/umi/src/lib.rs lines 104 and 105, then by read name;
+    here RE E stands for transcriptomic, the fixture has no TX tag. The duplicate flag goes on the reads that are neither,
+    lib/rust/tx_annotation/src/read.rs lines 561 to 569)."""
+    counts = Counter((umi, gene) for _, umi, gene, _ in reads)
+    min_key = {}
+    for name, umi, gene, exonic in reads:
+        min_key[(umi, gene)] = min(min_key.get((umi, gene), (2,)), (not exonic, name))
     corr = {}
     for (umi, gene), n in counts.items():
         best, best_n = umi, n
@@ -414,18 +422,33 @@ def _cell_ranger(reads):
         top = max(per_gene.values())
         tied = sum(n == top for n in per_gene.values()) >= 2
         low |= {(umi, g) for g, n in per_gene.items() if tied or n < top}
-    return [(corr.get(r, r[0]), (corr.get(r, r[0]), r[1]) in low) for r in reads]
+    min_raw = {}
+    for (umi, gene), dest in corr.items():
+        if umi < dest or (dest, gene) in corr:
+            min_raw[(dest, gene)] = min(min_raw.get((dest, gene), umi), umi)
+    min_key |= {(dest, gene): min_key[(umi, gene)] for (dest, gene), umi in min_raw.items()}
+    out = []
+    for name, umi, gene, _ in reads:
+        key = (corr.get((umi, gene), umi), gene)
+        count = key not in low and min_key[key][1] == name
+        out.append((key[0], 17 + 2 * (key in low) + 8 * count, key not in low and not count))
+    return out
 
 
-def test_cell_ranger_code_gives_the_designed_ub_and_low_support_from_the_raw_umis(recs):
+def test_cell_ranger_code_gives_the_designed_ub_xf_and_duplicate_flag_from_the_raw_umis(recs):
     by_cell = defaultdict(list)
     for r in recs:
         if "CB" in r and "UB" in r and r["xf"] & 1:      # valid barcode, valid UMI, confidently mapped to one gene
             by_cell[r["CB"]].append(r)
     assert set(by_cell) == set(CELL) | {UNCALLED_10X}
     for cb, rs in by_cell.items():
-        for r, (ub, low) in zip(rs, _cell_ranger([(r["UR"], r["GX"]) for r in rs])):
-            assert (r["UB"], bool(r["xf"] & 2)) == (ub, low), r["qname"]
+        port = _cell_ranger([(r["qname"], r["UR"], r["GX"], r["RE"] == "E") for r in rs])
+        for r, want in zip(rs, port):
+            assert (r["UB"], r["xf"], bool(r["flag"] & 1024)) == want, r["qname"]
+    # exon_intron: the intronic read has the smaller name, and the exonic one is the UMI count
+    intronic, exonic = sorted((r for r in by_cell[CELLS_10X["c1"]] if r["qname"].startswith("exon_intron:")),
+                              key=lambda r: r["qname"])
+    assert (intronic["RE"], intronic["xf"], exonic["RE"], exonic["xf"]) == ("N", 17, "E", 25)
 
 
 def test_fixture_is_deterministic(synth10x, recs, tmp_path):
