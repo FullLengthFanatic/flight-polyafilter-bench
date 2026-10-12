@@ -228,13 +228,16 @@ def _reads_10x(rng, hdr):
     cells = CELLS_10X | {"u": UNCALLED_10X}
     reads, rows = [], []
 
-    def add(case, cell, umi, gene, pos, xf, cigar="90M", re="E", ub=None, uy="F" * 12, pa=0, gx=None, antisense=False, mapq=255):
-        """gene places the record (its contig and strand) and is its GX unless gx, antisense or RE I say otherwise;
-        ub is given only where the corrected UMI differs from the raw one."""
+    def add(case, cell, umi, gene, pos, xf, cigar="90M", re="E", ub=None, uy="F" * 12, pa=0, gx=None, an=None, antisense=False,
+            mapq=255):
+        """gene places the record (its contig and strand) and is its GX unless gx, antisense or RE I say otherwise (gx=""
+        leaves the tag out); an is the AN tag, the gene form on an antisense record unless given; ub is given only where
+        the corrected UMI differs from the raw one."""
         ref, reverse = place[gene]
         reverse ^= antisense
         cb = cells.get(cell)
-        gx = None if antisense or re == "I" else gx or gene
+        gx = None if antisense or re == "I" else gene if gx is None else gx or None
+        an = an or (f"{gene},-" if antisense else None)
         ub = (ub or umi) if min(ord(q) - 33 for q in uy) >= 10 else None
         a = pysam.AlignedSegment(hdr)
         a.query_name = f"{case}:{len(reads):03d}"
@@ -252,8 +255,8 @@ def _reads_10x(rng, hdr):
             a.set_tag("GX", gx)
             a.set_tag("GN", gx.upper())
         a.set_tag("RE", re, value_type="A")
-        if antisense:
-            a.set_tag("AN", f"{gene},-")
+        if an:
+            a.set_tag("AN", an)
         a.set_tag("xf", xf, value_type="i")
         a.set_tag("CR", cb[:-2] if cb else "AAACCCAAGGAGNGTA")
         a.set_tag("CY", "F" * 16)
@@ -280,8 +283,11 @@ def _reads_10x(rng, hdr):
     add("spliced", "c1", "AGTCAGTCAGTC", "g1", 3020, 17)
     # A read in the protected 3' end of t2, over the planted stretch at 2549: never removed.
     add("protected", "c1", "CATGCATGGTAC", "g1", 2505, 25)
-    # Intronic molecule that only -i removes, and a molecule with an exonic and an intronic read (re_class 3).
-    add("intronic", "c1", "CCGGAATTCCGG", "g1", 1450, 25, re="N")
+    # Intronic molecule that only -i removes, and a molecule with an exonic and an intronic read (re_class 3). The first
+    # carries an AN next to its GX, as a counted read that is antisense to another gene does (our observation on 1417,
+    # chr21:33 to 36 Mb: 5,025 of 88,073 records carry GX and AN, 4,946 of them with xf 25 or 17, for example GX
+    # ENSG00000227757, RE N, AN ENSG00000205930,-, xf 25). No gene of this annotation overlaps g1; the tag names g2.
+    add("intronic", "c1", "CCGGAATTCCGG", "g1", 1450, 25, re="N", an="g2,-")
     add("exon_intron", "c1", "CGATCGATTAGC", "g1", 1005, 25)
     add("exon_intron", "c1", "CGATCGATTAGC", "g1", 1450, 17, re="N")
     # pa reads: alone in their group (no read without pa), and as the 3'-most read of a group on each strand.
@@ -291,11 +297,16 @@ def _reads_10x(rng, hdr):
     add("minus_pa", "c5", "TCGATCGAAGCT", "g2", 4210, 25, cigar="60M", pa=28)
     add("minus_pa", "c5", "TCGATCGAAGCT", "g2", 4290, 17)
     # Records of called cells that are in no read group: two genes in GX; one gene but MAPQ below 255 and xf 0; antisense
-    # (AN, no GX); intergenic. All sit where a gene read would be removed or kept, so they count in the record totals.
+    # (AN, no GX); intronic on the sense strand without GX and AN, with and without a UB, which -i removes (the intronic
+    # records of a library counted without introns; our observation on 1179, chr21:33.2 to 33.3 Mb: of 19,319 records 8,480
+    # are RE N with xf 0, a UB and neither GX nor AN, and 213 the same without a UB); intergenic. All sit where a gene read
+    # would be removed or kept, so they count in the record totals.
     add("multi_gene", "c1", "TACGTACGATCG", "g1", 1150, 0, gx="g1;g2")
     add("multimapped", "c1", "TCAGGACTTCAG", "g1", 2150, 0, mapq=3)
     add("antisense", "c1", "TGCATGCAACGT", "g1", 1200, 0, antisense=True)
     add("antisense", "c1", "TTGGCCAAGGTT", "g1", 1500, 0, re="N", antisense=True)
+    add("intronic_no_gx", "c1", "GGCCTTAAGGCC", "g1", 1450, 0, re="N", gx="")
+    add("intronic_no_gx", "c1", "GTACCATGGTAC", "g1", 1450, 0, re="N", gx="", uy="FFF$FFFFFFFF")
     add("intergenic", "c1", "ATATGCGCATAT", "g1", 4050, 0, re="I")
     add("intergenic", "c2", "ATTACGGCATTA", "g1", 100, 0, re="I")
     # Not a called cell: a barcode outside barcodes.tsv.gz with counted molecules, and a record without CB (our observation

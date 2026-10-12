@@ -50,6 +50,17 @@ GROUPS = {
 # the matrix Cell Ranger would write, from the designed xf bits
 MATRIX = {("c1", "g1"): 8, ("c2", "g1"): 2, ("c2", "g3"): 1, ("c3", "g1"): 2, ("c3", "g2"): 1, ("c4", "g1"): 1, ("c4", "g2"): 1,
           ("c5", "g1"): 2, ("c5", "g2"): 1}
+# record counters of design 3.1 per called cell, RE and presence of a GX tag: (records, records with a UB, records removed
+# at each of TAGS), written by hand from the reads of the fixture
+CELL_RECORDS = {
+    ("c1", "E", True): (14, 13, 6, 6, 12, 12), ("c1", "N", True): (2, 2, 0, 2, 0, 2), ("c1", "E", False): (1, 1, 0, 0, 0, 0),
+    # two antisense and two sense records, one of the sense ones without a UB; -i removes the sense ones
+    ("c1", "N", False): (3, 2, 0, 2, 0, 2), ("c1", "I", False): (1, 1, 0, 0, 0, 0),
+    ("c2", "E", True): (15, 15, 3, 3, 6, 6), ("c2", "N", True): (2, 2, 0, 2, 0, 2), ("c2", "I", False): (1, 1, 0, 0, 0, 0),
+    ("c3", "E", True): (11, 11, 4, 4, 4, 4), ("c3", "N", True): (2, 2, 0, 2, 0, 2),
+    ("c4", "E", True): (7, 7, 1, 1, 2, 2),
+    ("c5", "E", True): (9, 9, 0, 0, 0, 0),
+}
 
 
 def _records(bam):
@@ -158,7 +169,14 @@ def test_every_designed_case_is_present(synth10x, recs):
     assert len(by_case["intergenic"]) == 2
     for r in by_case["intergenic"]:
         assert r["RE"] == "I" and "GX" not in r and "AN" not in r and r["xf"] == 0
-    assert all(r["RE"] == "N" and r["GX"] == "g1" and r["xf"] == 25 for r in by_case["intronic"])
+    # sense strand, intronic, outside every read group: the kind of record that carries the intronic removal of 1179
+    with_ub, without_ub = sorted(by_case["intronic_no_gx"], key=lambda r: "UB" not in r)
+    for r in (with_ub, without_ub):
+        assert r["RE"] == "N" and "GX" not in r and "AN" not in r and r["xf"] == 0 and r["CB"] in CELL and not r["flag"] & 16
+    assert "UB" in with_ub and "UB" not in without_ub
+    # a counted read that is antisense to another gene keeps its GX next to the AN
+    (intronic,) = by_case["intronic"]
+    assert (intronic["RE"], intronic["GX"], intronic["AN"], intronic["xf"]) == ("N", "g1", "g2,-", 25)
     spliced = by_case["spliced"]
     assert sum("N" in r["cigar"] for r in spliced) == 1 and max(r["pos"] for r in spliced) - min(r["pos"] for r in spliced) >= 400
     assert {r["ref"] for r in by_case["three_vs_one"]} == {"chrA", "chrB"}
@@ -174,7 +192,24 @@ def test_every_designed_case_is_present(synth10x, recs):
         "chain_end": [("g1", False, 17), ("g1", False, 17), ("g1", True, 17), ("g1", True, 25)],
     }
     assert sum(r["UR"] != r.get("UB", r["UR"]) for r in recs) == 5
-    assert set(by_case) == set(GROUPS) | {"multi_gene", "multimapped", "no_ub", "uncalled", "no_cb", "antisense", "intergenic"}
+    assert set(by_case) == set(GROUPS) | {"multi_gene", "multimapped", "no_ub", "uncalled", "no_cb", "antisense", "intergenic",
+                                              "intronic_no_gx"}
+
+
+def test_record_counters_per_cell_region_and_gx_are_the_designed_ones(synth10x, recs):
+    removed = synth10x.reads.set_index("qname")[TAGS]
+    naive = {}
+    for r in recs:
+        if r.get("CB") in CELL:
+            n = naive.setdefault((CELL[r["CB"]], r["RE"], "GX" in r), [0] * (2 + len(TAGS)))
+            n[0] += 1
+            n[1] += "UB" in r
+            n[2:] = [k + int(x) for k, x in zip(n[2:], removed.loc[r["qname"]])]
+    assert {k: tuple(n) for k, n in naive.items()} == CELL_RECORDS
+    # what a stage that drops removals of records without GX, or takes AN for "no GX", would get wrong
+    no_gx = [n for (_, _, gx), n in CELL_RECORDS.items() if not gx]
+    assert sum(n[0] for n in no_gx) > sum(n[1] for n in no_gx) and any(any(n[2:]) for n in no_gx)
+    assert sum("AN" in r and "GX" in r and r["xf"] & 1 for r in recs) == 1
 
 
 def test_groups_table_is_the_designed_one_and_equals_a_naive_count_of_the_bam(synth10x, recs):
