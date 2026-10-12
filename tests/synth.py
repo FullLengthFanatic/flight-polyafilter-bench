@@ -413,15 +413,16 @@ def _outs_10x(outs, reads, genes):
         f["gem_group"] = np.ones(len(rows), np.uint16)
 
 
-def build_10x(tmp: Path, seed: int = 7) -> Synth10x:
+def build_10x(tmp: Path) -> Synth10x:
     """The genome and annotation of build() with a designed Cell Ranger outs folder: possorted_genome_bam.bam, the filtered
     matrix and molecule_info.h5 (design of 2026-10-12, section 3.0, Tests). reads, groups and events are the designed truth
     for the stages that read them; the removed columns come from flags.flag_reference at SETTINGS_10X.
 
-    The cases are designed on the genome of seed 7. Another seed can put 8 A's in a row somewhere and add a window (our
-    observation: seeds 4 and 15 of 0 to 24 change a removed read); events then no longer fits the removed columns.
+    The cases are designed on the genome of seed 7, the default of build(), and there is no seed argument: another seed can
+    put 8 A's in a row somewhere and add a window (our observation: seeds 4 and 15 of 0 to 24 change a removed read), and
+    events then no longer fits the removed columns.
     """
-    rng = random.Random(seed)
+    rng = random.Random(7)
     fasta, gtf, db = _genome(tmp, rng)
     hdr = pysam.AlignmentHeader.from_dict(HEADER | {"CO": CO_10X})
     records, reads = _reads_10x(rng, hdr)

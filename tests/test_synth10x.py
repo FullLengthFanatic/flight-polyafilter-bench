@@ -370,7 +370,7 @@ def test_cell_ranger_code_gives_the_designed_ub_and_low_support_from_the_raw_umi
             assert (r["UB"], bool(r["xf"] & 2)) == (ub, low), r["qname"]
 
 
-def test_fixture_is_deterministic_for_a_seed(synth10x, recs, tmp_path):
+def test_fixture_is_deterministic(synth10x, recs, tmp_path):
     again = build_10x(tmp_path)
     assert _records(again.bam) == recs
     assert _outs(again) == _outs(synth10x)
@@ -382,8 +382,8 @@ def test_fixture_is_deterministic_for_a_seed(synth10x, recs, tmp_path):
         pd.testing.assert_frame_equal(getattr(again, name), getattr(synth10x, name))
 
 
-def test_another_seed_changes_the_genome_and_keeps_the_records(synth10x, tmp_path):
-    other = build_10x(tmp_path, seed=8)
-    assert other.fasta.read_text() != synth10x.fasta.read_text()
-    cols = ["qname", "ref", "pos", "end", "cb", "ur", "ub", "gx", "xf"]
-    pd.testing.assert_frame_equal(other.reads[cols], synth10x.reads[cols])
+def test_fixture_cannot_be_built_on_another_genome(tmp_path):
+    # the cases are designed on the genome of seed 7; on that of seed 4 a random run of A's removes two more reads and
+    # the events table contradicts the removed columns (our observation, seeds 0 to 24)
+    with pytest.raises(TypeError):
+        build_10x(tmp_path, seed=4)
