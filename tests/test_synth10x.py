@@ -56,7 +56,7 @@ MATRIX = {("c1", "g1"): 8, ("c2", "g1"): 2, ("c2", "g3"): 1, ("c3", "g1"): 2, ("
 # at each of TAGS), written by hand from the reads of the fixture
 CELL_RECORDS = {
     ("c1", "E", True): (14, 13, 6, 6, 12, 12), ("c1", "N", True): (2, 2, 0, 2, 0, 2), ("c1", "E", False): (1, 1, 0, 0, 0, 0),
-    # two antisense and two sense records, one of the sense ones without a UB; -i removes the sense ones
+    # one antisense and two sense records, one of the sense ones without a UB; -i removes the sense ones
     ("c1", "N", False): (3, 2, 0, 2, 0, 2), ("c1", "I", False): (1, 1, 0, 0, 0, 0),
     ("c2", "E", True): (15, 15, 3, 3, 6, 6), ("c2", "N", True): (2, 2, 0, 2, 0, 2), ("c2", "I", False): (1, 1, 0, 0, 0, 0),
     ("c3", "E", True): (11, 11, 4, 4, 4, 4), ("c3", "N", True): (2, 2, 0, 2, 0, 2),
