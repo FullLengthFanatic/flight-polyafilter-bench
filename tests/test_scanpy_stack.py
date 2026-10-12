@@ -51,6 +51,11 @@ def _leiden(a, seed, resolution):
 def _pipeline(counts):
     a = ad.AnnData(counts.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(N_CELLS)]),
                    var=pd.DataFrame(index=[f"g{i}" for i in range(N_GENES)]))
+    # "Predict cell doublets using a nearest-neighbor classifier of observed transcriptomes and simulated doublets. Works
+    # best if the input is a raw (unnormalized) counts matrix"; random_state: "Initial state for doublet simulation and
+    # nearest neighbors."; .obs['doublet_score']: "Doublet scores for each observed transcriptome"
+    # https://scanpy.readthedocs.io/en/stable/api/generated/scanpy.pp.scrublet.html
+    sc.pp.scrublet(a, random_state=0)
     # "Normalize counts per cell." https://scanpy.readthedocs.io/en/stable/generated/scanpy.pp.normalize_total.html
     sc.pp.normalize_total(a, target_sum=CLUSTER["target_sum"])
     # "Logarithmize the data matrix." https://scanpy.readthedocs.io/en/stable/generated/scanpy.pp.log1p.html
@@ -87,7 +92,7 @@ def runs():
     return planted, first, second
 
 
-def test_same_matrix_twice_gives_the_same_pca_graph_labels_and_scores(runs):
+def test_same_matrix_twice_gives_the_same_pca_graph_labels_scores_umap_and_doublet_scores(runs):
     _, (b1, labels1, scores1), (b2, labels2, scores2) = runs
     assert b1.obsm["X_pca"].shape == (N_CELLS, CLUSTER["n_pcs"])
     assert np.array_equal(b1.obsm["X_pca"], b2.obsm["X_pca"])
@@ -96,6 +101,9 @@ def test_same_matrix_twice_gives_the_same_pca_graph_labels_and_scores(runs):
     assert np.array_equal(labels1, labels2)
     assert np.array_equal(scores1, scores2)
     assert b1.obsm["X_umap"].shape == (N_CELLS, 2) and np.isfinite(b1.obsm["X_umap"]).all()
+    assert np.array_equal(b1.obsm["X_umap"], b2.obsm["X_umap"])                   # umap1 and umap2 of cells.parquet
+    doublet1, doublet2 = (b.obs["doublet_score"].to_numpy() for b in (b1, b2))
+    assert np.isfinite(doublet1).all() and doublet1.std() > 0 and np.array_equal(doublet1, doublet2)
 
 
 def test_planted_classes_are_recovered(runs):
