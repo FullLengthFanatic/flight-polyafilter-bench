@@ -155,7 +155,9 @@ def build(tmp: Path, seed: int = 7) -> Synth:
 
 CELLS_10X = {"c1": "AAACCCAAGGAGAGTA-1", "c2": "AACGGGATCCTTGACC-1", "c3": "ACGTTGCACATGGTAC-1", "c4": "CCTTGGAACGTATCGA-1",
              "c5": "GGATCCAGTCAATGCC-1"}  # the called cells
-UNCALLED_10X = "TTTGGGCCAACATTGA-1"
+# sorts between two called barcodes: in molecule_info.h5 the barcode index of a called cell is then not its row in
+# barcodes.tsv.gz (our observation: pass_filter of 1417 starts 281, 346, 363 among 1,006,747 barcodes)
+UNCALLED_10X = "AAAGGGCCAACATTGA-1"
 # Test settings of the 10x fixture: default mode, -i, and the remove-all control of each. With MINSNRLEN 8 and no mismatch
 # the windows of seed 7 come from the planted stretches alone (chrA only), and -i adds the intronic stretch at 1599.
 SETTINGS_10X = (Setting(200, 8, 0, False), Setting(200, 8, 0, True), Setting(200, None, 0, False), Setting(200, None, 0, True))

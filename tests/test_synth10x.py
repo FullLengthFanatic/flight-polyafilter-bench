@@ -239,7 +239,9 @@ def test_molecule_info_rows_equal_the_counted_groups(synth10x, recs):
     assert pf.dtype == np.uint64 and pf.shape == (len(CELL), 3) and not pf[:, 1:].any()
     assert list(bar) == sorted(c[:-2] for c in list(CELL) + [UNCALLED_10X]) and list(fid) == GENES
     assert [bar[i] + "-1" for i in pf[:, 0]] == sorted(CELL)
-    order = list(zip(cols["barcode_idx"].tolist(), cols["feature_idx"].tolist(), cols["umi"].tolist()))
+    # the uncalled barcode sorts second, so a barcode index is not a row of barcodes.tsv.gz
+    assert pf[:, 0].tolist() == [0, 2, 3, 4, 5]
+    order =list(zip(cols["barcode_idx"].tolist(), cols["feature_idx"].tolist(), cols["umi"].tolist()))
     assert order == sorted(order) and len(set(order)) == len(order)
     support = Counter((r["CB"], r["GX"], r["UB"]) for r in recs if "CB" in r and "UB" in r and r["xf"] in (17, 25))
     code = lambda umi: sum("ACGT".index(b) << 2 * i for i, b in enumerate(reversed(umi)))
