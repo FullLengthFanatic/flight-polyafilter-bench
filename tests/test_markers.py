@@ -1,8 +1,9 @@
 import gzip
+import re
 from collections import Counter
 
-from pafbench.config import CELLS, LIBRARIES, NUCLEI
-from pafbench.markers import AMBIENT_ROD_TRANSCRIPTS, NOT_SCORED, PANEL, ROD_TF, SOURCES
+from pafbench.config import CELLS, LIBRARIES, NUCLEI, REPO
+from pafbench.markers import AMBIENT_ROD_TRANSCRIPTS, NOT_SCORED, PANEL, ROD_TF, SOURCES, MarkerClass
 
 BY_NAME = {c.name: c for c in PANEL}
 # symbols of the panel that the reference of the libraries lacks; none today. A symbol goes here only after it was reported.
@@ -21,13 +22,20 @@ def test_panel_classes():
     assert sum(len(c.genes) for c in PANEL) == 99
 
 
-def test_panel_rows_of_the_design_table():
-    assert BY_NAME["rod"].genes == ("NRL", "NR2E3", "PDE6A", "CNGA1", "GNAT1", "SLC24A1", "GNGT1", "PDE6G", "PPEF2")
-    assert BY_NAME["rod"].sources == ("Lukowski", "Cowan", "Menon", "Yan", "Liang")
-    assert BY_NAME["vascular"].genes == ("CD34", "CDH5", "RGS5", "ADAMTS9", "EGFL7", "VWF", "PDGFRB", "ACTA2", "COL1A2", "PROCR")
-    assert BY_NAME["vascular"].sources == ("Menon", "Cowan")
-    assert BY_NAME["proliferating"].genes == ("MKI67",)
-    assert BY_NAME["photoreceptor precursor"].genes == ("OTX2", "RCVRN", "FABP7", "DLL3")
+def test_panel_is_the_table_of_the_design():
+    # every row of the marker table of section 3.3: class, genes and sources in the order written there
+    lines = (REPO / "docs/specs/2026-10-12-polyafilter-bench-milestone3-design.md").read_text().splitlines()
+    start = lines.index("| Class | Genes scored | Sources |") + 2
+    table = []
+    for line in lines[start:]:
+        if not line.startswith("|"):
+            break
+        name, genes, sources = (cell.strip() for cell in line.strip("|").split("|"))
+        only_1179, weak = name.startswith("1179 only: "), name.endswith("(weak)")
+        name = re.sub(r" \(.*\)$", "", name.removeprefix("1179 only: "))
+        sources = re.sub(r" \(.*?\)| \d{4}", "", sources).split(", ")     # the quotes, "(HRCA)" and the years
+        table.append(MarkerClass(name, tuple(genes.split(", ")), tuple(sources), CELLS if only_1179 else NUCLEI + CELLS, weak))
+    assert len(table) == 14 and tuple(table) == PANEL
 
 
 def test_last_four_classes_are_for_1179_only():
