@@ -186,6 +186,7 @@ RULE_10X = {
     "alone_xf19": ("g3", "g3", "g3", "g3", "g3"),
     "alone_xf19_partner": ("g1", "g1", "g1", "g1", "g1"),
     "g2_partial": ("g2", "g2", "g2", None, None),
+    "winner_keeps": ("g1", "g1", "g1", "g1", "g1"),
     "chain": (None, None, None, None, None),
     "chain_end": ("g1", "g1", "g1", "g1", "g1"),
     "minus_pa": ("g2", "g2", "g2", "g2", "g2"),
@@ -386,6 +387,12 @@ def _reads_10x(rng, hdr):
     add("alone_xf19", "c4", "GATCCTGAGGTG", "g3", 1400, 19)
     add("g2_partial", "c4", "TGACCAGTTGAC", "g2", 5350, 25)
     add("g2_partial", "c4", "TGACCAGTTGAC", "g2", 5600, 17)
+    # Winner with three reads against a loser with one, one read of the winner inside a window: at every setting a read is
+    # removed and the UMI stays on g1. In every other case with two genes a removed read changes the count.
+    add("winner_keeps", "c4", "TTAACCGGTTAA", "g1", 1150, 25)
+    add("winner_keeps", "c4", "TTAACCGGTTAA", "g1", 2505, 17)
+    add("winner_keeps", "c4", "TTAACCGGTTAA", "g1", 3810, 17)
+    add("winner_keeps", "c4", "TTAACCGGTTAA", "g3", 1400, 19)
 
     # Pattern of the Cell Ranger source, a chain of corrections (as 1417 CACATTTCAACCGTAG-1, same file): g1 has one read at
     # CTGTTCTTGTAT, two at CTGTTCTTGTTT and two at GTGTTCTTGTTT; the first goes to the second UMI and the second to the

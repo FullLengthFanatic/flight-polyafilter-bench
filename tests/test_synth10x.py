@@ -42,6 +42,7 @@ GROUPS = {
     "alone_xf19": {"g3": (1, 0, 0, 1, 1489, 1489, 0, 0, 0, 0)},
     "alone_xf19_partner": {"g1": (4, 4, 0, 1, 3979, 3979, 0, 0, 0, 0)},
     "g2_partial": {"g2": (2, 2, 0, 1, 5350, 5350, 1, 1, 2, 2)},
+    "winner_keeps": {"g1": (3, 3, 0, 1, 3899, 3899, 1, 1, 1, 1), "g3": (1, 0, 0, 1, 1489, 1489, 0, 0, 0, 0)},
     "chain": {"g1": (1, 1, 0, 1, 3889, 3889, 0, 0, 0, 0), "g2": (1, 0, 0, 1, 4250, 4250, 0, 0, 0, 0),
               "g3": (1, 0, 0, 1, 1489, 1489, 0, 0, 0, 0)},
     "chain_end": {"g1": (4, 4, 0, 1, 3994, 3994, 0, 0, 0, 0)},
@@ -49,7 +50,7 @@ GROUPS = {
     "minus_pa": {"g2": (2, 2, 1, 1, 4210, 4290, 0, 0, 0, 0)},
 }
 # the matrix Cell Ranger would write, from the designed xf bits
-MATRIX = {("c1", "g1"): 8, ("c2", "g1"): 2, ("c2", "g3"): 1, ("c3", "g1"): 2, ("c3", "g2"): 1, ("c4", "g1"): 1, ("c4", "g2"): 1,
+MATRIX = {("c1", "g1"): 8, ("c2", "g1"): 2, ("c2", "g3"): 1, ("c3", "g1"): 2, ("c3", "g2"): 1, ("c4", "g1"): 2, ("c4", "g2"): 1,
           ("c5", "g1"): 2, ("c5", "g2"): 1}
 # record counters of design 3.1 per called cell, RE and presence of a GX tag: (records, records with a UB, records removed
 # at each of TAGS), written by hand from the reads of the fixture
@@ -59,7 +60,7 @@ CELL_RECORDS = {
     ("c1", "N", False): (3, 2, 0, 2, 0, 2), ("c1", "I", False): (1, 1, 0, 0, 0, 0),
     ("c2", "E", True): (15, 15, 3, 3, 6, 6), ("c2", "N", True): (2, 2, 0, 2, 0, 2), ("c2", "I", False): (1, 1, 0, 0, 0, 0),
     ("c3", "E", True): (11, 11, 4, 4, 4, 4), ("c3", "N", True): (2, 2, 0, 2, 0, 2),
-    ("c4", "E", True): (7, 7, 1, 1, 2, 2),
+    ("c4", "E", True): (11, 11, 2, 2, 3, 3),
     ("c5", "E", True): (9, 9, 0, 0, 0, 0),
 }
 
@@ -186,7 +187,7 @@ def test_every_designed_case_is_present(synth10x, recs):
     assert (intronic["RE"], intronic["GX"], intronic["AN"], intronic["xf"]) == ("N", "g1", "g2,-", 25)
     spliced = by_case["spliced"]
     assert sum("N" in r["cigar"] for r in spliced) == 1 and max(r["pos"] for r in spliced) - min(r["pos"] for r in spliced) >= 400
-    assert {r["ref"] for r in by_case["three_vs_one"]} == {"chrA", "chrB"}
+    assert {r["ref"] for r in by_case["three_vs_one"]} == {r["ref"] for r in by_case["winner_keeps"]} == {"chrA", "chrB"}
     for name in ("leads_by_one", "tie", "tie_broken", "three_vs_two"):
         assert {r["ref"] for r in by_case[name]} == {"chrA"}, name
     # the two patterns of the Cell Ranger source: raw UMIs that differ from the corrected one
@@ -240,7 +241,7 @@ def test_groups_table_is_the_designed_one_and_equals_a_naive_count_of_the_bam(sy
     columns = ["case", "cb", "ub", "gene", "n_reads", "n_winner_reads", "n_pa", "re_class", "end3", "end3_nonpa"]
     assert list(t.columns) == columns + [f"rm_{x}" for x in TAGS]
     table = {(r.cb, r.ub, r.gene): tuple(int(x) for x in r[4:]) for r in t.itertuples(index=False)}
-    assert table == naive and len(t) == len(naive) == 31
+    assert table == naive and len(t) == len(naive) == 33
     designed = {}
     for case, g in t.groupby("case"):
         assert g.cb.nunique() == 1 and g.ub.nunique() == 1, case                       # a case is one cell and one UMI
@@ -378,6 +379,11 @@ def test_designed_events_equal_the_rule_on_the_reads_that_survive(synth10x, recs
     # the switch of three_vs_two happens while a read remains on the old winner
     old = synth10x.groups[(synth10x.groups.case == "three_vs_two") & (synth10x.groups.gene == "g1")].iloc[0]
     assert all(old.n_reads - old[f"rm_{t}"] == 1 for t in TAGS)
+    # with two genes on the cell and UMI, a setting can also take a read of the winner and leave the UMI where it is
+    multi = synth10x.groups.groupby(["cb", "ub"]).filter(lambda g: len(g) > 1)
+    winner = multi.merge(ev, left_on=["cb", "ub", "gene"], right_on=["cb", "ub", "before"])
+    removed_and_kept = [(r.case_x, r.tag) for r in winner.itertuples() if getattr(r, f"rm_{r.tag}") > 0 and r.after == r.before]
+    assert removed_and_kept == [("winner_keeps", t) for t in TAGS]
     for name in ("tie", "chain"):            # nothing counted before or after
         assert ev[ev.case == name].before.isna().all() and ev[ev.case == name].after.isna().all()
 
