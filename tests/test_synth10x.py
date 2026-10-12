@@ -18,8 +18,9 @@ TAGS = [setting_tag(s) for s in SETTINGS_10X]
 GENES = ["g1", "g2", "g3", "g4"]
 CELL = {v: k for k, v in CELLS_10X.items()}
 # designed read groups per case: {gene: (n_reads, n_winner_reads, n_pa, re_class, end3, end3_nonpa, reads removed at each
-# of TAGS)}. end3 is the 3'-most aligned base of the group in transcript sense, 0-based: start + 89 of the last 90 nt read
-# of g1 and g3, the lowest start of g2 (minus strand); end3_nonpa the same over the reads without pa, -1 without any.
+# of TAGS)}. end3 is the 3'-most aligned base of the group in transcript sense, 0-based: the last aligned base of the last
+# read of g1 and g3 (start + 89, start + 59 for a pa read with its 60 aligned bases), the lowest start of g2 (minus strand);
+# end3_nonpa the same over the reads without pa, -1 without any.
 GROUPS = {
     "one_inside": {"g1": (1, 1, 0, 1, 1239, 1239, 1, 1, 1, 1)},
     "two_one_inside": {"g1": (2, 2, 0, 1, 2239, 2239, 1, 1, 2, 2)},
@@ -68,7 +69,8 @@ def _records(bam):
     with pysam.AlignmentFile(str(bam)) as fh:
         for a in fh.fetch(until_eof=True):
             out.append({"qname": a.query_name, "flag": a.flag, "ref": a.reference_name, "pos": a.reference_start,
-                        "end": a.reference_end, "cigar": a.cigarstring, "mapq": a.mapping_quality, "key": record_key(a),
+                        "end": a.reference_end, "cigar": a.cigarstring, "qlen": a.query_length, "mapq": a.mapping_quality,
+                        "key": record_key(a),
                         "types": {t: ty for t, _, ty in a.get_tags(with_value_type=True)}} | dict(a.get_tags()))
     return out
 
@@ -163,9 +165,14 @@ def test_every_designed_case_is_present(synth10x, recs):
     assert {r["xf"] for r in by_case["uncalled"]} == {17, 25} and {r["GX"] for r in by_case["uncalled"]} == {"g1", "g4"}
     (no_cb,) = by_case["no_cb"]
     assert "CB" not in no_cb and no_cb["xf"] == 17 and no_cb["UB"] == no_cb["UR"] and not no_cb["flag"] & 1024
-    assert {r["RE"] for r in by_case["antisense"]} == {"E", "N"}
+    # AN names transcripts with offset and CIGAR on an exonic record and the gene on an intronic one
+    assert {r["RE"]: r["AN"] for r in by_case["antisense"]} == {"E": "t1,-200,90M;t2,-200,90M", "N": "g1,-"}
     for r in by_case["antisense"]:
-        assert r["AN"] == "g1,-" and "GX" not in r and r["xf"] == 0 and r["flag"] & 16
+        assert "GX" not in r and r["xf"] == 0 and r["flag"] & 16
+    # pa reads are whole reads with the trimmed 3' end soft-clipped: exactly pa bases, or more
+    assert sorted((case[r["qname"]], r["cigar"], r["pa"], r["qlen"]) for r in recs if "pa" in r) == [
+        ("minus_pa", "30S60M", 28, 90), ("pa_and_member", "60M30S", 30, 90), ("pa_only", "60M30S", 30, 90)]
+    assert all(r["flag"] & 16 for r in by_case["minus_pa"]) and not any(r["flag"] & 16 for r in by_case["pa_only"])
     assert len(by_case["intergenic"]) == 2
     for r in by_case["intergenic"]:
         assert r["RE"] == "I" and "GX" not in r and "AN" not in r and r["xf"] == 0

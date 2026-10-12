@@ -223,6 +223,22 @@ def _reads_10x(rng, hdr):
     lib/rust/umi/src/info.rs line 6, and `if self.umi_info.is_valid {` before the UB tag, lib/rust/tx_annotation/src/read.rs
     line 549); our observation: such a record keeps xf 17. The duplicate flag is on the xf 17 records with a CB and a UB
     (our observation, design_m3_draft/design/checks/dupflag_vs_xf_<lib>.json).
+
+    pa is "The number of poly-A nucleotides trimmed from the 3' end of read 2." (same page). Our observation on 1417,
+    chr21:33 to 36 Mb: the trimmed bases stay in the record as a soft clip, all 175 pa reads are 90 nt long with a soft clip
+    of at least pa bases at their 3' end (153 of exactly pa), for example 53M37S with pa 36 and, on the reverse strand,
+    21S16M1D53M with pa 21. AN, same page: "Present for reads that are aligned to the antisense strand of annotated
+    transcripts. If intron counts are not included (with include-introns=false ), this tag is the same as the TX tag but
+    with - values for the strand identifier."; a TX entry is "[transcript_id] , [strand][pos] , [cigar]" and "pos is the
+    alignment offset in transcript coordinates". Our observation in that region of 1417, a library with counted intronic
+    reads: an exonic antisense record carries the transcript form (ENST00000342101,-130,89M1S;...), an intronic one the
+    gene form (ENSG00000227757,-). The pos written here is the 0-based offset of the record's first base in the
+    transcript; how Cell Ranger counts it on an antisense record was not checked.
+
+    Left out on purpose, although every real record or header has them (our observation, tag order of 1417: NH HI AS nM,
+    ts or pa, RG TX GX GN fx RE, AN, mm, xf CR CY CB UR UY UB): the tags NH, HI, AS, nM, RG, TX and fx, the tags ts and mm
+    of some records, and the @RG header line; the header says VN 1.6 (HEADER, shared with build()) where the real one says
+    1.4.
     """
     place = {attr.split('"')[1]: (c, strand == "-") for c, ft, _, _, strand, attr in GTF_ROWS if ft == "gene"}
     cells = CELLS_10X | {"u": UNCALLED_10X}
@@ -290,11 +306,12 @@ def _reads_10x(rng, hdr):
     add("intronic", "c1", "CCGGAATTCCGG", "g1", 1450, 25, re="N", an="g2,-")
     add("exon_intron", "c1", "CGATCGATTAGC", "g1", 1005, 25)
     add("exon_intron", "c1", "CGATCGATTAGC", "g1", 1450, 17, re="N")
-    # pa reads: alone in their group (no read without pa), and as the 3'-most read of a group on each strand.
-    add("pa_only", "c1", "GAGATCTCTAGA", "g1", 3600, 25, cigar="60M", pa=30)
-    add("pa_and_member", "c1", "GTTGCAACGTTG", "g1", 3880, 25, cigar="60M", pa=30)
+    # pa reads: alone in their group (no read without pa), and as the 3'-most read of a group on each strand. 60 nt are
+    # aligned and the 30 at the 3' end of the read soft-clipped, so the 3'-most aligned base is not start + 89.
+    add("pa_only", "c1", "GAGATCTCTAGA", "g1", 3600, 25, cigar="60M30S", pa=30)
+    add("pa_and_member", "c1", "GTTGCAACGTTG", "g1", 3880, 25, cigar="60M30S", pa=30)
     add("pa_and_member", "c1", "GTTGCAACGTTG", "g1", 3700, 17)
-    add("minus_pa", "c5", "TCGATCGAAGCT", "g2", 4210, 25, cigar="60M", pa=28)
+    add("minus_pa", "c5", "TCGATCGAAGCT", "g2", 4210, 25, cigar="30S60M", pa=28)
     add("minus_pa", "c5", "TCGATCGAAGCT", "g2", 4290, 17)
     # Records of called cells that are in no read group: two genes in GX; one gene but MAPQ below 255 and xf 0; antisense
     # (AN, no GX); intronic on the sense strand without GX and AN, with and without a UB, which -i removes (the intronic
@@ -303,7 +320,7 @@ def _reads_10x(rng, hdr):
     # would be removed or kept, so they count in the record totals.
     add("multi_gene", "c1", "TACGTACGATCG", "g1", 1150, 0, gx="g1;g2")
     add("multimapped", "c1", "TCAGGACTTCAG", "g1", 2150, 0, mapq=3)
-    add("antisense", "c1", "TGCATGCAACGT", "g1", 1200, 0, antisense=True)
+    add("antisense", "c1", "TGCATGCAACGT", "g1", 1200, 0, antisense=True, an="t1,-200,90M;t2,-200,90M")
     add("antisense", "c1", "TTGGCCAAGGTT", "g1", 1500, 0, re="N", antisense=True)
     add("intronic_no_gx", "c1", "GGCCTTAAGGCC", "g1", 1450, 0, re="N", gx="")
     add("intronic_no_gx", "c1", "GTACCATGGTAC", "g1", 1450, 0, re="N", gx="", uy="FFF$FFFFFFFF")
