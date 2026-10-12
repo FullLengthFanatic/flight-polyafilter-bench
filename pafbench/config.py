@@ -47,9 +47,10 @@ RULE_AGREEMENT_MAX = 1e-6
 A4_PARALLEL = 4
 UNIT_BIN = 1000
 # leiden_flavor and leiden_n_iterations are the scanpy.tl.leiden call that tests/test_scanpy_stack.py checks; the igraph and
-# the leidenalg flavour give different partitions
+# the leidenalg flavour give different partitions. blas_threads is the BLAS thread limit the pipeline runs under
+# (threadpoolctl.threadpool_limits): the PCA coordinates change with the number of BLAS threads (our observation, same test)
 CLUSTER = {"target_sum": 10_000, "n_hvg": 2000, "n_pcs": 30, "k": 15, "resolution": 1.0, "resolutions_alt": (0.5, 2.0),
-           "seeds": tuple(range(10)), "leiden_flavor": "igraph", "leiden_n_iterations": 2}
+           "seeds": tuple(range(10)), "leiden_flavor": "igraph", "leiden_n_iterations": 2, "blas_threads": 1}
 CLASS_MARGIN = 0.1
 KNN_K = 15
 KNN_FOLDS = 5

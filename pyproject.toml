@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pysam", "numpy", "numba", "pandas", "pyarrow", "gffutils", "biopython", "dill", "pytest",
     "scanpy[scrublet]", "anndata", "scikit-learn", "leidenalg", "igraph", "h5py", "plotly", "umap-learn",
+    "threadpoolctl",
 ]
 
 [build-system]

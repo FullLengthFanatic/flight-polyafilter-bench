@@ -1,6 +1,7 @@
 """Smoke test of the scanpy stack in the repo venv (design of 2026-10-12, sections 3.0, 3.3 step 2 and 7 step 1): the calls
 of stage 25 with the values of config.CLUSTER on a toy matrix with three planted classes. That the same matrix gives the
-same PCA, neighbour graph and Leiden labels twice is tested here, not assumed.
+same PCA, neighbour graph and Leiden labels twice, with the thread pools of the process at 8 threads and at 1, is tested
+here, not assumed.
 
 The quotes are the wording of the scanpy documentation pages (read 2026-10-12), each with its URL.
 """
@@ -11,6 +12,7 @@ import pytest
 import scanpy as sc
 import scipy.sparse as sp
 from sklearn.metrics import adjusted_rand_score
+from threadpoolctl import threadpool_limits
 
 from pafbench.config import CLUSTER
 
@@ -41,6 +43,11 @@ def _leiden(a, seed, resolution):
     return a.obs["leiden"].to_numpy().astype(str)
 
 
+# "Change the maximal number of threads that can be used in thread pools."; `wrap` is its decorator form (docstring of
+# threadpoolctl.threadpool_limits, version 3.7.0). Our observation on this toy matrix (OpenBLAS 0.3.31 in numpy, 0.3.30 in
+# scipy): X_pca at 8 or 32 BLAS threads differs from X_pca at 1, 2 or 4 by up to 1.9e-9, and nothing else differs. So the
+# pipeline fixes the number itself and does not take it from the process.
+@threadpool_limits.wrap(limits=CLUSTER["blas_threads"], user_api="blas")
 def _pipeline(counts):
     a = ad.AnnData(counts.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(N_CELLS)]),
                    var=pd.DataFrame(index=[f"g{i}" for i in range(N_GENES)]))
@@ -71,8 +78,13 @@ def _pipeline(counts):
 
 @pytest.fixture(scope="module")
 def runs():
+    # the two runs start with different numbers of threads in every thread pool of the process
     counts, planted = _toy()
-    return planted, _pipeline(counts), _pipeline(counts)
+    with threadpool_limits(limits=8):
+        first = _pipeline(counts)
+    with threadpool_limits(limits=1):
+        second = _pipeline(counts)
+    return planted, first, second
 
 
 def test_same_matrix_twice_gives_the_same_pca_graph_labels_and_scores(runs):
