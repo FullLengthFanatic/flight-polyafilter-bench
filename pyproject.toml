@@ -1,8 +1,12 @@
 [project]
 name = "pafbench"
 version = "0.1.0"
-requires-python = ">=3.10"
-dependencies = ["pysam", "numpy", "numba", "pandas", "pyarrow", "gffutils", "biopython", "dill", "pytest"]
+requires-python = ">=3.11"
+dependencies = [
+    "pysam", "numpy", "numba", "pandas", "pyarrow", "gffutils", "biopython", "dill", "pytest",
+    "scanpy[scrublet]", "anndata", "scikit-learn", "leidenalg", "igraph", "h5py", "plotly", "umap-learn",
+    "threadpoolctl",
+]
 
 [build-system]
 requires = ["setuptools>=64"]

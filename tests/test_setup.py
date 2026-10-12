@@ -1,6 +1,8 @@
 import subprocess
+import tomllib
+from importlib.metadata import version
 
-from pafbench.config import FASTA, GTF, LIBRARIES, POLYAFILTER_COMMIT, VENDOR_POLYAFILTER
+from pafbench.config import FASTA, GTF, LIBRARIES, POLYAFILTER_COMMIT, REPO, VENDOR_POLYAFILTER
 from pafbench.vendor import polyafilter_modules
 
 
@@ -23,3 +25,14 @@ def test_inputs_exist():
     assert FASTA.exists() and GTF.exists()
     for name in ("1417", "1419", "1179", "1416"):
         assert LIBRARIES[name].exists(), name
+
+
+def test_dependencies_are_declared_and_installed():
+    project = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]
+    assert project["requires-python"] == ">=3.11"  # tomllib, read here, is in the standard library from 3.11
+    deps = project["dependencies"]
+    assert {"scanpy[scrublet]", "anndata", "scikit-learn", "leidenalg", "igraph", "h5py", "plotly", "umap-learn",
+            "threadpoolctl"} <= set(deps)
+    for d in deps:
+        assert version(d.split("[")[0]), d
+    assert version("scikit-image")  # what the scrublet extra of scanpy adds

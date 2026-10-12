@@ -1,5 +1,8 @@
 from pathlib import Path
 
+from .flags import Setting
+from .grid import published
+
 REPO = Path(__file__).resolve().parents[1]
 VENDOR_POLYAFILTER = REPO / "vendor" / "polyAfilter"
 POLYAFILTER_COMMIT = "5ce0098"
@@ -31,3 +34,47 @@ SEL_POPULATION = "cells"  # barcodes the headline selection and burden are compu
 SEL_UNITS = "with_member"  # molecule units of the headline selection
 NUCLEI = ("1417", "1419")
 CELLS = ("1179",)
+
+# Milestone 3 (design of 2026-10-12, section 3.0). The clustering values and the thresholds are our proposals.
+CHOSEN_SETTINGS = (Setting(250, 7, 1, False), Setting(200, 10, 2, True))  # eval/selection.json, modes e and i
+CELLS_TUNED_SETTINGS = (Setting(250, 7, 2, False), Setting(450, 5, 1, True))  # eval/selection.json, cells_tuned 1179
+# chosen, published, cells-tuned, then the remove-all control of each chosen setting (decision D3). The position of a
+# setting is its bit in the removal mask of stage 23: append, never reorder.
+IMPACT_SETTINGS = (*CHOSEN_SETTINGS, *published(), *CELLS_TUNED_SETTINGS,
+                   *(Setting(s.covlen, None, 0, s.introns) for s in CHOSEN_SETTINGS))
+XF_RECOUNT_TOLERANCE = 0
+RULE_AGREEMENT_MAX = 1e-6
+A4_PARALLEL = 4
+UNIT_BIN = 1000
+# leiden_flavor and leiden_n_iterations are the scanpy.tl.leiden call that tests/test_scanpy_stack.py checks; the igraph and
+# the leidenalg flavour give different partitions. blas_threads is the BLAS thread limit the pipeline runs under
+# (threadpoolctl.threadpool_limits): the PCA coordinates change with the number of BLAS threads (our observation, same test)
+CLUSTER = {"target_sum": 10_000, "n_hvg": 2000, "n_pcs": 30, "k": 15, "resolution": 1.0, "resolutions_alt": (0.5, 2.0),
+           "seeds": tuple(range(10)), "leiden_flavor": "igraph", "leiden_n_iterations": 2, "blas_threads": 1}
+CLASS_MARGIN = 0.1
+KNN_K = 15
+KNN_FOLDS = 5
+THIN_REPLICATES = 1
+THIN_REPLICATES_CHOSEN = 3
+MIN_CELLS_GENE = 3
+RARE_PCTL = 99
+TOP_GENES = 20
+MARKER_LOSS = 0.5
+DOWNSAMPLE_DRAWS = 100
+JACCARD_DISSOLVED = 0.5
+JACCARD_STABLE = 0.75
+BIAS_POINTS = 5
+EXPR_BINS = 4
+MIN_STRATUM = 50
+POOL_MIN = 30
+REGION_REF_MIN = 200
+SITE_TOL = 5
+LONG_END_TOL = 10
+NEAR_INTRON_TOL = 5
+MIN_INTRON = 50
+FIVE_PRIME_TOL = 50
+NULL_SHIFT = 1000
+DIST_END_BINS = (100, 300, 1000, 5000)
+RERUN_DIFF = 0.001
+PIGEON_DIR = Path("/data/long_read_annotation_tool/test_dataset/input_files")
+REPORT_DIR = OUT / "report"
