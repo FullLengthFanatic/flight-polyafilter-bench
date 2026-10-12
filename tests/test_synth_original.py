@@ -1,3 +1,7 @@
+import hashlib
+
+import pysam
+
 from tests.synth import run_original
 
 
@@ -11,3 +15,12 @@ def test_original_runs_and_removes_something(synth):
 def test_removed_keys_detects_subsequence(synth):
     removed = run_original(synth, 100, 5, 0, False)
     assert all(len(k) == 5 for k in removed)
+
+
+def test_build_keeps_its_genome_and_records(synth):
+    # digests of seed 7, taken before the genome and BAM helpers of build() were shared with build_10x
+    with pysam.AlignmentFile(str(synth.bam)) as fh:
+        records = "\n".join(a.to_string() for a in fh.fetch(until_eof=True))
+    assert hashlib.sha256(records.encode()).hexdigest() == "4f3ac8587685d86ca1691e19b864ede6eb28b65d746ed2f54a0f0456a210dae3"
+    assert hashlib.sha256(synth.fasta.read_bytes()).hexdigest() == "164823c37d0c156fe86dee45fc7271d2d6acf25de7e3f502833d2c28199346de"
+    assert hashlib.sha256(synth.gtf.read_bytes()).hexdigest() == "4bfe2c457e38084575ba7d5d5967f5b1c5a9d6eec89702e49a7572b4011dfd8c"

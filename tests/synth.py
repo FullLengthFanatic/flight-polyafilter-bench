@@ -10,6 +10,7 @@ from pafbench.flags import removed_keys
 from pafbench.vendor import polyafilter_modules
 
 CHROMS = {"chrA": 6000, "chrB": 2000}
+HEADER = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": c, "LN": n} for c, n in CHROMS.items()]}
 
 GTF_ROWS = [
     ("chrA", "gene", 1001, 4000, "+", 'gene_id "g1";'),
@@ -106,8 +107,8 @@ def _reads(rng, hdr):
     return reads
 
 
-def build(tmp: Path, seed: int = 7) -> Synth:
-    rng = random.Random(seed)
+def _genome(tmp, rng):
+    """genome.fa (indexed), genes.gtf and genes.db under tmp; rng gives the background between the planted stretches."""
     seqs = {c: [rng.choice("ACGT") for _ in range(n)] for c, n in CHROMS.items()}
     for c, p, s in PLANTS:
         seqs[c][p:p + len(s)] = list(s)
@@ -125,17 +126,25 @@ def build(tmp: Path, seed: int = 7) -> Synth:
             fh.write(f"{c}\tsynth\t{ft}\t{s}\t{e}\t.\t{strand}\t.\t{attr}\n")
     db = tmp / "genes.db"
     gffutils.create_db(str(gtf), str(db), merge_strategy="create_unique")
-    hdr = pysam.AlignmentHeader.from_dict(
-        {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": c, "LN": n} for c, n in CHROMS.items()]}
-    )
+    return fasta, gtf, db
+
+
+def _sorted_bam(tmp, hdr, reads):
     unsorted = tmp / "unsorted.bam"
     with pysam.AlignmentFile(str(unsorted), "wb", header=hdr) as out:
-        for a in _reads(rng, hdr):
+        for a in reads:
             out.write(a)
     bam = tmp / "reads.bam"
     pysam.sort("-o", str(bam), str(unsorted))
     pysam.index(str(bam))
-    return Synth(tmp, fasta, gtf, db, bam)
+    return bam
+
+
+def build(tmp: Path, seed: int = 7) -> Synth:
+    rng = random.Random(seed)
+    fasta, gtf, db = _genome(tmp, rng)
+    hdr = pysam.AlignmentHeader.from_dict(HEADER)
+    return Synth(tmp, fasta, gtf, db, _sorted_bam(tmp, hdr, _reads(rng, hdr)))
 
 
 def run_original(synth: Synth, covlen, min_len, mism, introns):
