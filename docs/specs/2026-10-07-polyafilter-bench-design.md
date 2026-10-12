@@ -119,6 +119,14 @@ Spike-in metrics are the exception to the called-cell rule: spike-ins are free R
 
 **Impact (descriptive only).** First, a BAM recount must reproduce the Cell Ranger filtered matrix within a stated tolerance. Starting definition: unique (CB, UB, GX) among reads with `xf` bit 1 set and bit 2 unset (10x BAM docs), adjusted until it matches, since how intronic reads are flagged under include-introns is not yet checked. Then, for the chosen settings and the published ones: per-cell UMI loss, intronic share, per-cell-type loss, cluster preservation and marker genes. The check is whether any cell type collapses, as the endothelial cluster did in the paper. No annotations exist for any of the libraries (user), so cell types are assigned from retinal marker genes in all three.
 
+**Milestone 3 (design and user decisions 2026-10-12).** The design is `docs/specs/2026-10-12-polyafilter-bench-milestone3-design.md` (stages 23 to 34). What it settles for this section:
+- Recount. Unique (CB, UB, GX) over called-cell records with `xf` bit 1 set and bit 2 unset reproduces the Cell Ranger filtered matrix exactly, genome-wide, in all three libraries (check scripts run on 2026-10-11 and 2026-10-12). UMIs after filtering are counted with the rule 10x documents (per cell and UMI the gene with the most reads is kept, a tie keeps none), applied to corrected UMIs before and after filtering. On unfiltered reads that rule differs from Cell Ranger's matrix in 5, 2 and 33 entries of 10.4, 10.0 and 76.9 million, because Cell Ranger 9.0.1 decides low support while UMI correction is under way (its source, `lib/rust/tx_annotation/src/mark_dups.rs`). The tolerance is therefore 0 for the `xf` recount and 1 differing entry per million for the rule.
+- Cell classes: Leiden clusters on the unfiltered matrix, each named from a marker panel (the user's choice among four methods; the panel is in the design and stays open to the user's edits until the classes are called). Ambient RNA and doublets are flagged per cell and nothing is corrected or removed.
+- Settings of the impact analysis: the 2 chosen and the 8 published, plus the 2 cells-tuned picks and the 2 remove-all controls, 14 in all.
+- Long reads (4.3): each accepted read is classed by its own splice chain against the annotation; tecap gives a second view per site and label.
+- ERCC mix: tested in the data (Mix 1 against Mix 2 on the subgroup ratios); a question to Lexogen is drafted for the user, who decides whether to send it.
+- One Cell Ranger rerun on `1417/original/c375_l3_m2_i.bam` measures how far the recount is from the README's route.
+
 ## 9. Outputs and layout
 
 - Code: `~/polyafilter_bench/`, numbered stage scripts as in `~/kinnex_concat_qc`, Python with pysam, pyranges, pandas and plotly.
@@ -140,7 +148,7 @@ Exit: a one-page note with these results and any change to this design.
 ## 11. Risks
 
 - The original tool may not fit in RAM on 1179 (580M reads). Mitigation: per-chromosome runs for the exact-match test there.
-- The `pa` truth set covers only molecules with a short-insert copy. Mitigation in 4.1. If labeled and unlabeled molecules differ strongly, conclusions are stated for the labeled population only. The milestone 2 check compares the labeled molecules of all barcodes with the primary records of every barcode; within called cells it waits for the per-cell counts of milestone 3.
+- The `pa` truth set covers only molecules with a short-insert copy. Mitigation in 4.1. If labeled and unlabeled molecules differ strongly, conclusions are stated for the labeled population only. The milestone 2 check compares the labeled molecules of all barcodes with the primary records of every barcode; within called cells it waits for the per-cell counts of milestone 3. Its shares "without PCR duplicates" remove duplicates only among counted reads, because Cell Ranger sets the duplicate flag on nothing else (found 2026-10-12, stated on the milestone 2 page); milestone 3 repeats the comparison with a unit defined the same way in every region.
 - The ambiguous class is large (46% of 1416 chr1 `pa` reads). If the cut-offs move results, that is reported, not tuned away.
 - The 3' v4 bead oligo design (dT length, anchor bases) is not yet checked. It may shift sites by 1 to 2 nt, which does not change a 20 nt label but matters for exact-position comparisons with the spike-in annotation.
 - gffutils database build can take hours (README).
