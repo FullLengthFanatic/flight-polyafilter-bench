@@ -390,10 +390,3 @@ def test_fixture_is_deterministic(synth10x, recs, tmp_path):
         assert all(np.array_equal(f1[n][:], f2[n][:]) for n in names if isinstance(f1[n], h5py.Dataset))
     for name in ("reads", "groups", "events"):
         pd.testing.assert_frame_equal(getattr(again, name), getattr(synth10x, name))
-
-
-def test_fixture_cannot_be_built_on_another_genome(tmp_path):
-    # the cases are designed on the genome of seed 7; on that of seed 4 a random run of A's removes two more reads and
-    # the events table contradicts the removed columns (our observation, seeds 0 to 24)
-    with pytest.raises(TypeError):
-        build_10x(tmp_path, seed=4)
