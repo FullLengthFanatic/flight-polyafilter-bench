@@ -341,6 +341,9 @@ def test_intron_sites_with_a_reason_other_than_novel_junction():
     assert not len(intron_sites_off_model(sites))    # the intron sites are (+,200) and (+,500): novel junction or a class
     bad = intron_sites_off_model(sites.assign(region="intron"))
     assert list(zip(bad.strand, bad.site, bad.context)) == [("+", 400, AS)]
+    # intergenic when placed and novel junction when strict
+    bad = intron_sites_off_model(sites.assign(region="intron", context=sites.context.replace(AS, IG), context_without_chain_novel=NJ))
+    assert list(zip(bad.strand, bad.site, bad.context)) == [("+", 400, IG)]
     # the strict version is checked too
     sites.loc[0, ["region", "context_without_chain_novel"]] = ["intron", IG]
     assert intron_sites_off_model(sites).site.tolist() == [100]

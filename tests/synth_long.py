@@ -9,7 +9,7 @@ from pafbench.lrcontext import CLASSES, SUB_CAUSES, ReadContext
 from pafbench.sites import COMP
 
 G = 10000   # the minus-strand loci are the plus-strand loci mirrored: x -> G - x
-CHROMS = {"chrS": 12000, "chrE": 3000}
+CHROMS = {"chrS": 12000, "chrE": 3000, "chrA": 2000}   # chrE and chrA have no transcript
 HDR = pysam.AlignmentHeader.from_dict({"HD": {"VN": "1.6", "SO": "coordinate"},
                                        "SQ": [{"SN": c, "LN": n} for c, n in CHROMS.items()]})
 NJ, AS, IG = CLASSES[8:]

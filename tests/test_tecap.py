@@ -99,7 +99,7 @@ def test_merge_parts_concatenates_in_header_order_and_indexes(tmp_path):
     with pysam.AlignmentFile(str(bam)) as fh:
         header = fh.header.to_dict()
         assert {k: header[k] for k in ("HD", "SQ")} == HDR.to_dict() and list(header) == ["HD", "SQ", "PG"]   # cat adds its @PG
-        assert [(a.reference_name, a.query_name, a.get_tag(TAG)) for a in fh.fetch()] == [
+        assert [(a.reference_name, a.query_name, a.get_tag(TAG)) for a in fh.fetch(until_eof=True)] == [
             ("chrS", "s1", "chrS:+:1080"), ("chrS", "s2", "chrS:+:1180"), ("chrE", "e1", "chrE:+:1080")]
         assert [a.query_name for a in fh.fetch("chrE")] == ["e1"]
 
@@ -110,23 +110,23 @@ def test_classify_library_merges_runs_tecap_and_writes_both_tables(tmp_path, mon
                           "label": ["templated", "ambiguous", "templated"], "n_accepted": [1, 1, 1], "n_no_splice": [1, 1, 0]})
 
     def fake(bam, sample, out_dir, threads):
-        """Stands in for tecap: the first two tag values of the merged, indexed BAM get two reads in one bucket each."""
+        """Stands in for tecap: the first two tag values of the merged, indexed BAM get reads, the first in two buckets."""
         calls.append((bam, sample, out_dir, threads))
         with pysam.AlignmentFile(str(bam)) as fh:
             keys = [a.get_tag(TAG) for a in fh.fetch()]
         out_dir.mkdir(parents=True)
-        return _tecap_json(out_dir / f"{sample}_terminal_exon.json", {k: {CAPTURED: 2} for k in keys[:2]})
+        return _tecap_json(out_dir / f"{sample}_terminal_exon.json", {keys[0]: {CAPTURED: 2, EXON: 1}, keys[1]: {CAPTURED: 2}})
 
     monkeypatch.setattr(tecap, "run_classify", fake)
     got = classify_library(_parts(tmp_path), "BD70", out, sites, 3)
     assert calls == [(out / "tecap" / "accepted.bam", "BD70", out / "tecap" / "out", 3)]
     result = out / "tecap" / "out" / "BD70_terminal_exon.json"
     assert pd.read_parquet(out / "tecap_site_buckets.parquet").to_dict("list") == {
-        "ref": ["chrS", "chrS"], "strand": ["+", "+"], "site": [1080, 1180], "bucket": [CAPTURED] * 2, "reads": [2, 2]}
+        "ref": ["chrS"] * 3, "strand": ["+"] * 3, "site": [1080, 1080, 1180], "bucket": [CAPTURED, EXON, CAPTURED], "reads": [2, 1, 2]}
     assert pd.read_parquet(out / "tecap_buckets.parquet").to_dict("list") == {
-        "label": ["ambiguous", "templated"], "bucket": [CAPTURED] * 2, "reads": [2, 2]}
+        "label": ["ambiguous", "templated", "templated"], "bucket": [CAPTURED, CAPTURED, EXON], "reads": [2, 2, 1]}
     assert got.pop("seconds") >= 0
     assert got == {"bam": str(out / "tecap" / "accepted.bam"), "json": str(result), "json_bytes": result.stat().st_size,
                    "sites_with_a_classified_read": 2,
                    "per_label": {"ambiguous": {"written": 1, "without_splice": 1, "classified": 2},
-                                 "templated": {"written": 2, "without_splice": 1, "classified": 2}}}
+                                 "templated": {"written": 2, "without_splice": 1, "classified": 3}}}

@@ -39,7 +39,8 @@ the reads; the sites whose top class rests on chain_novel reads alone; the match
 molecules by label, real and with the sites moved NULL_SHIFT nt upstream; and per label the reads written to the tagged BAM,
 those without a splice and those tecap classified.
 
-Options: --libs, --refs (default: the 23 references of stage 16), --workers (also tecap's --threads), --base, --out,
+Options: --libs, --refs (default: the 23 references of stage 16), --workers (tecap gets as many, at most one per reference:
+`tecap classify --help` says "--threads THREADS  Number of worker processes (contig-level parallelism)."), --base, --out,
 --no-tecap (no tagged BAM and no tecap run: the context tables alone).
 """
 import argparse
@@ -147,7 +148,8 @@ def main():
         line[lib]["sites_top_class_on_chain_novel_only"] = summary["sites_top_class_on_chain_novel_only"]
         line[lib]["vs_1179"] = {k: {x: summary["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")} for k in ("real", "null")}
         if not args.no_tecap:
-            summary["tecap"] = classify_library({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, lib, d, sites, args.workers)
+            summary["tecap"] = classify_library({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, lib, d, sites,
+                                                min(args.workers, len(args.refs)))
             line[lib]["tecap"] = summary["tecap"]["per_label"]
         summary["per_ref"] = {p[1]: p[4] for p in parts}
         (d / "isoform_context.json").write_text(json.dumps(summary, indent=1))

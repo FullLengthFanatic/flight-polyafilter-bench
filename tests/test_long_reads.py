@@ -19,7 +19,7 @@ from pafbench.lrcontext import CLASSES, CONTEXT_COLUMNS, READ_COLUMNS, SUB_CAUSE
 from pafbench.regions import load_region_segments
 from pafbench.sites import COMP, context_from_seq, has_hexamer, priming_site, sense_context
 from pafbench.tecap import TAG
-from tests.synth_long import AS, DESIGNED, G, IG, NJ, ctx, expected, long_read, write_bam, write_fasta, write_gtf
+from tests.synth_long import AS, CHROMS, DESIGNED, G, IG, NJ, ctx, expected, long_read, write_bam, write_fasta, write_gtf
 
 HDR = pysam.AlignmentHeader.from_dict({"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 100000}]})
 
@@ -300,18 +300,30 @@ def test_count_duplicates():
 
 
 def _context_reads():
-    """The designed reads of stage 30 on both strands, a read whose aligned bases all belong to the run, and five records
-    that stage 16 does not accept or does not use."""
+    """The designed reads of stage 30 on both strands, the three of EXTRA, five records that stage 16 does not accept or
+    does not use, and one accepted read on chrA, which comes after chrS and chrE in the header and before them by name."""
     reads = [long_read(blocks, site, minus, name=f"{name}{'-' if minus else '+'}")
              for name, (blocks, site, _) in DESIGNED.items() for minus in (False, True)]
     blocks = DESIGNED["full_chain_3UTR"][0]
     body = blocks[:-1] + [(1600, 1800)]
-    return reads + [long_read([(1050, 1090)], 1050, name="all_in_run"),
+    on_chr_a = long_read([(100, 192)], 180, name="on_chrA")
+    on_chr_a.reference_name = "chrA"
+    return reads + [long_read([(1050, 1090)], 1050, name="all_in_run", mapq=20),
+                    long_read([(1050, 1090)], 1050, minus=True, name="all_in_run_minus"),
+                    long_read([(1050, 1100), (1200, 1212)], 1090, name="run_across_only_junction"),
                     long_read(body, 1800, name="short_run", run=9),         # no aligned A and 9 clipped A's
                     long_read(body, 1800, name="short_after", after=29),
                     long_read(blocks, 1800, name="low_mapq", mapq=19),
                     long_read(blocks, 1800, name="secondary", flag=256),
-                    long_read(blocks, 1800, minus=True, name="supplementary", flag=2048)]
+                    long_read(blocks, 1800, minus=True, name="supplementary", flag=2048), on_chr_a]
+
+
+# Accepted reads beside the designed ones, as (site, context). Two reads whose aligned bases all belong to the run: no body,
+# classed at their last cDNA base (1049 on plus) as reads without introns, 5' UTR of TA, 49 nt from its 5' end, and in an
+# intron of TB; the plus one has MAPQ 20, the lowest that stage 16 uses. One read whose only junction lies in the run: it is
+# classed as a read without introns (CDS of TA from its first base on, intron of TB) and is still a read with a splice
+EXTRA = [(1050, ctx("5UTR", "TA", complete_5p=True, other_class=True)), (G - 1050, ctx("5UTR", "TAm", complete_5p=True, other_class=True)),
+         (1090, ctx("CDS", "TA", complete_5p=True, covers_start=True, other_class=True))]
 
 
 def _read_row(a, site, want):
@@ -323,19 +335,19 @@ def _read_row(a, site, want):
 def test_scan_context_takes_the_reads_and_sites_of_stage_16(tmp_path):
     records = _context_reads()
     bam = write_bam(tmp_path / "long.bam", records)
-    models = load_models(write_gtf(tmp_path / "genes.gtf"), ["chrS", "chrE"])
+    models = load_models(write_gtf(tmp_path / "genes.gtf"), list(CHROMS))
     reads, counts = scan_context(bam, "chrS", models["chrS"], tagged=tmp_path / "tagged.bam")
     sites16, counts16, _ = scan_long_reads(bam, "chrS")
-    assert counts == {k: counts16[k] for k in ("records", "secondary_supplementary", "low_mapq", "used", "accepted")} | {"empty_body": 1}
-    assert counts["records"] == 2 * len(DESIGNED) + 6 and counts["accepted"] == 2 * len(DESIGNED) + 1 == len(reads)
+    assert counts == {k: counts16[k] for k in ("records", "secondary_supplementary", "low_mapq", "used", "accepted")} | {"empty_body": 2}
+    assert counts["records"] == 2 * len(DESIGNED) + 8 and counts["accepted"] == 2 * len(DESIGNED) + 3 == len(reads)
     # the sites with an accepted read and their read counts are those of stage 16
     acc = sites16[sites16.n_accepted >= 1]
     assert reads.groupby(["minus", "site"]).size().to_dict() == {(s == "-", p): n for s, p, n in zip(acc.strand, acc.site, acc.n_accepted)}
-    # one row per accepted read with its class and flags. The read without a body is classed at its last cDNA base, 1049,
-    # as an unspliced read: 5' UTR of TA, 49 nt from its 5' end, and in an intron of TB
+    # one row per accepted read with its class and flags
     want = [_read_row(a, G - site if minus else site, expected(name, minus)) for a, (name, minus, site) in zip(
         records, [(name, minus, site) for name, (_, site, _) in DESIGNED.items() for minus in (False, True)])]
-    want.append(_read_row(records[2 * len(DESIGNED)], 1050, ctx("5UTR", "TA", complete_5p=True, other_class=True)))
+    want += [_read_row(a, site, c) for a, (site, c) in zip(records[2 * len(DESIGNED):], EXTRA)]
+    assert [row[-1] for row in want[-3:]] == [True, True, False]       # no_splice follows the CIGAR, not the body
     assert list(reads.columns) == READ_COLUMNS
     assert sorted(reads.itertuples(index=False, name=None)) == sorted(want)
     assert reads.dtypes.astype(str).to_dict() == {
@@ -343,7 +355,7 @@ def test_scan_context_takes_the_reads_and_sites_of_stage_16(tmp_path):
         "retained_after_junction": "bool", "end_nf": "bool", "complete_5p": "bool", "covers_start": "bool", "other_class": "bool",
         "sub_cause": "int8", "length": "int32", "no_splice": "bool"}
     # the accepted records, in the order of the BAM and unchanged but for the site key in the tag
-    site_of = {a.query_name: f"chrS:{'-' if a.is_reverse else '+'}:{row[1]}" for a, row in zip(records, want)} | {"all_in_run": "chrS:+:1050"}
+    site_of = {a.query_name: f"chrS:{'-' if a.is_reverse else '+'}:{row[1]}" for a, row in zip(records, want)}
     with pysam.AlignmentFile(str(bam)) as src, pysam.AlignmentFile(str(tmp_path / "tagged.bam")) as out:
         assert out.header.to_dict() == src.header.to_dict()
         kept = [a for a in src.fetch("chrS") if a.query_name in site_of]
@@ -353,9 +365,11 @@ def test_scan_context_takes_the_reads_and_sites_of_stage_16(tmp_path):
             assert a.get_tags() == b.get_tags() + [(TAG, site_of[a.query_name])]
             a.set_tag(TAG, None)
             assert a.to_string() == b.to_string()
-    # a reference without a read, and no tagged BAM unless asked for
+    # a reference without a read and one without a transcript, and no tagged BAM unless asked for
     reads, counts = scan_context(bam, "chrE", models["chrE"])
     assert list(reads.columns) == READ_COLUMNS and not len(reads) and counts["records"] == 0 and counts["accepted"] == 0
+    reads, counts = scan_context(bam, "chrA", models["chrA"])
+    assert list(reads.itertuples(index=False, name=None)) == [_read_row(records[-1], 180, ctx(IG))] and counts["accepted"] == 1
     assert sorted(p.name for p in tmp_path.glob("*.bam")) == ["long.bam", "long.unsorted.bam", "tagged.bam"]
 
 
@@ -391,11 +405,12 @@ def stage30_inputs(tmp_path, monkeypatch):
     bam, gtf, fasta = write_bam(tmp_path / "long.bam", _context_reads()), write_gtf(tmp_path / "genes.gtf"), write_fasta(tmp_path / "genome.fa")
     seg = (load_region_segments(gtf), load_gene_segments(gtf))
     with pysam.FastaFile(str(fasta)) as fa:
-        s16 = pd.concat([annotate_sites(scan_long_reads(bam, ref)[0], ref, fa.fetch(ref).upper(), *seg) for ref in ("chrS", "chrE")],
+        s16 = pd.concat([annotate_sites(scan_long_reads(bam, ref)[0], ref, fa.fetch(ref).upper(), *seg) for ref in CHROMS],
                         ignore_index=True)
     for lib in ("BD67", "BD70"):
         (base / lib).mkdir(parents=True)
-        s16.to_parquet(base / lib / "long_read_sites.parquet", index=False)
+        # the table of stage 16 also holds a site on a reference that is not scanned
+        pd.concat([s16, s16.iloc[:1].assign(ref="chrX")]).to_parquet(base / lib / "long_read_sites.parquet", index=False)
     (base / "1179" / "truth").mkdir(parents=True)
     # at the site of three designed reads, 10 nt from another, 11 nt from it, on the other strand of the first, and on
     # a reference that is not scanned
@@ -421,7 +436,7 @@ def stage30_inputs(tmp_path, monkeypatch):
 
 
 def _run30(stage, monkeypatch, capsys, base, out, *extra):
-    monkeypatch.setattr(sys, "argv", ["30", "--refs", "chrS", "chrE", "--base", str(base), "--out", str(out), "--workers", "2", *extra])
+    monkeypatch.setattr(sys, "argv", ["30", "--refs", *CHROMS, "--base", str(base), "--out", str(out), "--workers", "2", *extra])
     stage.main()
     return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
@@ -433,13 +448,14 @@ def _types(path):
 def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, capsys):
     stage, base, s16 = stage30_inputs
     out = tmp_path / "out"
-    printed = _run30(stage, monkeypatch, capsys, base, out)
+    printed = _run30(stage, monkeypatch, capsys, base, out, "--workers", "5")
     acc = s16[s16.n_accepted >= 1].reset_index(drop=True)
-    n_reads, n_spliced = 2 * len(DESIGNED) + 1, 2 * sum(len(blocks) > 1 for blocks, _, _ in DESIGNED.values())
+    n_reads, n_spliced = 2 * len(DESIGNED) + 4, 2 * sum(len(blocks) > 1 for blocks, _, _ in DESIGNED.values()) + 1
     for lib in ("BD67", "BD70"):
         d = out / lib
         sites = pd.read_parquet(d / "isoform_context_sites.parquet")
-        # the sites and accepted reads of stage 16, with its label, band, hexamer and region
+        # the sites and accepted reads of stage 16, with its label, band, hexamer and region, in the order of --refs
+        assert acc.ref.unique().tolist() == ["chrS", "chrA"]
         assert list(sites.columns) == CONTEXT_COLUMNS and len(sites) == len(acc) and sites.n_accepted.sum() == n_reads
         for c in ("ref", "strand", "site", "label", "a_band", "hexamer", "region", "n_accepted"):
             assert sites[c].tolist() == acc[c].tolist(), c
@@ -474,7 +490,7 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
                 v: {"sites": len(acc), "reads": n_reads} for v in ("placed", "strict")}
         # placed: 2 x 5 reads keep their class; strict: they are novel junction reads
         by = lambda v: summary[summary.version == v].groupby("context").reads.sum()
-        assert by("strict")[NJ] - by("placed")[NJ] == 10 and by("placed")[NJ] == 6 and by("placed")[AS] == 4 and by("placed")[IG] == 2
+        assert by("strict")[NJ] - by("placed")[NJ] == 10 and by("placed")[NJ] == 6 and by("placed")[AS] == 4 and by("placed")[IG] == 3
         assert set(region.region) == set(acc.region) and "intron" in set(acc.region)
         no_model = pd.read_parquet(d / "sites_no_model.parquet")
         assert list(no_model.columns) == ["ref", "strand", "site", "region", "label", "n_accepted", "reason", "sub_cause"]
@@ -484,13 +500,14 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         assert sorted(zip(no_model.strand, no_model.site, no_model.reason, no_model.sub_cause)) == sorted(
             [("+", 1800, "novel_junction", "near_annotated_intron"), ("-", G - 1800, "novel_junction", "near_annotated_intron"),
              ("+", 8080, "antisense", ""), ("-", G - 8080, "antisense", ""), ("+", 8400, "antisense", ""),
-             ("-", G - 8400, "antisense", ""), ("+", 5080, "intergenic", ""), ("-", G - 5080, "intergenic", "")])
+             ("-", G - 8400, "antisense", ""), ("+", 5080, "intergenic", ""), ("-", G - 5080, "intergenic", ""),
+             ("+", 180, "intergenic", "")])
         merged = no_model.merge(sites, on=["ref", "strand", "site"], suffixes=("", "_s"))
-        assert (merged.region == merged.region_s).all() and (merged.label == merged.label_s).all() and len(merged) == 8
+        assert (merged.region == merged.region_s).all() and (merged.label == merged.label_s).all() and len(merged) == 9
         j = json.loads((d / "isoform_context.json").read_text())
-        assert j["library"] == lib and j["refs"] == ["chrS", "chrE"] and j["accepted_reads"] == n_reads and j["sites"] == len(acc)
+        assert j["library"] == lib and j["refs"] == ["chrS", "chrE", "chrA"] and j["accepted_reads"] == n_reads and j["sites"] == len(acc)
         assert j["records"] == {"records": n_reads + 5, "secondary_supplementary": 2, "low_mapq": 1, "used": n_reads + 2,
-                                "accepted": n_reads, "empty_body": 1}
+                                "accepted": n_reads, "empty_body": 2}
         assert j["tolerances"] == {"LONG_END_TOL": 10, "NEAR_INTRON_TOL": 5, "MIN_INTRON": 50, "FIVE_PRIME_TOL": 50, "NULL_SHIFT": 1000}
         assert j["acceptance"] == {"sites_and_accepted_reads_equal_stage16": True, "one_class_per_accepted_read": True,
                                    "intron_sites_off_model": 0}
@@ -499,10 +516,13 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         # link to 1179: the molecules on the scanned references; 1340 is 10 nt from the site 1330, 1341 is 11 nt from it
         v = j["vs_1179"]
         assert v["real"]["molecules"] == 4 and v["real"]["matched"] == 2 and v["null_shift_nt"] == 1000 and v["null"]["matched"] == 0
-        # tecap: the tagged BAM holds the accepted reads; the stand-in puts the spliced ones into one bucket
+        # tecap: the tagged BAM holds the accepted reads in the order of the header; the stand-in puts the spliced ones into
+        # one bucket. tecap gets one worker per reference, at most --workers
         with pysam.AlignmentFile(str(d / "tecap" / "accepted.bam")) as fh:
-            keys = [a.get_tag(TAG) for a in fh.fetch()]
+            keys = [a.get_tag(TAG) for a in fh.fetch(until_eof=True)]
         assert len(keys) == n_reads and set(keys) == {f"{r}:{s}:{p}" for r, s, p in zip(acc.ref, acc.strand, acc.site)}
+        assert keys[-1] == "chrA:+:180"
+        assert json.loads((d / "tecap" / "out" / f"{lib}_terminal_exon.json").read_text())["threads"] == 3
         assert sorted(p.name for p in (d / "tecap").iterdir()) == ["accepted.bam", "accepted.bam.bai", "out"]
         buckets, by_label = pd.read_parquet(d / "tecap_site_buckets.parquet"), pd.read_parquet(d / "tecap_buckets.parquet")
         assert list(buckets.columns) == ["ref", "strand", "site", "bucket", "reads"] and list(by_label.columns) == ["label", "bucket", "reads"]
@@ -515,7 +535,7 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         assert sum(v["without_splice"] for v in per_label.values()) == n_reads - n_spliced
         assert j["tecap"]["json_bytes"] == (d / "tecap" / "out" / f"{lib}_terminal_exon.json").stat().st_size
         assert j["tecap"]["sites_with_a_classified_read"] == buckets[["strand", "site"]].drop_duplicates().shape[0]
-        # top class a no_model reason: the eight sites of sites_no_model.parquet; strict, also the two sites at 1900, where both
+        # top class a no_model reason: the nine sites of sites_no_model.parquet; strict, also the two sites at 1900, where both
         # reads are chain_novel (at 1550 one of two is, and the tie stays with intron_after_junction)
         # tied, with a top class that holds half of the reads: placed, the two sites at 1900 (annotated_end and 3UTR, both reads
         # chain_novel, so the top class rests on chain_novel reads alone); strict, the two at 1550. The sites of the region
@@ -523,7 +543,7 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         link = {k: {"share_matched_by_label": j["vs_1179"][k]["share_matched_by_label"], "agreement": j["vs_1179"][k]["agreement"]}
                 for k in ("real", "null")}
         assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "reads_novel_junction": {"placed": 6, "strict": 16},
-                                "sites_top_no_model": {"placed": 8, "strict": 10},
+                                "sites_top_no_model": {"placed": 9, "strict": 11},
                                 "intron_sites": 4, "intron_sites_top_no_model": {"placed": 0, "strict": 0},
                                 "sites_tied": {"placed": 2, "strict": 2}, "sites_top_share_at_most_half": {"placed": 2, "strict": 2},
                                 "sites_top_class_on_chain_novel_only": 2, "vs_1179": link, "tecap": per_label}
