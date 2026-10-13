@@ -560,11 +560,12 @@ def check_a4(job):
     """Checks A4 and A6 for one BAM the original tool wrote. job: (tag, BAM, Cell Ranger's filtered_feature_bc_matrix
     folder, the matrix of the rule at tag). A4: the naive recount by the documented rule equals the matrix, tolerance 0.
     A6, reported only: the entries on which Cell Ranger's counting code on the raw UMIs of the same reads differs from it,
-    and the UMIs only the rule or only that code counts."""
+    and the UMIs only the rule or only that code counts. In both listings ours is the matrix of the rule and theirs the
+    count from the BAM."""
     tag, bam, cr_matrix_dir, expected = job
     t0 = time.monotonic()
     got = naive.recount_bam(bam, cr_matrix_dir)
-    a4, a6 = check_entries(got["rule"], expected, 0), check_entries(expected, got["port"], 0)
+    a4, a6 = check_entries(expected, got["rule"], 0), check_entries(expected, got["port"], 0)
     d = a6["differing"].ours - a6["differing"].theirs
     a6 = {k: a6[k] for k in ("entries_compared", "entries_differing", "per_million")} | {
         "umis_rule": int(expected.sum()), "umis_code": int(got["port"].sum()), "umis_only_rule": int(d[d > 0].sum()),

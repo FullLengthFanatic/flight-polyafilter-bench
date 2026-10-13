@@ -873,10 +873,10 @@ def test_tie_break_that_prefers_the_first_gene_fails_a4_and_raises_the_a1b_count
     a4 = res["A4"]
     assert not a4["passed"] and not any(one["passed"] for one in a4["settings"].values())
     # default mode leaves four ties in c2 (tie, tie_broken, three_vs_one, leads_by_one), the tie of three_genes in c3 and
-    # the chain in c5: the planted rule counts g1 in each, the naive recount of the BAM (ours) nothing
+    # the chain in c5: the planted rule counts g1 in each (ours), the naive recount of the BAM (theirs) nothing
     assert a4["settings"][TAGS[0]]["differing"] == [
-        {"cell": CELLS_10X["c2"], "gene": "g1", "ours": 0, "theirs": 4}, {"cell": CELLS_10X["c3"], "gene": "g1", "ours": 0, "theirs": 1},
-        {"cell": CELLS_10X["c5"], "gene": "g1", "ours": 1, "theirs": 2}]
+        {"cell": CELLS_10X["c2"], "gene": "g1", "ours": 4, "theirs": 0}, {"cell": CELLS_10X["c3"], "gene": "g1", "ours": 1, "theirs": 0},
+        {"cell": CELLS_10X["c5"], "gene": "g1", "ours": 2, "theirs": 1}]
     assert "stage 24, X: A4" in capsys.readouterr().err
     # with the last gene counted the matrix entries of A1b rise as well, to four, and the stage stops there
     monkeypatch.setattr(recount, "counted", _last_gene_on_a_tie)
@@ -981,7 +981,8 @@ def test_failed_a2_and_a4_leave_the_matrices_without_passed(synth10x, stage13, t
     a4 = res["A4"]
     assert [one["passed"] for one in a4["settings"].values()] == [False, True, True, True] and not a4["passed"]
     _, by_tag = _designed_matrices(synth10x)
-    want = [{"cell": CALLED[i], "gene": GENES[j], "ours": int(by_tag[TAGS[2]][2][i, j]), "theirs": int(by_tag[TAGS[0]][2][i, j])}
+    # ours is the matrix of this stage at the first setting, theirs the recount of the BAM, here that of the third
+    want = [{"cell": CALLED[i], "gene": GENES[j], "ours": int(by_tag[TAGS[0]][2][i, j]), "theirs": int(by_tag[TAGS[2]][2][i, j])}
             for i, j in np.argwhere(by_tag[TAGS[2]][2] != by_tag[TAGS[0]][2])]
     assert a4["settings"][TAGS[0]]["differing"] == want and len(want) > 0
     assert "stage 24, X: A4\n" in capsys.readouterr().err
