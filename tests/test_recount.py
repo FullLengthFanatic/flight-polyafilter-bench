@@ -1,20 +1,26 @@
 """The counting rule of stage 24 (pafbench.recount) on the parts of the synthetic 10x library, against the designed tables
 of tests/synth.build_10x and plain counts."""
+import dataclasses
 import gzip
 import json
 import shutil
 from collections import Counter
 
+import h5py
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pysam
 import pytest
+import scipy.sparse as sp
 
-from pafbench import matrices, recount, stream
+from pafbench import matrices, molstream, recount, stream
 from pafbench.flags import setting_tag
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index
 from pafbench.transcripts import load_transcripts
 from tests.synth import CELLS_10X, CHROMS, SETTINGS_10X, run_original
-from tests.test_synth10x import CELL, CELL_RECORDS, MATRIX
+from tests.test_synth10x import CELL, CELL_RECORDS, MATRIX, _cell_ranger
 
 TAGS = [setting_tag(s) for s in SETTINGS_10X]
 REFS = list(CHROMS)
@@ -679,7 +685,481 @@ def stage24(synth10x, stage13, tmp_path_factory):
     return d, bams, _run(synth10x, d, bams)
 
 
-def test_run_passes_every_check_on_the_synthetic_library(stage24):
+def test_run_passes_every_check_on_the_synthetic_library(synth10x, stage24):
     d, bams, res = stage24
     assert res["passed"] is True and list(res)[-1] == "passed"
     assert json.loads((d / "recount" / "recount.json").read_text()) == res
+    assert list(res) == ["library", "rule_version", "settings", "refs", "records", "primary", "called", "xf1_no_ub", "xf1_no_gene",
+                         "in_groups", "read_groups", "seconds", "duplicate_keys", "cell_umis", "cell_umis_two_or_more_groups",
+                         "counted_molecules", "other_read_groups", "events", "A1", "A1b", "A3", "A5", "A2", "A4", "A6", "passed"]
+    assert (res["library"], res["rule_version"], res["settings"], res["refs"]) == ("X", molstream.RULE_VERSION, TAGS, 2)
+    # the counts of stage 23 are summed from the part jsons
+    stats = [json.loads((d / "recount" / "parts" / f"{ref}.json").read_text()) for ref in REFS]
+    assert {k: res[k] for k in molstream.COUNTS} == {k: sum(st[k] for st in stats) for k in molstream.COUNTS}
+    assert (res["read_groups"], res["in_groups"], res["records"]) == (33, 63, len(synth10x.reads))
+    assert (res["duplicate_keys"], res["cell_umis"], res["cell_umis_two_or_more_groups"]) == (0, 23, 8)
+    assert (res["counted_molecules"], res["other_read_groups"]) == (20, 13)
+    ev = synth10x.events
+    assert res["events"] == {t: {k: int(ev[ev.tag == t][k].sum()) for k in ("lost", "gained", "switched")} for t in TAGS}
+    assert res["events"][TAGS[1]] == {"lost": 7, "gained": 4, "switched": 3}
+    assert list(res["seconds"]) == ["rule", "checks", "write", "A2", "A4"]
+    a1, a1b = res["A1"], res["A1b"]
+    assert (a1["entries_compared"], a1["entries_equal"], a1["entries_differing"], a1["passed"]) == (9, 9, 0, True)
+    assert (a1b["entries_compared"], a1b["entries_equal"], a1b["entries_differing"], a1b["passed"]) == (10, 8, 2, True)
+    assert a1b["gate"] == GATE * 9 and a1b["differing"] == [
+        {"cell": CELLS_10X["c4"], "gene": "g3", "ours": 1, "theirs": 0}, {"cell": CELLS_10X["c5"], "gene": "g1", "ours": 1, "theirs": 2}]
+    # the two source patterns, each cell and UMI with all its read groups
+    assert (a1b["cell_umis_differing"], a1b["rule_only_molecules"], a1b["xf_only_molecules"]) == (2, 1, 1)
+    group = lambda c, umi, gene, n_win, rule, xf: {"n_reads": 1, "n_winner_reads": n_win, "counted_by_rule": rule,
+                                                   "counted_by_xf": xf, "cell": CELLS_10X[c], "umi": umi, "gene": gene}
+    assert a1b["read_groups"] == [group("c4", "GATCCTGAGGTG", "g3", 0, True, False), group("c5", "CTGTTCTTGTTT", "g1", 1, False, True),
+                                  group("c5", "CTGTTCTTGTTT", "g2", 0, False, False), group("c5", "CTGTTCTTGTTT", "g3", 0, False, False)]
+    assert "check_script" not in a1b
+    assert res["A3"] == {"cells": 5, "settings": 4, "cell_values_compared": 25, "region_rows_compared": 12, "values_differing": 0,
+                         "passed": True, "differing": []}
+    m0, by_tag = _designed_matrices(synth10x)
+    assert res["A5"] == {"umis": {"unfiltered": 20} | {t: int(by_tag[t][2].sum()) for t in TAGS}, "violations": {}, "passed": True,
+                         "groups": [], "entries": [], "totals": []}
+    assert res["A2"] == {"read_groups": 20, "molecules": 20, "joined": 20, "only_read_groups": 0, "only_molecule_info": 0,
+                         "read_count_mismatches": 0, "passed": True, "left_over": []}
+
+
+def _port_matrix(s, tag):
+    """Cell Ranger's counting code on the reads that survive at tag, by the port of tests/test_synth10x: one UMI per read
+    that comes out as the UMI count (xf 25)."""
+    reads = s.reads[s.reads.cb.isin(CALLED) & s.reads.ub.notna() & s.reads.gx.isin(GENES) & ((s.reads.xf & 1) == 1) & ~s.reads[tag]]
+    counts = Counter()
+    for cb, rs in reads.groupby("cb"):
+        port = _cell_ranger([(r.qname, r.ur, r.gx, r.re == "E") for r in rs.itertuples()])
+        counts.update((cb, r.gx) for r, (_, xf, _) in zip(rs.itertuples(), port) if xf == 25)
+    return _dense(counts)
+
+
+def test_run_compares_every_original_tool_bam_with_the_matrices_and_reports_a6(synth10x, stage24):
+    d, bams, res = stage24
+    a4 = res["A4"]
+    assert (a4["bams"], a4["refs"], a4["passed"]) == (4, "all", True) and list(a4["settings"]) == TAGS == list(res["A6"])
+    _, by_tag = _designed_matrices(synth10x)
+    for tag in TAGS:
+        one, kept = a4["settings"][tag], synth10x.reads[~synth10x.reads[tag]]
+        after = by_tag[tag][2]
+        assert (one["bam"], one["records"], one["passed"], one["differing"]) == (str(bams[tag]), len(kept), True, [])
+        assert one["entries_compared"] == one["entries_equal"] == int((after > 0).sum()) and one["entries_differing"] == 0
+        # A6: the counting code on the raw UMIs of the surviving reads against the rule on their corrected UMIs
+        port, a6 = _port_matrix(synth10x, tag), res["A6"][tag]
+        differ = np.argwhere(port != after)
+        assert a6["differing"] == [{"cell": CALLED[i], "gene": GENES[j], "ours": int(after[i, j]), "theirs": int(port[i, j])}
+                                   for i, j in differ]
+        assert (a6["entries_differing"], a6["umis_rule"], a6["umis_code"]) == (len(differ), int(after.sum()), int(port.sum()))
+        assert a6["umis_only_rule"] == int(np.clip(after - port, 0, None).sum())
+        assert a6["umis_only_code"] == int(np.clip(port - after, 0, None).sum())
+        assert a6["entries_compared"] == int(((port > 0) | (after > 0)).sum()) and "passed" not in a6
+    # the two source patterns are untouched by the first setting: A6 shows them there, one UMI each way
+    assert (res["A6"][TAGS[0]]["entries_differing"], res["A6"][TAGS[0]]["umis_only_rule"], res["A6"][TAGS[0]]["umis_only_code"]) == (2, 1, 1)
+
+
+def test_run_writes_the_molecule_tables_of_the_output_list(synth10x, stage24):
+    d, _, _ = stage24
+    g, ev = synth10x.groups, synth10x.events
+    before = ev.drop_duplicates(["cb", "ub"]).set_index(["cb", "ub"]).before
+    held = np.array([before[(r.cb, r.ub)] == r.gene for r in g.itertuples()])
+    bits = lambda rows: sum(int(b) << t for t, b in enumerate(rows))
+    for name, event, rows in (("counted_molecules", "lost", g[held]), ("other_read_groups", "gained", g[~held])):
+        t = pd.read_parquet(d / "recount" / f"{name}.parquet")
+        assert list(t.columns) == ["cell", "gene", "umi", "ref", "n_reads", "n_pa", "re_class", "end3", "end3_nonpa",
+                                   "any_removed", event, "switched"]
+        assert t.dtypes.astype(str).tolist() == ["int32", "int32", "uint32", "category", "uint16", "uint16", "uint8", "int32",
+                                                 "int32", "uint32", "uint32", "uint32"]
+        assert pq.read_schema(d / "recount" / f"{name}.parquet").field("ref").type == pa.dictionary(pa.int16(), pa.string())
+        # written reference by reference, each block sorted by key: cell, UMI, gene
+        order = list(zip(t.ref.map(REFS.index), t.cell, t.umi, t.gene))
+        assert order == sorted(order) and set(t.ref) == {"chrA", "chrB"}
+        got = {(CALLED[r.cell], _umi(r.umi), GENES[r.gene]): tuple(int(x) for x in r[4:]) for r in t.itertuples(index=False)}
+        want = {}
+        for r in rows.itertuples():
+            e = ev[(ev.cb == r.cb) & (ev.ub == r.ub)].set_index("tag").loc[TAGS]
+            mine = (e.before if event == "lost" else e.after) == r.gene
+            want[(r.cb, r.ub, r.gene)] = (r.n_reads, r.n_pa, r.re_class, r.end3, r.end3_nonpa,
+                                          bits(getattr(r, f"rm_{tag}") > 0 for tag in TAGS), bits(e[event] & mine),
+                                          bits(e.switched & mine))
+        assert got == want and len(t) == len(rows)
+        assert dict(zip(zip(t.cell, t.umi, t.gene), t.ref)) == {
+            (CALLED.index(r.cb), _code(r.ub), GENES.index(r.gene)): "chrB" if r.gene == "g3" else "chrA" for r in rows.itertuples()}
+    counted = pd.read_parquet(d / "recount" / "counted_molecules.parquet")
+    assert len(counted) == 20 and counted.lost.sum() > 0 and counted.switched.sum() > 0
+    assert not counted.duplicated(["cell", "umi"]).any()                       # at most one molecule per cell and UMI
+
+
+def test_run_lists_the_source_patterns_in_rule_vs_xf(synth10x, stage24):
+    d, _, _ = stage24
+    vs = pd.read_parquet(d / "recount" / "rule_vs_xf.parquet")
+    assert list(vs.columns) == ["cell", "umi", "gene", "n_reads", "n_winner_reads", "counted_by_rule", "counted_by_xf"]
+    assert vs.dtypes.astype(str).tolist() == ["int32", "uint32", "int32", "uint16", "uint16", "bool", "bool"]
+    c4, c5 = CALLED.index(CELLS_10X["c4"]), CALLED.index(CELLS_10X["c5"])
+    alone, chain = _code("GATCCTGAGGTG"), _code("CTGTTCTTGTTT")
+    assert [tuple(r) for r in vs.itertuples(index=False)] == [
+        (c4, alone, 2, 1, 0, True, False),                  # alone at its corrected UMI with xf 19: the rule counts it
+        (c5, chain, 0, 1, 1, False, True), (c5, chain, 1, 1, 0, False, False), (c5, chain, 2, 1, 0, False, False)]
+    # it marks the row of counted_molecules that molecule_info.h5 lacks and the Cell Ranger molecule in other_read_groups
+    key = ["cell", "umi", "gene"]
+    counted = pd.read_parquet(d / "recount" / "counted_molecules.parquet")[key]
+    other = pd.read_parquet(d / "recount" / "other_read_groups.parquet")[key]
+    rule_only, xf_only = vs[vs.counted_by_rule & ~vs.counted_by_xf][key], vs[vs.counted_by_xf & ~vs.counted_by_rule][key]
+    assert len(rule_only.merge(counted)) == 1 and len(xf_only.merge(other)) == 1 and len(xf_only.merge(counted)) == 0
+    cells, genes = row_index(_matrix(synth10x) / "barcodes.tsv.gz"), row_index(_matrix(synth10x) / "features.tsv.gz")
+    mol_key, _ = recount.molecule_info(synth10x.outs / "molecule_info.h5", cells, list(genes))
+    packed = lambda t: set(((t.cell.to_numpy(np.int64) << 40) | (t.umi.to_numpy(np.int64) << 16) | t.gene.to_numpy()).tolist())
+    assert packed(counted) - set(mol_key.tolist()) == packed(rule_only) and set(mol_key.tolist()) - packed(counted) == packed(xf_only)
+
+
+def test_run_writes_the_matrices_and_totals(synth10x, stage24, parts):
+    d, _, res = stage24
+    m0, by_tag = _designed_matrices(synth10x)
+    assert np.array_equal(matrices.load("X", "unfiltered", d / "matrices").toarray(), m0)
+    for tag, (lost, gained, after) in by_tag.items():
+        assert np.array_equal(matrices.load("X", tag, d / "matrices").toarray(), after), tag
+        assert np.array_equal(sp.load_npz(d / "matrices" / "lost" / f"{tag}.npz").toarray(), lost)
+        assert np.array_equal(sp.load_npz(d / "matrices" / "gained" / f"{tag}.npz").toarray(), gained)
+    meta = part_meta(synth10x.bam, _matrix(synth10x), SETTINGS_10X)
+    assert json.loads((d / "matrices" / "manifest.json").read_text()) == {"tags": TAGS, "shape": [5, 4], "library": "X"} | {
+        k: v for k, v in meta.items() if k != "settings"}
+    assert (d / "matrices" / "barcodes.tsv").read_text().split() == CALLED
+    assert [line.split("\t")[0] for line in (d / "matrices" / "features.tsv").read_text().splitlines()] == GENES
+    (cell, gene), _ = _totals(synth10x, parts)
+    pd.testing.assert_frame_equal(pd.read_parquet(d / "matrices" / "cell_totals.parquet"), cell)
+    pd.testing.assert_frame_equal(pd.read_parquet(d / "matrices" / "gene_totals.parquet"), gene)
+    assert sorted(p.name for p in (d / "matrices").iterdir()) == ["barcodes.tsv", "cell_totals.parquet", "features.tsv", "gained",
+                                                                  "gene_totals.parquet", "lost", "manifest.json", "unfiltered.npz"]
+    assert sorted(p.name for p in (d / "recount").iterdir()) == ["counted_molecules.parquet", "other_read_groups.parquet", "parts",
+                                                                 "recount.json", "rule_vs_xf.parquet"]
+
+
+def _first_gene_on_a_tie(reads, cu_start):
+    """Planted in place of recount.counted: on a tie for the maximum the first gene of the cell and UMI holds the UMI."""
+    n = np.diff(np.append(cu_start, reads.size))
+    top = (reads == np.repeat(np.maximum.reduceat(reads, cu_start), n)) & (reads > 0)
+    unit = np.repeat(np.arange(cu_start.size), n)
+    rows = np.flatnonzero(top)
+    first = np.zeros(reads.size, np.bool_)
+    first[rows[np.r_[True, unit[rows][1:] != unit[rows][:-1]]]] = True
+    return first
+
+
+def _last_gene_on_a_tie(reads, cu_start):
+    n = np.diff(np.append(cu_start, reads.size))
+    return _first_gene_on_a_tie(reads[::-1], (reads.size - (cu_start + n))[::-1])[::-1]
+
+
+def test_tie_break_that_prefers_the_first_gene_fails_a4_and_raises_the_a1b_count(synth10x, stage13, tmp_path, monkeypatch, capsys):
+    """tie, tie_broken and chain are tied before filtering. With the first gene counted, g1 holds all three: the cells and
+    UMIs on which the rule and the xf bits differ go from the designed two to three (the chain now agrees with Cell Ranger,
+    the two ties do not), on two matrix entries as before. The original tool's BAMs still hold the ties, and a recount of
+    them by the documented rule counts nothing there."""
+    assert _first_gene_on_a_tie(np.array([2, 2, 1, 3, 3, 0, 1]), np.array([0, 2, 5])).tolist() == [1, 0, 0, 1, 0, 0, 1]
+    assert _last_gene_on_a_tie(np.array([2, 2, 1, 3, 3, 0, 1]), np.array([0, 2, 5])).tolist() == [0, 1, 0, 0, 1, 0, 1]
+    bams = _library(synth10x, tmp_path, stage13)
+    monkeypatch.setattr(recount, "counted", _first_gene_on_a_tie)
+    res = _run(synth10x, tmp_path, bams)
+    assert "passed" not in res and "passed" not in json.loads((tmp_path / "recount" / "recount.json").read_text())
+    a1b = res["A1b"]
+    assert (a1b["cell_umis_differing"], a1b["entries_differing"], a1b["passed"], res["A1"]["passed"]) == (3, 2, True, True)
+    assert sorted((e["cell"], e["gene"], e["ours"], e["theirs"]) for e in a1b["differing"]) == [
+        (CELLS_10X["c2"], "g1", 4, 2), (CELLS_10X["c4"], "g3", 1, 0)]
+    a4 = res["A4"]
+    assert not a4["passed"] and not any(one["passed"] for one in a4["settings"].values())
+    # default mode leaves four ties in c2 (tie, tie_broken, three_vs_one, leads_by_one), the tie of three_genes in c3 and
+    # the chain in c5: the planted rule counts g1 in each, the naive recount of the BAM (ours) nothing
+    assert a4["settings"][TAGS[0]]["differing"] == [
+        {"cell": CELLS_10X["c2"], "gene": "g1", "ours": 0, "theirs": 4}, {"cell": CELLS_10X["c3"], "gene": "g1", "ours": 0, "theirs": 1},
+        {"cell": CELLS_10X["c5"], "gene": "g1", "ours": 1, "theirs": 2}]
+    assert "stage 24, X: A4" in capsys.readouterr().err
+    # with the last gene counted the matrix entries of A1b rise as well, to four, and the stage stops there
+    monkeypatch.setattr(recount, "counted", _last_gene_on_a_tie)
+    res = _run(synth10x, tmp_path, bams)
+    a1b = res["A1b"]
+    assert (a1b["entries_differing"], a1b["cell_umis_differing"], a1b["passed"]) == (4, 4, False) and "A4" not in res
+    assert "passed" not in res
+
+
+def _private(s, d):
+    """The library with its own outs folder under d, which a test may change."""
+    shutil.copytree(s.outs, d / "outs")
+    return dataclasses.replace(s, tmp=d, bam=d / "outs" / "possorted_genome_bam.bam", outs=d / "outs")
+
+
+def _stopped(d, res, *checks):
+    """A run that ended at a failed check: the checks it holds, no passed, and the same on disk."""
+    assert "passed" not in res and [k for k in res if k[0] == "A" or k == "resolution"] == list(checks)
+    assert json.loads((d / "recount" / "recount.json").read_text()) == res
+    return True
+
+
+def test_failed_a1_stops_before_the_matrices_and_lists_the_read_groups(synth10x, stage13, tmp_path, capsys):
+    """One UMI more in the Cell Ranger matrix at c3, g2, and the molecule that would explain it in molecule_info.h5: the
+    resolution step joins the read groups to molecule_info and lists the groups of the cells and UMIs that are left over."""
+    lib = _private(synth10x, tmp_path)
+    bams = _library(lib, tmp_path, stage13)
+    path = _matrix(lib) / "matrix.mtx.gz"
+    with gzip.open(path, "rt") as fh:
+        text = fh.read()
+    c3 = CALLED.index(CELLS_10X["c3"])
+    assert f"\n2 {c3 + 1} 1\n" in text
+    with gzip.open(path, "wt") as fh:
+        fh.write(text.replace(f"\n2 {c3 + 1} 1\n", f"\n2 {c3 + 1} 2\n"))
+    with h5py.File(lib.outs / "molecule_info.h5", "r+") as f:
+        rows = {k: f[k][:] for k in ("barcode_idx", "feature_idx", "umi", "count", "gem_group")}
+        extra = {"barcode_idx": f["barcode_info/pass_filter"][c3, 0], "feature_idx": 1, "umi": _code("TTTTTTTTTTTT"), "count": 5,
+                 "gem_group": 1}
+        for k, v in rows.items():
+            del f[k]
+            f[k] = np.append(v, np.array([extra[k]], v.dtype))
+    res = _run(lib, tmp_path, bams)
+    assert _stopped(tmp_path, res, "A1", "A1b", "A2", "resolution")
+    assert (res["A1"]["passed"], res["A1"]["entries_differing"]) == (False, 1)
+    assert res["A1"]["differing"] == [{"cell": CELLS_10X["c3"], "gene": "g2", "ours": 1, "theirs": 2}]
+    a2 = res["A2"]
+    assert (a2["joined"], a2["only_read_groups"], a2["only_molecule_info"], a2["passed"]) == (20, 0, 1, False)
+    assert a2["left_over"] == [{"n_reads": None, "count": 5, "cell": CELLS_10X["c3"], "umi": "TTTTTTTTTTTT", "gene": "g2"}]
+    # the read groups of the cells and UMIs behind A2 and A1b: none for the planted molecule, four for the source patterns
+    assert [(g["cell"], g["umi"], g["gene"], g["ref"], g["n_reads"], g["n_winner_reads"]) for g in res["resolution"]] == [
+        (CELLS_10X["c4"], "GATCCTGAGGTG", "g3", "chrB", 1, 0), (CELLS_10X["c5"], "CTGTTCTTGTTT", "g1", "chrA", 1, 1),
+        (CELLS_10X["c5"], "CTGTTCTTGTTT", "g2", "chrA", 1, 0), (CELLS_10X["c5"], "CTGTTCTTGTTT", "g3", "chrB", 1, 0)]
+    err = capsys.readouterr().err
+    assert all(f"stage 24, X: {name}\n" in err for name in ("A1", "A1b", "A2", "resolution")) and '"gene": "g2"' in err
+    # the tables written during the pass are there, the matrices are not
+    assert not (tmp_path / "matrices").exists() and (tmp_path / "recount" / "counted_molecules.parquet").exists()
+
+
+def test_a1b_above_its_gate_stops_the_stage(synth10x, stage13, tmp_path):
+    bams = _library(synth10x, tmp_path, stage13)
+    res = _run(synth10x, tmp_path, bams, gate=0.2)               # 1.8 entries: the two designed differences are one too many
+    assert _stopped(tmp_path, res, "A1", "A1b", "A2", "resolution")
+    assert (res["A1"]["passed"], res["A1b"]["passed"], res["A1b"]["entries_differing"], res["A2"]["passed"]) == (True, False, 2, True)
+    assert len(res["resolution"]) == 4 and not (tmp_path / "matrices").exists()
+
+
+def test_failed_a3_and_a5_stop_before_the_matrices_and_a_passed_of_an_earlier_run_is_gone(synth10x, stage13, tmp_path, capsys):
+    bams = _library(synth10x, tmp_path, stage13)
+    assert _run(synth10x, tmp_path, bams)["passed"] is True
+    shutil.rmtree(tmp_path / "matrices")
+    # stage 13 with another total for one cell
+    cells = stage13[0].copy()
+    cells.loc[CALLED[3], "total"] += 1
+    cells.to_parquet(tmp_path / "grid" / "cell_counts.parquet")
+    res = _run(synth10x, tmp_path, bams)
+    assert _stopped(tmp_path, res, "A1", "A1b", "A3") and not (tmp_path / "matrices").exists()
+    assert res["A3"]["differing"] == [{"what": "cell", "name": CALLED[3], "column": "total", "ours": int(stage13[0].total[CALLED[3]]),
+                                       "stage13": int(stage13[0].total[CALLED[3]]) + 1}]
+    assert f'"name": "{CALLED[3]}"' in capsys.readouterr().err
+    stage13[0].to_parquet(tmp_path / "grid" / "cell_counts.parquet")
+    # a part in which a control removes more reads of a group than the group has (protected: one read, none removed)
+    path = tmp_path / "recount" / "parts" / "chrA.read_groups.parquet"
+    part = pd.read_parquet(path)
+    k = _case_key(synth10x, "protected", "g1")
+    part.loc[part.key == np.uint64(k), f"rm_{TAGS[3]}"] = 3
+    part.to_parquet(path, index=False)
+    res = _run(synth10x, tmp_path, bams)
+    assert _stopped(tmp_path, res, "A1", "A1b", "A3", "A5") and not (tmp_path / "matrices").exists()
+    assert res["A5"]["violations"] == {"removed_exceeds_reads": 1} and not res["A5"]["passed"]
+    assert res["A5"]["groups"] == [{"invariant": "removed_exceeds_reads", "tag": TAGS[3], "cell": CELLS_10X["c1"],
+                                    "umi": "CATGCATGGTAC", "gene": "g1"}]
+    assert '"invariant": "removed_exceeds_reads"' in capsys.readouterr().err
+
+
+def test_failed_a2_and_a4_leave_the_matrices_without_passed(synth10x, stage13, tmp_path, capsys):
+    lib = _private(synth10x, tmp_path)
+    bams = _library(lib, tmp_path, stage13)
+    # A4: the BAM of another setting under the name of the first
+    swapped = bams | {TAGS[0]: bams[TAGS[2]]}
+    res = _run(lib, tmp_path, swapped)
+    assert _stopped(tmp_path, res, "A1", "A1b", "A3", "A5", "A2", "A4", "A6") and (tmp_path / "matrices" / "unfiltered.npz").exists()
+    a4 = res["A4"]
+    assert [one["passed"] for one in a4["settings"].values()] == [False, True, True, True] and not a4["passed"]
+    _, by_tag = _designed_matrices(synth10x)
+    want = [{"cell": CALLED[i], "gene": GENES[j], "ours": int(by_tag[TAGS[2]][2][i, j]), "theirs": int(by_tag[TAGS[0]][2][i, j])}
+            for i, j in np.argwhere(by_tag[TAGS[2]][2] != by_tag[TAGS[0]][2])]
+    assert a4["settings"][TAGS[0]]["differing"] == want and len(want) > 0
+    assert "stage 24, X: A4\n" in capsys.readouterr().err
+    # A2: a molecule of molecule_info.h5 with another read count
+    with h5py.File(lib.outs / "molecule_info.h5", "r+") as f:
+        f["count"][0] += 1
+        first = (int(f["barcode_idx"][0]), int(f["feature_idx"][0]), int(f["umi"][0]), int(f["count"][0]))
+        barcode = f["barcodes"][first[0]].decode() + "-1"
+    res = _run(lib, tmp_path, bams)
+    assert _stopped(tmp_path, res, "A1", "A1b", "A3", "A5", "A2", "resolution") and (tmp_path / "matrices" / "unfiltered.npz").exists()
+    a2 = res["A2"]
+    assert (a2["joined"], a2["read_count_mismatches"], a2["only_read_groups"], a2["only_molecule_info"]) == (20, 1, 0, 0)
+    assert a2["left_over"] == [{"n_reads": first[3] - 1, "count": first[3], "cell": barcode, "umi": _umi(first[2]),
+                                "gene": GENES[first[1]]}]
+    assert [(g["cell"], g["umi"], g["gene"], g["n_reads"]) for g in res["resolution"]] == [
+        (barcode, _umi(first[2]), GENES[first[1]], first[3] - 1)]
+    assert "stage 24, X: A2\n" in capsys.readouterr().err
+
+
+def test_run_without_a_bam_for_a4_does_not_pass(synth10x, stage13, tmp_path):
+    _library(synth10x, tmp_path, stage13)
+    res = _run(synth10x, tmp_path, {})
+    assert _stopped(tmp_path, res, "A1", "A1b", "A3", "A5", "A2", "A4", "A6") and res["A4"] == {
+        "bams": 0, "refs": "all", "passed": False, "settings": {}}
+
+
+def test_incomplete_parts_are_refused_with_the_missing_files_named(synth10x, parts, tmp_path):
+    meta = part_meta(synth10x.bam, _matrix(synth10x), SETTINGS_10X)
+    recount.require_parts(parts, REFS, meta)                    # complete and current: nothing happens
+    d = tmp_path / "parts"
+    shutil.copytree(parts, d)
+    (d / "chrB.cell_records.parquet").unlink()
+    with pytest.raises(SystemExit, match="stage 23 is not complete, missing chrB.cell_records.parquet; run scripts/23_read_groups.py"):
+        recount.require_parts(d, REFS, meta)
+    (d / "chrA.json").unlink()
+    (d / "chrA.read_groups.parquet").unlink()
+    with pytest.raises(SystemExit, match="missing chrA.json, chrA.read_groups.parquet, chrB.cell_records.parquet;"):
+        recount.require_parts(d, REFS, meta)
+    # a reference of the BAM index that stage 23 was not run for (its --refs)
+    with pytest.raises(SystemExit, match="missing chrC.json, chrC.read_groups.parquet, chrC.cell_records.parquet;"):
+        recount.require_parts(parts, [*REFS, "chrC"], meta)
+
+
+def test_stale_parts_are_refused_with_the_trash_hint(synth10x, parts, tmp_path):
+    meta = part_meta(synth10x.bam, _matrix(synth10x), SETTINGS_10X)
+    d = tmp_path / "parts"
+    shutil.copytree(parts, d)
+    done = d / "chrB.json"
+    done.write_text(json.dumps(json.loads(done.read_text()) | {"module_sha256": "0" * 64}))
+    with pytest.raises(SystemExit) as stop:
+        recount.require_parts(d, REFS, meta)
+    assert f"{d}: the parts of chrB were made from other inputs" in str(stop.value) and f"`gio trash {d}`" in str(stop.value)
+    # parts of other settings, of another rule version: every reference is named
+    for other in (part_meta(synth10x.bam, _matrix(synth10x), SETTINGS_10X[:3]), meta | {"rule_version": meta["rule_version"] + 1}):
+        with pytest.raises(SystemExit, match="the parts of chrA, chrB were made from other inputs"):
+            recount.require_parts(parts, REFS, other)
+
+
+def test_run_refuses_incomplete_and_stale_parts_and_writes_nothing(synth10x, stage13, tmp_path):
+    bams = _library(synth10x, tmp_path, stage13)
+    assert _run(synth10x, tmp_path, bams)["passed"] is True
+    files = lambda: {str(p.relative_to(tmp_path)): p.stat().st_mtime_ns for p in tmp_path.rglob("*") if p.is_file()}
+    before = files()
+    with pytest.raises(SystemExit, match="missing chrC.json"):       # the references come from the BAM index, here one more
+        recount.run("X", synth10x.bam, [*REFS, "chrC"], SETTINGS_10X, tmp_path / "recount", tmp_path / "matrices",
+                    tmp_path / "grid", bams)
+    with pytest.raises(SystemExit, match="gio trash"):                # the parts were written at four settings, not at these
+        recount.run("X", synth10x.bam, REFS, SETTINGS_10X[:2], tmp_path / "recount", tmp_path / "matrices", tmp_path / "grid", bams)
+    assert files() == before
+
+
+def test_later_stages_start_only_after_a_passed_recount(tmp_path, monkeypatch):
+    d = tmp_path / "X" / "recount"
+    d.mkdir(parents=True)
+    with pytest.raises(SystemExit, match=f"{d}/recount.json: stage 24 has not passed its acceptance checks for X"):
+        recount.require_passed("X", d)
+    for content in ({"library": "X", "A1": {"passed": True}}, {"library": "X", "passed": False}, {"library": "X", "passed": "yes"}):
+        (d / "recount.json").write_text(json.dumps(content))
+        with pytest.raises(SystemExit, match="scripts/24_recount.py X"):
+            recount.require_passed("X", d)
+    done = {"library": "X", "A1": {"passed": True}, "passed": True}
+    (d / "recount.json").write_text(json.dumps(done))
+    assert recount.require_passed("X", d) == done
+    monkeypatch.setattr(recount, "OUT", tmp_path)                 # without a directory: OUT/<lib>/recount
+    assert recount.require_passed("X") == done
+    with pytest.raises(SystemExit, match="for Y"):
+        recount.require_passed("Y")
+
+
+def test_passed_recount_of_the_synthetic_library_lets_a_later_stage_start(stage24):
+    d, _, res = stage24
+    assert recount.require_passed("X", d / "recount") == res
+
+
+def test_original_bams_are_the_finished_runs_at_the_given_settings(tmp_path):
+    tags = TAGS[:2]
+    for name in (f"{tags[0]}.bam", f"{tags[1]}.bam", f"chrA_chrB.{tags[0]}.bam"):
+        (tmp_path / name).write_bytes(b"")
+        (tmp_path / name).with_suffix(".time.txt").write_text("\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.00\n\tExit status: 0\n")
+    assert recount.original_bams(tmp_path, "", SETTINGS_10X[:2]) == {t: tmp_path / f"{t}.bam" for t in tags}
+    assert recount.original_bams(tmp_path, "chrA_chrB.", SETTINGS_10X[:1]) == {tags[0]: tmp_path / f"chrA_chrB.{tags[0]}.bam"}
+    with pytest.raises(SystemExit, match=f"missing or not finished: {tmp_path}/{TAGS[2]}.bam, {tmp_path}/{TAGS[3]}.bam$"):
+        recount.original_bams(tmp_path, "", SETTINGS_10X)
+    # a run that failed, one that was killed (GNU time then still writes exit status 0), one without its time file
+    time_file = tmp_path / f"{tags[1]}.time.txt"
+    for text in ("\tExit status: 1\n", "Command terminated by signal 9\n\tExit status: 0\n", None):
+        time_file.write_text(text) if text else time_file.unlink()
+        with pytest.raises(SystemExit, match=f"not finished: {tmp_path}/{tags[1]}.bam$"):
+            recount.original_bams(tmp_path, "", SETTINGS_10X[:2])
+
+
+def _only(bam, ref, out):
+    """The records of one reference of a BAM, as a subset BAM of the original tool holds them."""
+    with pysam.AlignmentFile(str(bam)) as fh, pysam.AlignmentFile(str(out), "wb", header=fh.header) as dest:
+        for a in fh.fetch(until_eof=True):
+            if a.reference_name == ref:
+                dest.write(a)
+    return out
+
+
+def test_a4_on_a_reference_subset_applies_the_rule_to_those_references_alone(synth10x, stage24, tmp_path):
+    """The 1179 path of check A4: the BAMs of the original tool hold chrB only. There the g3 groups of three_vs_one and
+    winner_keeps have no partner and are counted, so the stored matrices are the wrong comparison."""
+    d, bams, _ = stage24
+    subset = {tag: _only(bam, "chrB", tmp_path / f"chrB.{tag}.bam") for tag, bam in bams.items()}
+    alone = recount.rule_matrices(d / "recount" / "parts", ["chrB"], TAGS, (len(CALLED), len(GENES)))
+    assert list(alone) == TAGS
+    cr = _matrix(synth10x)
+    c2, c4, g3 = CALLED.index(CELLS_10X["c2"]), CALLED.index(CELLS_10X["c4"]), GENES.index("g3")
+    for tag in TAGS:
+        _, a4, a6 = recount.check_a4((tag, subset[tag], cr, alone[tag]))
+        assert a4["passed"] and a4["entries_compared"] == alone[tag].nnz > 0, tag
+        stored = matrices.load("X", tag, d / "matrices")
+        _, wrong, _ = recount.check_a4((tag, subset[tag], cr, stored))
+        assert not wrong["passed"]
+        # winner_keeps: g1 keeps the UMI at every setting; on chrB alone it is g3's
+        assert (alone[tag][c4, g3], stored[c4, g3]) == (2, 1)
+    assert (alone[TAGS[0]][c2, g3], matrices.load("X", TAGS[0], d / "matrices")[c2, g3]) == (2, 1)
+
+
+def test_run_with_subset_bams_passes_and_names_the_references(synth10x, stage13, stage24, tmp_path):
+    _, full, _ = stage24
+    _library(synth10x, tmp_path, stage13)
+    subset = {tag: _only(bam, "chrB", tmp_path / f"chrB.{tag}.bam") for tag, bam in full.items()}
+    res = _run(synth10x, tmp_path, subset, a4_refs=("chrB",))
+    assert res["passed"] is True and (res["A4"]["bams"], res["A4"]["refs"], res["A4"]["passed"]) == (4, ["chrB"], True)
+    assert all(one["entries_differing"] == 0 and one["records"] < 25 for one in res["A4"]["settings"].values())
+    # without the references named, the same BAMs are compared with the stored matrices and fail
+    res = _run(synth10x, tmp_path, subset)
+    assert "passed" not in res and not res["A4"]["passed"]
+
+
+def test_a1b_next_to_the_check_script_of_the_design(synth10x, stage13, tmp_path):
+    """The script of the design review lists the read groups of the differing cells and UMIs under exceptions and the
+    number of differing entries under A1b_documented_rule (design_m3_draft/review/v2/a1b_genomewide.py)."""
+    bams = _library(synth10x, tmp_path, stage13)
+    group = lambda c, umi, gene: {"barcode": CELLS_10X[c], "umi": umi, "gene": gene, "n_reads": 1}
+    check = tmp_path / "a1b_genomewide_X.json"
+    same = {"exceptions": [group("c4", "GATCCTGAGGTG", "g3"), group("c5", "CTGTTCTTGTTT", "g1"), group("c5", "CTGTTCTTGTTT", "g2"),
+                           group("c5", "CTGTTCTTGTTT", "g3")], "A1b_documented_rule": {"entries_differing": 2}}
+    check.write_text(json.dumps(same))
+    res = _run(synth10x, tmp_path, bams, check_script=check)
+    assert res["passed"] is True
+    assert res["A1b"]["check_script"] == {"file": str(check), "entries_differing": 2, "same": True, "new": [], "gone": []}
+    # the script found another cell and UMI, and not the chain: a difference that stays under the gate does not stop the
+    # stage, it is written down with the cells and UMIs that are new
+    check.write_text(json.dumps({"exceptions": [group("c4", "GATCCTGAGGTG", "g3"), group("c1", "AACCGGTTAACC", "g1")],
+                                 "A1b_documented_rule": {"entries_differing": 2}}))
+    res = _run(synth10x, tmp_path, bams, check_script=check)
+    assert res["passed"] is True and res["A1b"]["check_script"] == {
+        "file": str(check), "entries_differing": 2, "same": False, "new": [[CELLS_10X["c5"], "CTGTTCTTGTTT"]],
+        "gone": [[CELLS_10X["c1"], "AACCGGTTAACC"]]}
+    check.write_text(json.dumps(same | {"A1b_documented_rule": {"entries_differing": 3}}))
+    assert _run(synth10x, tmp_path, bams, check_script=check)["A1b"]["check_script"]["same"] is False
+
+
+def test_read_groups_of_given_cells_and_umis_come_from_every_reference(synth10x, parts):
+    g = synth10x.groups
+    units = [(CALLED.index(r.cb) << 24) | _code(r.ub) for r in g[g.case.isin(["three_vs_one", "protected"])].itertuples()]
+    got = recount.groups_of_units(parts, REFS, np.array(units, np.uint64))
+    assert list(got.columns) == ["key", "n_reads", "n_winner_reads", "n_pa", "re_class", "ref"] and got.key.is_monotonic_increasing
+    want = g[g.case.isin(["three_vs_one", "protected"])]
+    assert sorted(zip(got.key.tolist(), got.n_reads, got.n_winner_reads, got.n_pa, got.re_class, got.ref)) == sorted(
+        (_key(r.cb, r.ub, r.gene), r.n_reads, r.n_winner_reads, r.n_pa, r.re_class, "chrB" if r.gene == "g3" else "chrA")
+        for r in want.itertuples())
+    assert len(got) == 3 and len(recount.groups_of_units(parts, REFS, np.zeros(0, np.uint64))) == 0
