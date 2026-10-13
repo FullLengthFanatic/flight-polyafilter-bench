@@ -5,9 +5,17 @@ All coordinates are in transcript sense: a minus-strand interval [a, b) is mirro
 a transcript runs from low to high, exons and introns are sorted, and the 3' end is the high end.
 """
 import bisect
+from array import array
 from collections import defaultdict, namedtuple
+from contextlib import ExitStack
 
-from .config import FIVE_PRIME_TOL, LONG_END_TOL, MIN_INTRON, NEAR_INTRON_TOL
+import numpy as np
+import pandas as pd
+import pysam
+
+from .bd67 import accept_long_read, compare_labels, nearest_labels, terminal_a_run
+from .config import FIVE_PRIME_TOL, LONG_END_TOL, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT
+from .tecap import TAG, site_key
 
 # The order is the tie order of the top class of a site: the eight classes with a model, then the three no_model reasons.
 CLASSES = ("annotated_end", "3UTR", "CDS", "5UTR", "ncexon", "intron_unspliced", "intron_after_junction", "downstream",
@@ -22,6 +30,24 @@ Transcript = namedtuple("Transcript", "tid start end exons cds end_nf")   # cds:
 # 3' part. sub_cause is set for no_model_novel_junction only.
 ReadContext = namedtuple("ReadContext", "klass transcript matched chain_novel starts_outside retained_after_junction end_nf "
                                         "complete_5p covers_start other_class sub_cause", defaults=(False,) * 6 + ("",))
+# "placed" counts the reads placed by their 3' part (chain_novel) under their class, "strict" as no_model_novel_junction
+VERSIONS = ("placed", "strict")
+# one row per accepted read: klass and sub_cause are positions in CLASSES and SUB_CAUSES (sub_cause -1 without one), length
+# the query length of the record, no_splice says that its CIGAR has no N
+READ_COLUMNS = ["minus", "site", "klass", "matched", "chain_novel", "starts_outside", "retained_after_junction", "end_nf",
+                "complete_5p", "covers_start", "other_class", "sub_cause", "length", "no_splice"]
+_READ_TYPES = ("b", "q", "b", "h", "h", "b", "b", "b", "b", "b", "b", "b", "i", "b")
+_READ_BOOL = ["minus"] + READ_COLUMNS[5:11] + ["no_splice"]
+_KEY = ["ref", "strand", "site"]
+_COUNTS = [f"n_{c}" for c in CLASSES] + ["n_starts_outside", "n_chain_novel", "n_chain_novel_suffix1", "n_retained_after_junction",
+                                         "n_end_NF"]
+_TOP = ["context", "context_without_chain_novel", "top_share", "tied", "share_spliced", "share_5p_complete", "median_length"]
+# reduce_sites: the columns that stage 30 writes per site, then those it needs for its totals
+SITE_COLUMNS = _KEY + ["n_accepted"] + _COUNTS + _TOP + ["tied_without_chain_novel", "top_share_without_chain_novel",
+                                                         "chain_novel_only", "sub_cause", "n_no_splice"]
+BY_CLASS_COLUMNS = _KEY + ["klass", "chain_novel", "sub_cause", "reads", "spliced", "complete_5p", "covers_start", "other_class"]
+# isoform_context_sites.parquet (design 3.8, Outputs)
+CONTEXT_COLUMNS = _KEY + ["label", "a_band", "hexamer", "region", "n_accepted"] + _COUNTS + _TOP
 _BIN = 1 << 14
 _FAR = 1 << 62
 
@@ -219,3 +245,232 @@ def classify(models, minus, body):
                        not chain_novel and abs(a0 - t.start) <= FIVE_PRIME_TOL,
                        not chain_novel and t.cds is not None and any(s <= t.cds[0] < e for s, e in body),
                        len(cands) > 1 and any(_klass(tx[k], p, bool(introns)) != klass for k in cands))
+
+
+def scan_context(bam_path, ref, models, min_mapq=20, tagged=None):
+    """Class and flags of every accepted read of one reference (READ_COLUMNS, in BAM order), and the record counts.
+
+    The reads and their sites are those of stage 16 (bd67.scan_long_reads): primary records with MAPQ >= min_mapq whose
+    terminal A run (bd67.terminal_a_run) passes bd67.accept_long_read; the site is the start of the run. A read whose
+    aligned bases all belong to the run has no body; it is classed at the last cDNA base before its site, as a read
+    without introns, and counted under empty_body. With tagged, the accepted records are also written to that BAM
+    path, each with its site key in the tag tecap.TAG."""
+    cols = [array(t) for t in _READ_TYPES]
+    counts = dict.fromkeys(("records", "secondary_supplementary", "low_mapq", "used", "accepted", "empty_body"), 0)
+    klass_code, cause_code = {c: i for i, c in enumerate(CLASSES)}, {c: i for i, c in enumerate(SUB_CAUSES)} | {"": -1}
+    with pysam.AlignmentFile(str(bam_path)) as bam, ExitStack() as stack:
+        out = stack.enter_context(pysam.AlignmentFile(str(tagged), "wb", template=bam)) if tagged else None
+        for a in bam.fetch(ref):
+            counts["records"] += 1
+            if a.is_secondary or a.is_supplementary:
+                counts["secondary_supplementary"] += 1
+                continue
+            if a.mapping_quality < min_mapq:
+                counts["low_mapq"] += 1
+                continue
+            counts["used"] += 1
+            site, aligned_a, clip_a, after_len = terminal_a_run(a)
+            if not accept_long_read(aligned_a, clip_a, after_len):
+                continue
+            counts["accepted"] += 1
+            minus = a.is_reverse
+            body = read_body(a, site)
+            if not body:
+                counts["empty_body"] += 1
+                body = [(-site - 1, -site)] if minus else [(site - 1, site)]
+            c = classify(models, minus, body)
+            row = (minus, site, klass_code[c.klass], c.matched, c.chain_novel, c.starts_outside, c.retained_after_junction,
+                   c.end_nf, c.complete_5p, c.covers_start, c.other_class, cause_code[c.sub_cause], a.query_length,
+                   all(op != 3 for op, _ in a.cigartuples))
+            for col, value in zip(cols, row):
+                col.append(value)
+            if out is not None:
+                a.set_tag(TAG, site_key(ref, minus, site), "Z")
+                out.write(a)
+    reads = pd.DataFrame({name: np.asarray(col, bool if name in _READ_BOOL else col.typecode)
+                          for name, col in zip(READ_COLUMNS, cols)})
+    return reads, counts
+
+
+def top_class(m):
+    """Top class per site of a sites x CLASSES matrix of read counts: the class with the most reads, among tied classes
+    the first of CLASSES, so that a no_model reason never wins a tie against a class with a model. Returns the class
+    names, whether two or more classes share the top count, and the share of the reads that the top class holds."""
+    top = m.max(axis=1)
+    return np.asarray(CLASSES, object)[m.argmax(axis=1)], (m == top[:, None]).sum(axis=1) > 1, top / m.sum(axis=1)
+
+
+def reduce_sites(reads, ref):
+    """(sites, by_class) of the accepted reads of one reference (READ_COLUMNS), sites ordered by strand and site.
+
+    sites (SITE_COLUMNS): reads per class with the chain_novel reads under their class, the flag counts, the top class
+    in both versions (context is "placed", context_without_chain_novel "strict") with tied and top_share for each,
+    chain_novel_only (every read of the placed top class is chain_novel), sub_cause (where context is
+    no_model_novel_junction, the sub-cause with the most reads, among tied ones the first of SUB_CAUSES; "" elsewhere),
+    share_spliced (reads with a matched intron, the chain_novel ones included), share_5p_complete, median_length and
+    n_no_splice. by_class (BY_CLASS_COLUMNS): per site, class, chain_novel and sub-cause ("" without one), the reads and
+    how many of them have a matched intron, are 5' complete, cover the start and have a compatible transcript that
+    gives another class."""
+    key, code = np.unique(reads.minus.to_numpy(np.int64) << 40 | reads.site.to_numpy(np.int64), return_inverse=True)
+    n, rows = len(key), np.arange(len(key))
+    klass, novel, cause = reads.klass.to_numpy(np.int64), reads.chain_novel.to_numpy() > 0, reads.sub_cause.to_numpy(np.int64)
+
+    def table(mask, col, width):
+        return np.bincount(code[mask] * width + col[mask], minlength=n * width).reshape(n, width)
+
+    def count(mask):
+        return np.bincount(code[mask], minlength=n)
+
+    m, moved = table(slice(None), klass, len(CLASSES)), table(novel, klass, len(CLASSES))
+    strict = m - moved
+    strict[:, CLASSES.index(NOVEL_JUNCTION)] += moved.sum(axis=1)
+    top, tied, share = top_class(m)
+    top_strict, tied_strict, share_strict = top_class(strict)
+    causes = np.asarray(SUB_CAUSES, object)[table(cause >= 0, cause, len(SUB_CAUSES)).argmax(axis=1)]
+    strand, site = np.where(key >> 40, "-", "+"), key & ((1 << 40) - 1)
+    spliced = reads.matched.to_numpy() > 0
+    sites = pd.DataFrame({"ref": ref, "strand": strand, "site": site, "n_accepted": m.sum(axis=1)}
+                         | {f"n_{c}": m[:, i] for i, c in enumerate(CLASSES)}
+                         | {"n_starts_outside": count(reads.starts_outside.to_numpy()), "n_chain_novel": count(novel),
+                            "n_chain_novel_suffix1": count(reads.chain_novel.to_numpy() == 1),
+                            "n_retained_after_junction": count(reads.retained_after_junction.to_numpy()),
+                            "n_end_NF": count(reads.end_nf.to_numpy()), "context": top, "context_without_chain_novel": top_strict,
+                            "top_share": share, "tied": tied, "share_spliced": count(spliced) / m.sum(axis=1),
+                            "share_5p_complete": count(reads.complete_5p.to_numpy()) / m.sum(axis=1),
+                            "median_length": reads.length.groupby(code).median().to_numpy(),
+                            "tied_without_chain_novel": tied_strict, "top_share_without_chain_novel": share_strict,
+                            "chain_novel_only": moved[rows, m.argmax(axis=1)] == m.max(axis=1),
+                            "sub_cause": np.where(top == NOVEL_JUNCTION, causes, ""), "n_no_splice": count(reads.no_splice.to_numpy())})
+    width = len(SUB_CAUSES) + 1
+    cell, inv, n_reads = np.unique(((code * len(CLASSES) + klass) * 2 + novel) * width + cause + 1, return_inverse=True,
+                                   return_counts=True)
+
+    def total(mask):
+        return np.bincount(inv[mask], minlength=len(cell))
+
+    k = cell // (len(CLASSES) * 2 * width)
+    by_class = pd.DataFrame({"ref": ref, "strand": strand[k], "site": site[k],
+                             "klass": np.asarray(CLASSES, object)[cell // (2 * width) % len(CLASSES)],
+                             "chain_novel": cell // width % 2 == 1, "sub_cause": np.asarray(("",) + SUB_CAUSES, object)[cell % width],
+                             "reads": n_reads, "spliced": total(spliced), "complete_5p": total(reads.complete_5p.to_numpy()),
+                             "covers_start": total(reads.covers_start.to_numpy()), "other_class": total(reads.other_class.to_numpy())})
+    return sites[SITE_COLUMNS], by_class[BY_CLASS_COLUMNS]
+
+
+def attach_stage16(sites, stage16):
+    """sites of reduce_sites with label, a_band, hexamer and region of the stage 16 site table (bd67.SITE_COLUMNS), in the
+    order of sites, CONTEXT_COLUMNS first. ValueError unless sites holds exactly the stage 16 sites with an accepted
+    read, each with the same number of accepted reads (the first acceptance condition of design 3.8)."""
+    s16 = stage16.loc[stage16.n_accepted >= 1, _KEY + ["label", "a_band", "hexamer", "region", "n_accepted"]]
+    j = sites.merge(s16.rename(columns={"n_accepted": "n_stage16"}), on=_KEY, how="left", validate="one_to_one")
+    extra = int(j.n_stage16.isna().sum())
+    missing, differ = len(s16) - (len(j) - extra), int((j.n_stage16.notna() & (j.n_accepted != j.n_stage16)).sum())
+    if missing or extra or differ:
+        raise ValueError(f"{missing} sites of stage 16 without reads here, {extra} sites here that stage 16 lacks, "
+                         f"{differ} sites with another number of accepted reads")
+    return j[CONTEXT_COLUMNS + [c for c in SITE_COLUMNS if c not in CONTEXT_COLUMNS]]
+
+
+def intron_sites_off_model(sites):
+    """Sites of the milestone 2 region intron whose top class, in either version, is no_model_antisense or
+    no_model_intergenic. The site lies inside a transcript span of its strand, so there should be none (the last
+    acceptance condition of design 3.8)."""
+    off = sites.context.isin([ANTISENSE, INTERGENIC]) | sites.context_without_chain_novel.isin([ANTISENSE, INTERGENIC])
+    return sites[(sites.region == "intron") & off]
+
+
+def context_tables(sites, by_class, by):
+    """version, the columns of by, context, sites, reads, share_spliced, share_5p_complete: per version and per value of
+    the site columns `by` (of attach_stage16), the sites whose top class is the context, and the reads whose own class it
+    is with the share of them that has a matched intron and that is 5' complete. In the strict version a chain_novel
+    read is a no_model_novel_junction read without a matched intron. Rows in the order of VERSIONS, by and CLASSES;
+    a context without a site and without a read has no row."""
+    reads = by_class.merge(sites[_KEY + by], on=_KEY, validate="many_to_one")
+    out = []
+    for version, col in zip(VERSIONS, ("context", "context_without_chain_novel")):
+        moved = reads.chain_novel.to_numpy() & (version == "strict")
+        r = reads.assign(context=np.where(moved, NOVEL_JUNCTION, reads.klass), spliced=np.where(moved, 0, reads.spliced))
+        r = r.groupby(by + ["context"])[["reads", "spliced", "complete_5p"]].sum()
+        s = sites.groupby(by + [col]).size().rename("sites").rename_axis(by + ["context"])
+        t = pd.concat([s, r], axis=1).fillna(0).reset_index()
+        t = t.iloc[np.lexsort([t.context.map(CLASSES.index)] + [t[c] for c in reversed(by)])]
+        out.append(pd.DataFrame({"version": version} | {c: t[c] for c in by + ["context"]}
+                                | {"sites": t.sites.astype(np.int64), "reads": t.reads.astype(np.int64),
+                                   "share_spliced": t.spliced / t.reads, "share_5p_complete": t.complete_5p / t.reads}))
+    return pd.concat(out, ignore_index=True)
+
+
+def totals(sites, by_class):
+    """Counts of one library for isoform_context.json, from the site table of attach_stage16 and by_class: per version
+    the reads by their own class, the sites by top class, the tied sites and the sites whose top class holds at most half
+    of the reads; the sites whose placed top class holds chain_novel reads only; the flagged reads; per class of the
+    placed version its reads, those with a matched intron, 5' complete, covering the start and with a compatible
+    transcript of another class (other_class among the reads that are not chain_novel, chain_novel_other_class among
+    those that are); the novel-junction reads by sub-cause and the sites with a novel-junction top class by main
+    sub-cause."""
+    out = {"accepted_reads": int(sites.n_accepted.sum()), "sites": len(sites)}
+    novel = by_class.chain_novel.to_numpy()
+    for version, col, suffix in zip(VERSIONS, ("context", "context_without_chain_novel"), ("", "_without_chain_novel")):
+        own = np.where(novel & (version == "strict"), NOVEL_JUNCTION, by_class.klass)
+        by_top = sites[col].value_counts()
+        out[version] = {"reads_by_class": {c: int(by_class.reads[own == c].sum()) for c in CLASSES},
+                        "sites_by_context": {c: int(by_top.get(c, 0)) for c in CLASSES},
+                        "sites_tied": int(sites["tied" + suffix].sum()),
+                        "sites_top_share_at_most_half": int((sites["top_share" + suffix] <= 0.5).sum())}
+    out["sites_top_class_on_chain_novel_only"] = int(sites.chain_novel_only.sum())
+    out["flagged_reads"] = {k: int(sites["n_" + k].sum()) for k in ("starts_outside", "chain_novel", "chain_novel_suffix1",
+                                                                    "retained_after_junction", "end_NF", "no_splice")}
+    out["by_class"] = {}
+    for c in CLASSES:
+        g, placed = by_class[by_class.klass == c], by_class[(by_class.klass == c) & novel]
+        out["by_class"][c] = {"reads": int(g.reads.sum()), "matched_intron": int(g.spliced.sum()),
+                              "complete_5p": int(g.complete_5p.sum()), "covers_start": int(g.covers_start.sum()),
+                              "other_class": int(g.other_class.sum() - placed.other_class.sum()),
+                              "chain_novel": int(placed.reads.sum()), "chain_novel_other_class": int(placed.other_class.sum())}
+    by_cause, main = by_class.groupby("sub_cause").reads.sum(), sites.sub_cause.value_counts()
+    out["novel_junction_reads_by_sub_cause"] = {c: int(by_cause.get(c, 0)) for c in SUB_CAUSES}
+    out["novel_junction_sites_by_main_sub_cause"] = {c: int(main.get(c, 0)) for c in SUB_CAUSES}
+    return out
+
+
+def isoform_ends(gtf, refs=None):
+    """isoform, ref, strand, site of the transcript lines of a collapsed isoform GTF (all references, or refs). The site
+    is the boundary after the last base of the isoform in transcript sense, as sites.priming_site gives it for a read:
+    the 0-based end on plus, the 0-based start on minus."""
+    rows = []
+    with open(gtf) as fh:
+        for line in fh:
+            f = line.split("\t")
+            if line.startswith("#") or f[2] != "transcript" or (refs is not None and f[0] not in refs):
+                continue
+            rows.append((f[8].split('transcript_id "', 1)[1].split('"', 1)[0], f[0], f[6], int(f[4]) if f[6] == "+" else int(f[3]) - 1))
+    return pd.DataFrame(rows, columns=["isoform", "ref", "strand", "site"])
+
+
+def pigeon_crosscheck(ends, classification, sites):
+    """(table, counts): isoform ends (isoform_ends) against the long-read sites (ref, strand, site, context, n_accepted).
+    Each end takes the context of the nearest site on its strand within 10 nt, by the stage 16 match
+    (bd67.nearest_labels), or "none". table: structural_category, subcategory, context, isoforms, with the pigeon
+    classification of each isoform (isoform, structural_category, subcategory; "not_classified" for an isoform without
+    a row), contexts in the order of CLASSES. counts: the isoform ends, those without a classification row, those that
+    find a site and their share."""
+    context = nearest_labels(ends, sites.assign(label=sites.context))
+    j = ends[["isoform"]].assign(context=context).merge(classification, on="isoform", how="left", validate="one_to_one")
+    j[["structural_category", "subcategory"]] = j[["structural_category", "subcategory"]].fillna("not_classified")
+    t = j.groupby(["structural_category", "subcategory", "context"]).size().rename("isoforms").reset_index()
+    t = t.iloc[np.lexsort([t.context.map((CLASSES + ("none",)).index), t.subcategory, t.structural_category])]
+    matched = int((context != "none").sum())
+    return t.reset_index(drop=True), {"isoform_ends": len(ends), "without_classification": int(j.structural_category.eq("not_classified").sum()),
+                                      "matched": matched, "share_matched": matched / len(ends) if len(ends) else None}
+
+
+def link_1179(mol, sites, shift=NULL_SHIFT):
+    """(context, link) for truth molecules (ref, strand, site, label) against the long-read sites (ref, strand, site,
+    label, context, n_accepted). context: per molecule the top class of the nearest site with an accepted read within
+    10 nt on its strand, the stage 16 match (bd67.nearest_labels), or "none". link: the matched share and the label
+    agreement of bd67.compare_labels as "real", and as "null" the same with every molecule's site moved `shift` nt
+    upstream in transcript sense (lower coordinate on plus, higher on minus), which says how much of the match and of
+    the agreement nearby positions give by themselves."""
+    moved = mol.assign(site=mol.site + np.where(mol.strand == "+", -shift, shift))
+    return nearest_labels(mol, sites.assign(label=sites.context)), {
+        "real": compare_labels(mol, sites)[1], "null_shift_nt": shift, "null": compare_labels(moved, sites)[1]}

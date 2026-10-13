@@ -1,9 +1,14 @@
+import numpy as np
+import pandas as pd
 import pytest
 
 from pafbench.bd67 import accept_long_read, terminal_a_run
-from pafbench.lrcontext import CLASSES, Models, classify, load_models, read_body
-from tests.synth_long import (ACCEPTOR, DESIGNED, DONOR, G, LOCUS, NEAR, NEITHER, NOT_JOINED, OPPOSITE, SHORT, ctx, expected,
-                              long_read, write_gtf)
+from pafbench.lrcontext import (BY_CLASS_COLUMNS, CLASSES, CONTEXT_COLUMNS, READ_COLUMNS, SITE_COLUMNS, SUB_CAUSES, Models,
+                                attach_stage16, classify, context_tables, intron_sites_off_model, isoform_ends, link_1179,
+                                load_models, pigeon_crosscheck, read_body, reduce_sites, top_class, totals)
+from pafbench.sites import priming_site
+from tests.synth_long import (ACCEPTOR, AS, DESIGNED, DONOR, G, IG, LOCUS, NEAR, NEITHER, NJ, NOT_JOINED, OPPOSITE, SHORT, ctx,
+                              expected, long_read, write_gtf)
 
 STRANDS = pytest.mark.parametrize("minus", [False, True], ids=["plus", "minus"])
 
@@ -165,7 +170,8 @@ def test_choice_order_end_then_overlap_then_nearest_end():
     rows[1] = ("near", False, (0, 400), [(0, 400)], [], False)
     assert classify(Models(rows), False, [(100, 300)]) == ctx("ncexon", "near")
     # the overlap is counted over every exon a block touches: 50 + 200 nt of "two" against 70 + 50 nt of "wide"
-    rows = [("wide", False, (0, 400), [(0, 120), (300, 400)], [], False), ("two", False, (0, 400), [(0, 100), (150, 400)], [], False)]
+    rows = [("wide", False, (0, 400), [(0, 120), (300, 400)], [], False),
+            ("two", False, (0, 400), [(0, 100), (150, 400)], [], False)]
     assert classify(Models(rows), False, [(50, 350)]) == ctx("ncexon", "two", complete_5p=True)
 
 
@@ -180,7 +186,8 @@ def test_end_tolerance_boundaries(models):
     # last base of TA is 1999: 10 nt before or after it is annotated_end, 11 nt is 3UTR or downstream
     klass = lambda body: classify(models, False, body).klass
     chain = [(1250, 1300), (1400, 1500)]
-    assert [klass(chain + [(1600, e)]) for e in (1989, 1990, 2010, 2011)] == ["3UTR", "annotated_end", "annotated_end", "downstream"]
+    ends = [klass(chain + [(1600, e)]) for e in (1989, 1990, 2010, 2011)]
+    assert ends == ["3UTR", "annotated_end", "annotated_end", "downstream"]
     # unspliced: contained with the tolerance (annotated_end), then past it with the end outside every span (downstream)
     assert [classify(models, False, [(2050, e)]) for e in (2110, 2111)] == [ctx("annotated_end", "TB"), ctx("downstream")]
     # 5' completeness: 50 nt from the annotated 5' end counts, 51 does not
@@ -199,3 +206,265 @@ def test_cds_boundaries_and_the_end_nf_flag_only_at_the_end(models):
     assert {last(1010, 1050).transcript, last(1650, 1700).transcript} == {"TA"}
     # TS, TL and TN contain the read with 40 exonic nt each; TN has the nearest end and is tagged, but the end is in its CDS
     assert last(3410, 3449) == ctx("CDS", "TN")
+
+
+def _reads(rows):
+    """READ_COLUMNS frame from (minus, site, class name, {other columns}) rows; a column not given is 0, False or no
+    sub-cause, the length 1000."""
+    out = []
+    for minus, site, klass, other in rows:
+        row = dict.fromkeys(READ_COLUMNS, 0) | {"minus": minus, "site": site, "klass": CLASSES.index(klass), "length": 1000}
+        row |= other | {"sub_cause": SUB_CAUSES.index(other["sub_cause"]) if "sub_cause" in other else -1}
+        out.append(row)
+    return pd.DataFrame(out, columns=READ_COLUMNS).astype({c: bool for c in READ_COLUMNS[5:11] + ["minus", "no_splice"]})
+
+
+# seven sites: (+,100) CDS by a majority that a chain_novel read makes; (+,200) novel junction with two sub-causes tied;
+# (+,300) the three reasons tied; (+,400) antisense against intergenic; (+,500) a chain_novel read tied with a reason;
+# (-,50) a class tied with a reason; (-,100) one chain_novel read
+REDUCE_READS = [
+    (False, 100, "CDS", dict(matched=3, complete_5p=True, covers_start=True)),
+    (False, 100, "CDS", dict(matched=1, chain_novel=1, other_class=True, length=2000)),
+    (False, 100, "3UTR", dict(starts_outside=True, no_splice=True, length=500)),
+    (False, 200, NJ, dict(sub_cause=NEITHER, length=300)),
+    (False, 200, NJ, dict(sub_cause=DONOR, length=400)),
+    (False, 200, "CDS", dict(matched=2, chain_novel=2, retained_after_junction=True)),
+    (True, 100, "3UTR", dict(matched=3, chain_novel=3)),
+    (True, 50, AS, dict(no_splice=True)),
+    (True, 50, "annotated_end", dict(matched=2, end_nf=True, complete_5p=True, covers_start=True, other_class=True)),
+    (False, 300, IG, {}), (False, 300, AS, {}), (False, 300, NJ, dict(sub_cause=NEAR)),
+    (False, 400, IG, {}), (False, 400, AS, {}),
+    (False, 500, NJ, dict(sub_cause=SHORT)), (False, 500, "intron_after_junction", dict(matched=1, chain_novel=1)),
+]
+
+
+def test_top_class_takes_the_first_of_tied_classes():
+    # the four sites of the prototype's self-test, and one where a class leads
+    m = np.zeros((5, len(CLASSES)), int)
+    m[0, [1, 2]] = 2                    # 3UTR and CDS
+    m[1, [6, 8]] = 1                    # intron_after_junction and novel junction: the reason does not win the tie
+    m[2, 8], m[2, 1] = 3, 2
+    m[3, [8, 9]] = 4                    # novel junction and antisense
+    m[4, 7], m[4, 0], m[4, 10] = 5, 2, 3
+    top, tied, share = top_class(m)
+    assert top.tolist() == ["3UTR", "intron_after_junction", NJ, NJ, "downstream"]
+    assert tied.tolist() == [True, True, False, True, False] and share.tolist() == [0.5, 0.5, 0.6, 0.5, 0.5]
+
+
+def test_reduce_sites_gives_both_versions_per_site():
+    sites, by_class = reduce_sites(_reads(REDUCE_READS), "chrS")
+    assert list(sites.columns) == SITE_COLUMNS and list(by_class.columns) == BY_CLASS_COLUMNS
+    assert (sites.ref == "chrS").all() and (by_class.ref == "chrS").all()
+    assert list(zip(sites.strand, sites.site)) == [("+", 100), ("+", 200), ("+", 300), ("+", 400), ("+", 500), ("-", 50), ("-", 100)]
+    assert sites.n_accepted.tolist() == [3, 3, 3, 2, 2, 2, 1]
+    counts = sites[[f"n_{c}" for c in CLASSES]]
+    assert (counts.sum(axis=1) == sites.n_accepted).all()
+    want = {("n_CDS", 0): 2, ("n_3UTR", 0): 1, ("n_CDS", 1): 1, (f"n_{NJ}", 1): 2, (f"n_{NJ}", 2): 1, (f"n_{AS}", 2): 1,
+            (f"n_{IG}", 2): 1, (f"n_{AS}", 3): 1, (f"n_{IG}", 3): 1, (f"n_{NJ}", 4): 1, ("n_intron_after_junction", 4): 1,
+            ("n_annotated_end", 5): 1, (f"n_{AS}", 5): 1, ("n_3UTR", 6): 1}
+    assert {(c, i): int(v) for c in counts for i, v in enumerate(counts[c]) if v} == want
+    assert sites.n_starts_outside.tolist() == [1, 0, 0, 0, 0, 0, 0] and sites.n_retained_after_junction.tolist() == [0, 1, 0, 0, 0, 0, 0]
+    assert sites.n_chain_novel.tolist() == [1, 1, 0, 0, 1, 0, 1] and sites.n_chain_novel_suffix1.tolist() == [1, 0, 0, 0, 1, 0, 0]
+    assert sites.n_end_NF.tolist() == [0, 0, 0, 0, 0, 1, 0] and sites.n_no_splice.tolist() == [1, 0, 0, 0, 0, 1, 0]
+    # placed: the chain_novel reads count under their class; a tie goes to the first class of CLASSES
+    assert sites.context.tolist() == ["CDS", NJ, NJ, AS, "intron_after_junction", "annotated_end", "3UTR"]
+    assert sites.tied.tolist() == [False, False, True, True, True, True, False]
+    assert sites.top_share.tolist() == [2 / 3, 2 / 3, 1 / 3, 0.5, 0.5, 0.5, 1.0]
+    # strict: they count as novel junction, which takes (+,100) to a tie of three that 3UTR wins
+    assert sites.context_without_chain_novel.tolist() == ["3UTR", NJ, NJ, AS, NJ, "annotated_end", NJ]
+    assert sites.tied_without_chain_novel.tolist() == [True, False, True, True, False, True, False]
+    assert sites.top_share_without_chain_novel.tolist() == [1 / 3, 1.0, 1 / 3, 0.5, 1.0, 0.5, 1.0]
+    # the top class of the placed version holds chain_novel reads only
+    assert sites.chain_novel_only.tolist() == [False, False, False, False, True, False, True]
+    # main sub-cause where the placed top class is novel junction; donor_only and neither_site are tied at (+,200)
+    assert sites.sub_cause.tolist() == ["", DONOR, NEAR, "", "", "", ""]
+    assert sites.share_spliced.tolist() == [2 / 3, 1 / 3, 0, 0, 0.5, 0.5, 1.0]
+    assert sites.share_5p_complete.tolist() == [1 / 3, 0, 0, 0, 0, 0.5, 0]
+    assert sites.median_length.tolist() == [1000, 400, 1000, 1000, 1000, 1000, 1000]
+    rows = by_class.drop(columns="ref").itertuples(index=False, name=None)
+    # strand, site, klass, chain_novel, sub_cause, reads, spliced, complete_5p, covers_start, other_class
+    assert list(rows) == [
+        ("+", 100, "3UTR", False, "", 1, 0, 0, 0, 0), ("+", 100, "CDS", False, "", 1, 1, 1, 1, 0),
+        ("+", 100, "CDS", True, "", 1, 1, 0, 0, 1),
+        ("+", 200, "CDS", True, "", 1, 1, 0, 0, 0), ("+", 200, NJ, False, DONOR, 1, 0, 0, 0, 0),
+        ("+", 200, NJ, False, NEITHER, 1, 0, 0, 0, 0),
+        ("+", 300, NJ, False, NEAR, 1, 0, 0, 0, 0), ("+", 300, AS, False, "", 1, 0, 0, 0, 0), ("+", 300, IG, False, "", 1, 0, 0, 0, 0),
+        ("+", 400, AS, False, "", 1, 0, 0, 0, 0), ("+", 400, IG, False, "", 1, 0, 0, 0, 0),
+        ("+", 500, "intron_after_junction", True, "", 1, 1, 0, 0, 0), ("+", 500, NJ, False, SHORT, 1, 0, 0, 0, 0),
+        ("-", 50, "annotated_end", False, "", 1, 1, 1, 1, 1), ("-", 50, AS, False, "", 1, 0, 0, 0, 0),
+        ("-", 100, "3UTR", True, "", 1, 1, 0, 0, 0)]
+
+
+def test_reduce_sites_without_reads():
+    sites, by_class = reduce_sites(_reads([]), "chrE")
+    assert list(sites.columns) == SITE_COLUMNS and list(by_class.columns) == BY_CLASS_COLUMNS and not len(sites) and not len(by_class)
+
+
+def _stage16(sites, label, region):
+    """The stage 16 table for these sites, with one more site that has no accepted read."""
+    s = sites[["ref", "strand", "site"]].assign(n_reads=sites.n_accepted + 1, n_accepted=sites.n_accepted, a20=0, label=label,
+                                                a_band="0-4", hexamer=[True, False] * 3 + [True], region=region, gene="")
+    return pd.concat([s, s.iloc[:1].assign(site=7, n_reads=1, n_accepted=0)], ignore_index=True).sample(frac=1, random_state=0)
+
+
+LABELS = ["templated", "templated", "nontemplated", "templated", "nontemplated", "templated", "templated"]
+REGION = ["CDS", "intron", "antisense", "intergenic", "intron", "3UTR", "3UTR"]
+
+
+def test_attach_stage16_adds_the_site_columns_and_checks_the_acceptance():
+    sites, _ = reduce_sites(_reads(REDUCE_READS), "chrS")
+    s16 = _stage16(sites, LABELS, REGION)
+    got = attach_stage16(sites, s16)
+    assert list(got.columns) == CONTEXT_COLUMNS + [c for c in SITE_COLUMNS if c not in CONTEXT_COLUMNS]
+    assert got.label.tolist() == LABELS and got.region.tolist() == REGION and got.hexamer.tolist() == [True, False] * 3 + [True]
+    assert got.a_band.eq("0-4").all() and got.n_accepted.tolist() == sites.n_accepted.tolist()
+    pd.testing.assert_frame_equal(got[SITE_COLUMNS], sites)
+    # a site of stage 16 that this scan lacks, one that stage 16 lacks, and another number of accepted reads
+    with pytest.raises(ValueError, match="1 sites of stage 16 without reads here, 0 sites here that stage 16 lacks"):
+        attach_stage16(sites.iloc[1:], s16)
+    with pytest.raises(ValueError, match="0 sites of stage 16 without reads here, 2 sites here that stage 16 lacks"):
+        attach_stage16(sites, s16[~s16.site.isin([200, 300])])
+    with pytest.raises(ValueError, match="1 sites with another number of accepted reads"):
+        attach_stage16(sites, s16.assign(n_accepted=np.where(s16.site == 400, 3, s16.n_accepted)))
+    # every row given counts: the caller keeps the references it scanned
+    with pytest.raises(ValueError, match="7 sites of stage 16 without reads here"):
+        attach_stage16(sites, pd.concat([s16, s16.assign(ref="chrE")], ignore_index=True))
+
+
+def _attached():
+    sites, by_class = reduce_sites(_reads(REDUCE_READS), "chrS")
+    return attach_stage16(sites, _stage16(sites, LABELS, REGION)), by_class
+
+
+def test_intron_sites_with_a_reason_other_than_novel_junction():
+    sites, _ = _attached()
+    assert not len(intron_sites_off_model(sites))    # the intron sites are (+,200) and (+,500): novel junction or a class
+    bad = intron_sites_off_model(sites.assign(region="intron"))
+    assert list(zip(bad.strand, bad.site, bad.context)) == [("+", 400, AS)]
+    # the strict version is checked too
+    sites.loc[0, ["region", "context_without_chain_novel"]] = ["intron", IG]
+    assert intron_sites_off_model(sites).site.tolist() == [100]
+
+
+def test_context_tables_count_sites_by_top_class_and_reads_by_their_own_class():
+    sites, by_class = _attached()
+    t = context_tables(sites, by_class, ["label", "a_band"])
+    assert list(t.columns) == ["version", "label", "a_band", "context", "sites", "reads", "share_spliced", "share_5p_complete"]
+    assert (t.a_band == "0-4").all()
+    got = {(r.version, r.label, r.context): (r.sites, r.reads, r.share_spliced, r.share_5p_complete) for r in t.itertuples()}
+    want = {
+        # non-templated sites: (+,300) novel junction and (+,500) intron_after_junction
+        ("placed", "nontemplated", "intron_after_junction"): (1, 1, 1.0, 0.0), ("placed", "nontemplated", NJ): (1, 2, 0.0, 0.0),
+        ("placed", "nontemplated", AS): (0, 1, 0.0, 0.0), ("placed", "nontemplated", IG): (0, 1, 0.0, 0.0),
+        # templated sites: (+,100) CDS, (+,200) novel junction, (+,400) antisense, (-,50) annotated_end, (-,100) 3UTR
+        ("placed", "templated", "annotated_end"): (1, 1, 1.0, 1.0), ("placed", "templated", "3UTR"): (1, 2, 0.5, 0.0),
+        ("placed", "templated", "CDS"): (1, 3, 1.0, 1 / 3), ("placed", "templated", NJ): (1, 2, 0.0, 0.0),
+        ("placed", "templated", AS): (1, 2, 0.0, 0.0), ("placed", "templated", IG): (0, 1, 0.0, 0.0),
+        # strict: the four chain_novel reads are novel junction reads without a matched intron
+        ("strict", "nontemplated", NJ): (2, 3, 0.0, 0.0), ("strict", "nontemplated", AS): (0, 1, 0.0, 0.0),
+        ("strict", "nontemplated", IG): (0, 1, 0.0, 0.0),
+        ("strict", "templated", "annotated_end"): (1, 1, 1.0, 1.0), ("strict", "templated", "3UTR"): (1, 1, 0.0, 0.0),
+        ("strict", "templated", "CDS"): (0, 1, 1.0, 1.0), ("strict", "templated", NJ): (2, 5, 0.0, 0.0),
+        ("strict", "templated", AS): (1, 2, 0.0, 0.0), ("strict", "templated", IG): (0, 1, 0.0, 0.0),
+    }
+    # rows in the order of the versions, the labels and CLASSES; a class without a site and without a read has no row
+    assert list(got) == list(want)
+    for k in want:
+        assert got[k] == pytest.approx(want[k]), k
+    r = context_tables(sites, by_class, ["region"])
+    assert list(r.columns) == ["version", "region", "context", "sites", "reads", "share_spliced", "share_5p_complete"]
+    for version, col in (("placed", "context"), ("strict", "context_without_chain_novel")):
+        v = r[r.version == version]
+        assert v.sites.sum() == 7 and v.reads.sum() == 16
+        assert v.groupby("region").sites.sum().to_dict() == sites.groupby("region").size().to_dict()
+        assert v[v.sites > 0].groupby("context").sites.sum().to_dict() == sites.groupby(col).size().to_dict()
+    intron = r[(r.version == "placed") & (r.region == "intron")]
+    assert list(zip(intron.context, intron.sites, intron.reads)) == [("CDS", 0, 1), ("intron_after_junction", 1, 1), (NJ, 1, 3)]
+
+
+def test_totals_of_the_json():
+    sites, by_class = _attached()
+    t = totals(sites, by_class)
+    zero = dict.fromkeys(CLASSES, 0)
+    assert t["accepted_reads"] == 16 and t["sites"] == 7
+    assert t["placed"] == {"reads_by_class": zero | {"annotated_end": 1, "3UTR": 2, "CDS": 3, "intron_after_junction": 1, NJ: 4, AS: 3, IG: 2},
+                           "sites_by_context": zero | {"annotated_end": 1, "3UTR": 1, "CDS": 1, "intron_after_junction": 1, NJ: 2, AS: 1},
+                           "sites_tied": 4, "sites_top_share_at_most_half": 4}
+    assert t["strict"] == {"reads_by_class": zero | {"annotated_end": 1, "3UTR": 1, "CDS": 1, NJ: 8, AS: 3, IG: 2},
+                           "sites_by_context": zero | {"annotated_end": 1, "3UTR": 1, NJ: 4, AS: 1},
+                           "sites_tied": 4, "sites_top_share_at_most_half": 4}
+    assert t["sites_top_class_on_chain_novel_only"] == 2
+    assert t["flagged_reads"] == {"starts_outside": 1, "chain_novel": 4, "chain_novel_suffix1": 2, "retained_after_junction": 1,
+                                  "end_NF": 1, "no_splice": 2}
+    # per class of the placed version: its reads, then the chain_novel ones among them and those of them that had a
+    # compatible transcript with another class, and the same for the other reads
+    assert t["by_class"]["CDS"] == {"reads": 3, "matched_intron": 3, "complete_5p": 1, "covers_start": 1, "other_class": 0,
+                                    "chain_novel": 2, "chain_novel_other_class": 1}
+    assert t["by_class"]["annotated_end"] == {"reads": 1, "matched_intron": 1, "complete_5p": 1, "covers_start": 1, "other_class": 1,
+                                              "chain_novel": 0, "chain_novel_other_class": 0}
+    assert t["by_class"][NJ] == dict.fromkeys(("matched_intron", "complete_5p", "covers_start", "other_class", "chain_novel",
+                                               "chain_novel_other_class"), 0) | {"reads": 4}
+    assert list(t["by_class"]) == list(CLASSES)
+    zero = dict.fromkeys(SUB_CAUSES, 0)
+    assert t["novel_junction_reads_by_sub_cause"] == zero | {NEAR: 1, SHORT: 1, DONOR: 1, NEITHER: 1}
+    assert t["novel_junction_sites_by_main_sub_cause"] == zero | {NEAR: 1, DONOR: 1}
+
+
+def test_isoform_ends_are_priming_site_boundaries(tmp_path):
+    gtf = tmp_path / "iso.gtf"
+    gtf.write_text("##pacbio-collapse-version 1.0\n"
+                   'chrS\tPacBio\ttranscript\t101\t500\t.\t+\t.\tgene_id "PB.1"; transcript_id "PB.1.1";\n'
+                   'chrS\tPacBio\texon\t101\t200\t.\t+\t.\tgene_id "PB.1"; transcript_id "PB.1.1";\n'
+                   'chrS\tPacBio\texon\t401\t500\t.\t+\t.\tgene_id "PB.1"; transcript_id "PB.1.1";\n'
+                   'chrS\tPacBio\ttranscript\t101\t500\t.\t-\t.\tgene_id "PB.2"; transcript_id "PB.2.1";\n'
+                   'chrE\tPacBio\ttranscript\t7\t90\t.\t-\t.\tgene_id "PB.3"; transcript_id "PB.3.2";\n')
+    ends = isoform_ends(gtf)
+    assert list(ends.columns) == ["isoform", "ref", "strand", "site"]
+    # plus: the last base is 1-based 500, 0-based 499, and the boundary after it 500; minus: the last base is 0-based 100
+    # and the boundary is 100, as sites.priming_site gives for a read
+    assert list(ends.itertuples(index=False, name=None)) == [("PB.1.1", "chrS", "+", 500), ("PB.2.1", "chrS", "-", 100),
+                                                             ("PB.3.2", "chrE", "-", 6)]
+    assert isoform_ends(gtf, ["chrE"]).isoform.tolist() == ["PB.3.2"]
+    a = long_read([(400, 500)], 500)
+    assert priming_site(a) == 500
+    a = long_read([(G - 500, G - 400)], G - 400, minus=True)       # the mirrored read covers 0-based 400..499 on minus
+    assert (a.reference_start, priming_site(a)) == (400, 400)
+
+
+def test_pigeon_crosscheck_matches_isoform_ends_to_sites():
+    sites = pd.DataFrame({"ref": "chrS", "strand": ["+", "+", "-", "+"], "site": [500, 520, 100, 900],
+                          "context": ["3UTR", "CDS", NJ, "annotated_end"], "n_accepted": [2, 1, 1, 5]})
+    ends = pd.DataFrame({"isoform": ["a", "b", "c", "d", "e", "f"], "ref": ["chrS"] * 5 + ["chrE"],
+                         "strand": ["+", "+", "-", "-", "+", "+"], "site": [510, 531, 90, 111, 895, 900]})
+    cls = pd.DataFrame({"isoform": ["a", "b", "c", "d", "e", "x"],
+                        "structural_category": ["full-splice_match"] * 3 + ["incomplete-splice_match", "full-splice_match", "genic"],
+                        "subcategory": ["reference_match", "reference_match", "mono-exon", "3prime_fragment", "reference_match", "mono-exon"]})
+    table, stats = pigeon_crosscheck(ends, cls, sites)
+    assert list(table.columns) == ["structural_category", "subcategory", "context", "isoforms"]
+    # a: 500 and 520 are both 10 away, the lower site wins (the stage 16 match); b: 520 is 11 away; c: 100 is 10 away;
+    # d: 11 away; e: 900 is 5 away; f has no classification row and no site on its reference
+    assert list(table.itertuples(index=False, name=None)) == [
+        ("full-splice_match", "mono-exon", NJ, 1), ("full-splice_match", "reference_match", "annotated_end", 1),
+        ("full-splice_match", "reference_match", "3UTR", 1), ("full-splice_match", "reference_match", "none", 1),
+        ("incomplete-splice_match", "3prime_fragment", "none", 1), ("not_classified", "not_classified", "none", 1)]
+    assert stats == {"isoform_ends": 6, "without_classification": 1, "matched": 3, "share_matched": 0.5}
+
+
+def test_link_1179_gives_the_context_and_the_shifted_null():
+    sites = pd.DataFrame({"ref": "chrS", "strand": ["+", "+", "-", "-", "+"], "site": [1000, 3000, 5000, 4000, 2000],
+                          "label": ["templated", "nontemplated", "templated", "nontemplated", "ambiguous"],
+                          "context": ["CDS", "annotated_end", "intron_unspliced", "3UTR", NJ], "n_accepted": [3, 1, 2, 1, 1]})
+    mol = pd.DataFrame({"mol": [10, 11, 12, 13, 14], "ref": "chrS", "strand": ["+", "+", "-", "-", "+"],
+                        "site": [1005, 2990, 5010, 3000, 4000],
+                        "label": ["templated", "nontemplated", "nontemplated", "templated", "ambiguous"]})
+    context, link = link_1179(mol, sites)
+    # real: 1005 -> 1000 (CDS, same label), 2990 -> 3000 (annotated_end, same), 5010 on minus -> 5000 (other label),
+    # 3000 on minus and 4000 on plus have no site within 10 nt
+    assert context.tolist() == ["CDS", "annotated_end", "intron_unspliced", "none", "none"]
+    assert link["real"]["matched"] == 3 and link["real"]["share_matched_by_label"] == {"templated": 0.5, "nontemplated": 1.0, "ambiguous": 0.0}
+    assert link["real"]["agreement"] == {"templated": 1.0, "nontemplated": 0.5, "pooled": 2 / 3}
+    # moved 1,000 nt upstream in transcript sense: plus sites go down (5, 1990, 3000), minus sites go up (6010, 4000).
+    # 1990 -> 2000 (ambiguous site), 3000 -> 3000 (nontemplated site, the molecule is ambiguous), 4000 on minus -> 4000
+    assert link["null_shift_nt"] == 1000 and link["null"]["matched"] == 3
+    assert link["null"]["share_matched_by_label"] == {"templated": 0.5, "nontemplated": 0.5, "ambiguous": 1.0}
+    assert link["null"]["agreement"] == {"templated": 0.0, "nontemplated": 0.0, "pooled": 0.0}
