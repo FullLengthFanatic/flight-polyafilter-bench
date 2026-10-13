@@ -14,12 +14,15 @@ from every part and go through the rule together (rule_on_multi); a group that i
 """
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import scipy.io
 import scipy.sparse as sp
 
+from .flags import Setting, setting_tag
 from .matrices import filtered
 from .molstream import GROUP_MAX
 from .stream import RE_CODES
@@ -254,3 +257,179 @@ def totals(tally, m0, lost, gained, rec, barcodes, features, refs):
              "umis": gre.sum(axis=1), "cells": m.getnnz(axis=0), "lost": l, "gained": g, "umis_E": gre[:, 1], "umis_N": gre[:, 2],
              "umis_EN": gre[:, 3]}))
     return pd.concat(cells, ignore_index=True), pd.concat(genes, ignore_index=True)
+
+
+def read_cr_matrix(cr_matrix_dir):
+    """Cell Ranger's filtered_feature_bc_matrix/matrix.mtx.gz as cells by genes CSR int32 (the file is genes by cells)."""
+    return sp.csr_matrix(scipy.io.mmread(str(Path(cr_matrix_dir) / "matrix.mtx.gz")).T, dtype=np.int32)
+
+
+def check_entries(ours, theirs, gate):
+    """Two cells by genes matrices entry by entry (checks A1, A1b and A4): entries with a count in either, equal and
+    differing ones, per_million, and differing, a frame cell, gene, ours, theirs of every entry that differs. passed when
+    at most gate entries differ."""
+    d = (ours - theirs).tocoo()
+    d.eliminate_zeros()
+    compared = (abs(ours) + abs(theirs)).nnz
+    mine = np.asarray(ours.tocsr()[d.row, d.col]).ravel().astype(np.int64) if d.nnz else np.zeros(0, np.int64)
+    differing = pd.DataFrame({"cell": d.row, "gene": d.col, "ours": mine, "theirs": mine - d.data})
+    return {"entries_compared": compared, "entries_equal": compared - len(differing), "entries_differing": len(differing),
+            "per_million": 1e6 * len(differing) / max(compared, 1), "gate": gate, "passed": len(differing) <= gate,
+            "differing": differing.sort_values(["cell", "gene"], ignore_index=True)}
+
+
+def winner_groups(part_dir, refs):
+    """(key, n_reads) of the read groups with a winner read (xf bit 1 set, bit 2 unset) over the parts of refs, sorted by
+    key; the reads of a key on two references are summed."""
+    cols = [pq.read_table(Path(part_dir) / f"{ref}.read_groups.parquet", columns=["key", "n_reads", "n_winner_reads"])
+            for ref in refs]
+    key, n, win = (np.concatenate([t.column(c).to_numpy() for t in cols]) for c in ("key", "n_reads", "n_winner_reads"))
+    key, n = key[win > 0], n[win > 0].astype(np.int64)
+    o = np.argsort(key, kind="stable")
+    key, n = key[o], n[o]
+    new = np.ones(key.size, np.bool_)
+    new[1:] = key[1:] != key[:-1]
+    start = np.flatnonzero(new)
+    return key[start], np.add.reduceat(n, start) if key.size else n
+
+
+def molecule_info(h5_path, cell_idx, gene_ids):
+    """(key, count) of the molecule_info.h5 rows of pass_filter barcodes, sorted by key (cell row of cell_idx, UMI code,
+    gene row, as in the parts).
+
+    Our observation on the three libraries (h5py; tests/synth._outs_10x writes the same layout): barcodes without the
+    "-1", which is the gem_group column; barcode_info/pass_filter rows of barcode, library and genome index; features/id in
+    the order of features.tsv.gz. ValueError when the feature ids differ from gene_ids or a pass_filter barcode is no row
+    of cell_idx.
+    """
+    with h5py.File(h5_path, "r") as f:
+        if f["features/id"][:].astype(str).tolist() != list(gene_ids):
+            raise ValueError(f"{h5_path}: features/id is not the first column of features.tsv.gz")
+        gem = np.unique(f["gem_group"][:])
+        if gem.size > 1:
+            raise ValueError(f"{h5_path}: {gem.size} gem groups; the join takes the barcodes of one")
+        barcodes = f["barcodes"][:].astype(str)
+        called = f["barcode_info/pass_filter"][:, 0].astype(np.int64)
+        row = np.full(barcodes.size, -1, np.int64)
+        row[called] = [cell_idx.get(f"{b}-{gem[0]}", -1) for b in barcodes[called]] if called.size else []
+        if (row[called] < 0).any():
+            raise ValueError(f"{h5_path}: {int((row[called] < 0).sum())} pass_filter barcodes are not in barcodes.tsv.gz")
+        cell = row[f["barcode_idx"][:]]
+        keep = cell >= 0
+        key = ((cell[keep].astype(np.uint64) << np.uint64(40)) | (f["umi"][:][keep].astype(np.uint64) << np.uint64(16))
+               | f["feature_idx"][:][keep].astype(np.uint64))
+        count = f["count"][:][keep].astype(np.int64)
+    o = np.argsort(key, kind="stable")
+    return key[o], count[o]
+
+
+def check_a2(key, n_reads, mol_key, mol_count):
+    """Check A2: the read groups with a winner read (winner_groups) against the rows of molecule_info (both sorted by key).
+
+    joined, only_read_groups, only_molecule_info, read_count_mismatches (n_reads is not count), and left_over, a frame
+    key, n_reads, count of the rows without a partner (the missing side empty) and of the mismatches. passed when nothing
+    is left over and no count differs.
+    """
+    pos = np.minimum(np.searchsorted(mol_key, key), max(mol_key.size - 1, 0))
+    found = mol_key[pos] == key if mol_key.size else np.zeros(key.size, np.bool_)
+    seen = np.zeros(mol_key.size, np.bool_)
+    seen[pos[found]] = True
+    differ = found.copy()
+    differ[found] = n_reads[found] != mol_count[pos[found]]
+    bad = ~found | differ
+    only = np.concatenate((np.zeros(int(bad.sum()), np.bool_), np.ones(int((~seen).sum()), np.bool_)))
+    left = pd.DataFrame({
+        "key": np.concatenate((key[bad], mol_key[~seen])),
+        "n_reads": pd.arrays.IntegerArray(np.concatenate((n_reads[bad], np.zeros(only.sum(), np.int64))), only),
+        "count": pd.arrays.IntegerArray(np.concatenate((np.where(found[bad], mol_count[pos[bad]], 0) if mol_key.size
+                                                        else np.zeros(int(bad.sum()), np.int64), mol_count[~seen])),
+                                        np.concatenate((~found[bad], np.zeros(only.sum(), np.bool_))))})
+    out = {"read_groups": int(key.size), "molecules": int(mol_key.size), "joined": int(found.sum()),
+           "only_read_groups": int((~found).sum()), "only_molecule_info": int((~seen).sum()),
+           "read_count_mismatches": int(differ.sum())}
+    return out | {"passed": not len(left), "left_over": left}
+
+
+def check_a3(rec, barcodes, cell_counts, region_counts, tags):
+    """Check A3, the tie to the engine of stage 13: the record counters of the pass (sum_records) against
+    grid/cell_counts.parquet (index cb; total and removed primary records per called cell and tag, joined on the barcode)
+    and grid/region_counts.parquet (tag, re, removed, total over all barcodes). Exact; differing lists every value that
+    differs as (what, barcode or RE, column, ours, stage 13)."""
+    cols = ["total", *tags]
+    per_cell = rec[:-1].sum(axis=(1, 2))[:, [0, *range(4, 4 + len(tags))]]
+    ours = pd.DataFrame(per_cell, index=pd.Index(barcodes, name="cb"), columns=cols)
+    theirs = cell_counts[cols].astype(np.int64)
+    both = ours.index.intersection(theirs.index)
+    differing = [("cell only here", cb, "", int(ours.total[cb]), None) for cb in ours.index.difference(theirs.index)]
+    differing += [("cell only in stage 13", cb, "", None, int(theirs.total[cb])) for cb in theirs.index.difference(ours.index)]
+    a, b = ours.loc[both].to_numpy(), theirs.loc[both].to_numpy()
+    differing += [("cell", both[i], cols[j], int(a[i, j]), int(b[i, j])) for i, j in np.argwhere(a != b)]
+    region = {(r.tag, r.re): (int(r.removed), int(r.total)) for r in region_counts[region_counts.tag.isin(tags)].itertuples()}
+    every = rec[-1].sum(axis=1)
+    mine = {(tag, RE_CODES[k]): (int(every[k, 4 + t]), int(every[k, 0])) for t, tag in enumerate(tags)
+            for k in range(len(RE_CODES)) if every[k, 0]}
+    for k in sorted(set(mine) | set(region)):
+        if mine.get(k) != region.get(k):
+            differing.append(("region removed, total", k[1], k[0], mine.get(k), region.get(k)))
+    return {"cells": len(both), "settings": len(tags), "cell_values_compared": int(a.size), "region_rows_compared": len(region),
+            "values_differing": len(differing), "passed": not differing,
+            "differing": pd.DataFrame(differing, columns=["what", "name", "column", "ours", "stage13"])}
+
+
+def check_groups(g, settings):
+    """The invariants of check A5 that hold group by group, on a table of whole cells and UMIs sorted by key (the groups of
+    a block that are alone, or the table of rule_on_multi). Returns the violations as a frame invariant, key, tag:
+
+    removed_exceeds_reads   more reads removed than the group has
+    exceeds_control         more reads removed than at the remove-all control of the same COVLEN and mode (its pieces
+                            contain the setting's, stream.reference_pieces)
+    event_without_removal   a loss, gain or switch in a cell and UMI none of whose reads is removed
+    held_without_reads      the group holds the UMI at the setting and has no read left (what is counted after filtering
+                            is among the read groups, with a surviving read)
+    gain_in_single_group    a gain in a cell and UMI with one read group
+    single_group_loss       a group alone in its cell and UMI is not lost exactly when all its reads are removed
+    """
+    key = g.key.to_numpy()
+    cu = key >> np.uint64(16)
+    first = np.ones(len(g), np.bool_)
+    first[1:] = cu[1:] != cu[:-1]
+    start = np.flatnonzero(first)
+    size = np.diff(np.append(start, len(g)))
+    single = np.repeat(size, size) == 1
+    n, held0 = g.n_reads.to_numpy(np.int64), g.counted.to_numpy()
+    tags = [setting_tag(s) for s in settings]
+    rm = {tag: g[f"rm_{tag}"].to_numpy(np.int64) for tag in tags}
+    found = []
+    for t, (s, tag) in enumerate(zip(settings, tags)):
+        lost, gained, switched = ((g[c].to_numpy() >> np.uint32(t)) & 1 == 1 for c in ("lost", "gained", "switched"))
+        bad = {"removed_exceeds_reads": rm[tag] > n}
+        control = setting_tag(Setting(s.covlen, None, 0, s.introns))
+        if s.min_len is not None and control in rm:
+            bad["exceeds_control"] = rm[tag] > rm[control]
+        if len(g):
+            bad["event_without_removal"] = (lost | gained | switched) & ~np.repeat(np.logical_or.reduceat(rm[tag] > 0, start), size)
+        bad["held_without_reads"] = ((held0 & ~lost) | gained) & (rm[tag] >= n)
+        bad["gain_in_single_group"] = gained & single
+        bad["single_group_loss"] = single & (lost != (held0 & (rm[tag] >= n)))
+        found += [pd.DataFrame({"invariant": name, "key": key[x], "tag": tag}) for name, x in bad.items() if x.any()]
+    return pd.concat(found, ignore_index=True) if found else pd.DataFrame({"invariant": [], "key": np.zeros(0, np.uint64), "tag": []})
+
+
+def check_matrices(m0, lost, gained):
+    """The invariants of check A5 on the matrices: a loss matrix is at most m0 entry by entry and m0 - lost + gained has
+    no negative entry. Violations as a frame invariant, cell, gene, tag, value."""
+    found = []
+    for tag in lost:
+        for name, m in (("loss_above_unfiltered", m0 - lost[tag]), ("negative_entry", filtered(m0, lost[tag], gained[tag]))):
+            m = m.tocoo()
+            neg = m.data < 0
+            found.append(pd.DataFrame({"invariant": name, "cell": m.row[neg], "gene": m.col[neg], "tag": tag, "value": m.data[neg]}))
+    return pd.concat(found, ignore_index=True)
+
+
+def check_totals(cell_totals, gene_totals, sums):
+    """The last invariant of check A5: per tag, the UMIs of cell_totals, of gene_totals and of the matrix (sums: {tag:
+    matrix sum}) are one number. The tags where they are not, as a frame tag, cells, genes, matrix."""
+    t = pd.DataFrame({"cells": cell_totals.groupby("tag").umis.sum(), "genes": gene_totals.groupby("tag").umis.sum(),
+                      "matrix": pd.Series(sums)}).rename_axis("tag").reset_index()
+    return t[(t.cells != t.genes) | (t.cells != t.matrix)].reset_index(drop=True)

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pafbench import matrices, recount
+from pafbench import matrices, recount, stream
 from pafbench.flags import setting_tag
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index
 from pafbench.transcripts import load_transcripts
@@ -232,6 +232,11 @@ def test_key_on_two_references_is_summed_and_counted(synth10x, parts, tmp_path):
     clean, _ = _blocks(parts)
     for b, c in zip(blocks, clean):
         pd.testing.assert_frame_equal(b[~b.key.isin(keys)].reset_index(drop=True), c[~c.key.isin(keys)].reset_index(drop=True))
+    # in the sums the key is one group of g1, and g1 stays a gene of its first reference
+    tally, clean_tally = _tally(d), _tally(parts)
+    assert tally.gene_ref.tolist() == [0, 0, 1, -1]
+    assert np.array_equal(tally.matrix("unfiltered").toarray(), clean_tally.matrix("unfiltered").toarray())
+    assert np.array_equal(tally.matrix("xf").toarray(), clean_tally.matrix("xf").toarray())
 
 
 def _dense(counts):
@@ -384,3 +389,251 @@ def test_totals_equal_sums_over_the_dense_matrices(synth10x, parts):
     assert u.rg_E.tolist() == [int(((rg.cb == x) & (rg.re_class & 1 > 0)).sum()) for x in CALLED]
     assert u.rg_N.tolist() == [int(((rg.cb == x) & (rg.re_class & 2 > 0)).sum()) for x in CALLED]
     assert u.rg_E.sum() + u.rg_N.sum() == len(rg) + (rg.re_class == 3).sum()
+
+
+def _named_entries(frame):
+    return {(CELL[CALLED[r.cell]], GENES[r.gene]): (r.ours, r.theirs) for r in frame.itertuples()}
+
+
+def test_cell_ranger_matrix_is_read_as_cells_by_genes(synth10x):
+    cr = recount.read_cr_matrix(_matrix(synth10x))
+    assert cr.format == "csr" and cr.dtype == np.int32 and cr.shape == (len(CALLED), len(GENES))
+    assert np.array_equal(cr.toarray(), _dense({(CELLS_10X[c], g): n for (c, g), n in MATRIX.items()}))
+
+
+def test_a1_is_exact_and_a1b_differs_in_the_two_source_pattern_entries(synth10x, parts):
+    tally, cr = _tally(parts), recount.read_cr_matrix(_matrix(synth10x))
+    a1 = recount.check_entries(tally.matrix("xf"), cr, 0)
+    assert (a1["entries_compared"], a1["entries_equal"], a1["entries_differing"], a1["passed"]) == (9, 9, 0, True)
+    assert len(a1["differing"]) == 0 and list(a1["differing"].columns) == ["cell", "gene", "ours", "theirs"]
+    m0 = tally.matrix("unfiltered")
+    a1b = recount.check_entries(m0, cr, 2)                     # on the synthetic library the gate is a count
+    assert (a1b["entries_compared"], a1b["entries_equal"], a1b["entries_differing"], a1b["passed"]) == (10, 8, 2, True)
+    assert _named_entries(a1b["differing"]) == {("c4", "g3"): (1, 0), ("c5", "g1"): (1, 2)}
+    assert a1b["per_million"] == 200_000 and a1b["gate"] == 2
+    assert not recount.check_entries(m0, cr, 1)["passed"]
+
+
+def test_a1_fails_on_an_off_by_one_and_names_the_entry(synth10x, parts, tmp_path):
+    """Planted in a copy of the Cell Ranger matrix: one UMI more at c3, g2 and an entry that only Cell Ranger has."""
+    d = tmp_path / "filtered_feature_bc_matrix"
+    shutil.copytree(_matrix(synth10x), d)
+    with gzip.open(d / "matrix.mtx.gz", "rt") as fh:
+        lines = fh.read().splitlines()
+    c3, c1 = CALLED.index(CELLS_10X["c3"]) + 1, CALLED.index(CELLS_10X["c1"]) + 1
+    assert f"2 {c3} 1" in lines                                  # gene, cell, UMIs, 1-based
+    lines[lines.index(f"2 {c3} 1")] = f"2 {c3} 2"
+    lines[2] = "4 5 10"
+    with gzip.open(d / "matrix.mtx.gz", "wt") as fh:
+        fh.write("\n".join(lines + [f"4 {c1} 3"]) + "\n")
+    a1 = recount.check_entries(_tally(parts).matrix("xf"), recount.read_cr_matrix(d), 0)
+    assert (a1["entries_compared"], a1["entries_equal"], a1["entries_differing"], a1["passed"]) == (10, 8, 2, False)
+    assert _named_entries(a1["differing"]) == {("c3", "g2"): (1, 2), ("c1", "g4"): (0, 3)}
+
+
+def _winners(s):
+    """{key: n_reads} of the designed read groups with a winner read."""
+    w = s.groups[s.groups.n_winner_reads > 0]
+    return {_key(r.cb, r.ub, r.gene): r.n_reads for r in w.itertuples()}
+
+
+def test_a2_joins_every_group_with_a_winner_read_to_molecule_info(synth10x, parts):
+    key, n = recount.winner_groups(parts, REFS)
+    assert key.dtype == np.uint64 and dict(zip(key.tolist(), n.tolist())) == _winners(synth10x) and (np.diff(key) > 0).all()
+    cells, genes = row_index(_matrix(synth10x) / "barcodes.tsv.gz"), row_index(_matrix(synth10x) / "features.tsv.gz")
+    mol_key, count = recount.molecule_info(synth10x.outs / "molecule_info.h5", cells, list(genes))
+    # the molecules of the uncalled barcode are not among them, and the rows come back in key order (the file is sorted by
+    # barcode, feature and UMI)
+    assert dict(zip(mol_key.tolist(), count.tolist())) == _winners(synth10x) and (np.diff(mol_key) > 0).all()
+    a2 = recount.check_a2(key, n, mol_key, count)
+    assert {k: v for k, v in a2.items() if k != "left_over"} == {
+        "read_groups": 20, "molecules": 20, "joined": 20, "only_read_groups": 0, "only_molecule_info": 0,
+        "read_count_mismatches": 0, "passed": True}
+    assert len(a2["left_over"]) == 0 and list(a2["left_over"].columns) == ["key", "n_reads", "count"]
+
+
+def test_a2_names_what_is_left_over_on_either_side_and_the_read_counts_that_differ(synth10x, parts):
+    key, n = recount.winner_groups(parts, REFS)
+    mol_key, count = key.copy(), n.copy()
+    count[3] += 1                                               # a molecule with another count
+    mol_key, count = np.delete(mol_key, [5, 19]), np.delete(count, [5, 19])       # two molecules Cell Ranger does not have
+    extra = np.uint64(_key(CELLS_10X["c5"], "TTTTTTTTTTTT", "g4"))                # and one only Cell Ranger has, the last key
+    mol_key, count = np.append(mol_key, extra), np.append(count, 7)
+    a2 = recount.check_a2(key, n, mol_key, count)
+    assert {k: v for k, v in a2.items() if k != "left_over"} == {
+        "read_groups": 20, "molecules": 19, "joined": 18, "only_read_groups": 2, "only_molecule_info": 1,
+        "read_count_mismatches": 1, "passed": False}
+    left = a2["left_over"].astype(object).where(a2["left_over"].notna(), None)
+    assert sorted(left.itertuples(index=False, name=None)) == sorted([
+        (int(key[3]), int(n[3]), int(n[3]) + 1), (int(key[5]), int(n[5]), None), (int(key[19]), int(n[19]), None),
+        (int(extra), None, 7)])
+    # nothing on one side
+    none = recount.check_a2(key, n, key[:0], n[:0])
+    assert (none["joined"], none["only_read_groups"], none["only_molecule_info"], none["passed"]) == (0, 20, 0, False)
+    none = recount.check_a2(key[:0], n[:0], key, n)
+    assert (none["joined"], none["only_read_groups"], none["only_molecule_info"], none["passed"]) == (0, 0, 20, False)
+
+
+def test_winner_groups_sums_a_key_on_two_references(synth10x, parts, tmp_path):
+    g = synth10x.groups.set_index("case")
+    k = _key(g.loc["one_inside"].cb, g.loc["one_inside"].ub, "g1")
+    extra = pd.DataFrame({"key": np.array([k], np.uint64), "n_reads": 2, "n_winner_reads": 2, "n_pa": 0, "re_class": 1,
+                          "end3": 700, "end3_nonpa": 700} | {f"rm_{t}": 0 for t in TAGS})
+    key, n = recount.winner_groups(_plant(parts, tmp_path / "parts", "chrB", extra), REFS)
+    assert dict(zip(key.tolist(), n.tolist())) == _winners(synth10x) | {k: 3} and (np.diff(key) > 0).all()
+
+
+def test_molecule_info_of_another_feature_list_or_cell_calling_is_refused(synth10x, tmp_path):
+    cells, genes = row_index(_matrix(synth10x) / "barcodes.tsv.gz"), row_index(_matrix(synth10x) / "features.tsv.gz")
+    h5 = synth10x.outs / "molecule_info.h5"
+    with pytest.raises(ValueError, match="features/id is not the first column of features.tsv.gz"):
+        recount.molecule_info(h5, cells, list(genes)[::-1])
+    fewer = {cb: i for i, cb in enumerate(CALLED[1:])}
+    with pytest.raises(ValueError, match="1 pass_filter barcodes are not in barcodes.tsv.gz"):
+        recount.molecule_info(h5, fewer, list(genes))
+
+
+@pytest.fixture(scope="module")
+def stage13(synth10x):
+    """cell_counts and region_counts as stage 13 writes them, from its engine on the synthetic library."""
+    tx = load_transcripts(synth10x.gtf)
+    regions, cells = [], None
+    for ref in REFS:
+        _, region, cell = stream.scan_reference(synth10x.bam, synth10x.fasta, ref, tx, SETTINGS_10X, set(), cells=CALLED)
+        regions.append(region)
+        cells = cell if cells is None else cells + cell
+    return cells, stream.merge_regions(regions, TAGS)
+
+
+def test_a3_ties_the_record_counters_to_stage_13(synth10x, parts, stage13):
+    cells, region = stage13
+    rec = recount.sum_records(parts, REFS, len(CALLED), TAGS)
+    a3 = recount.check_a3(rec, CALLED, cells, region, TAGS)
+    assert {k: v for k, v in a3.items() if k != "differing"} == {
+        "cells": 5, "settings": 4, "cell_values_compared": 25, "region_rows_compared": 12, "values_differing": 0, "passed": True}
+    # stage 13 holds more settings than this stage reads: its other columns and rows are left out
+    wide = recount.check_a3(rec, CALLED, cells.assign(c150_l3_m0_e=1),
+                            pd.concat([region, region.assign(tag="c150_l3_m0_e")]), TAGS)
+    assert wide["passed"] and wide["region_rows_compared"] == 12
+    # the join is on the barcode: stage 13 with its rows in another order
+    assert recount.check_a3(rec, CALLED, cells.iloc[::-1], region, TAGS)["passed"]
+
+
+def test_a3_names_the_cell_the_setting_and_the_region_that_differ(synth10x, parts, stage13):
+    cells, region = stage13
+    rec = recount.sum_records(parts, REFS, len(CALLED), TAGS)
+    off = cells.copy()
+    off.loc[CALLED[2], TAGS[1]] += 1
+    off.loc[CALLED[4], "total"] -= 1
+    reg = region.copy()
+    reg.loc[(reg.tag == TAGS[3]) & (reg.re == "N"), "removed"] += 2
+    a3 = recount.check_a3(rec, CALLED, off.drop(index=CALLED[0]), reg[~((reg.tag == TAGS[0]) & (reg.re == "I"))], TAGS)
+    assert (a3["passed"], a3["values_differing"], a3["cells"]) == (False, 5, 4)
+    n = region.set_index(["tag", "re"])
+    assert sorted(a3["differing"].astype(object).where(a3["differing"].notna(), None).itertuples(index=False, name=None), key=str) == sorted([
+        ("cell only here", CALLED[0], "", int(cells.total[CALLED[0]]), None),
+        ("cell", CALLED[2], TAGS[1], int(cells.loc[CALLED[2], TAGS[1]]), int(cells.loc[CALLED[2], TAGS[1]]) + 1),
+        ("cell", CALLED[4], "total", int(cells.total[CALLED[4]]), int(cells.total[CALLED[4]]) - 1),
+        ("region removed, total", "N", TAGS[3], (int(n.removed[TAGS[3], "N"]), int(n.total[TAGS[3], "N"])),
+         (int(n.removed[TAGS[3], "N"]) + 2, int(n.total[TAGS[3], "N"]))),
+        ("region removed, total", "I", TAGS[0], (int(n.removed[TAGS[0], "I"]), int(n.total[TAGS[0], "I"])), None)], key=str)
+    more = recount.check_a3(rec, CALLED, pd.concat([cells, cells.iloc[:1].rename(index={CALLED[0]: "TTTT-1"})]), region, TAGS)
+    assert more["differing"].iloc[0].tolist()[:3] == ["cell only in stage 13", "TTTT-1", ""] and not more["passed"]
+
+
+def _whole_units(part_dir):
+    """The tables check_groups is given: the groups that are alone in their cell and UMI, block by block, and the table of
+    the cells and UMIs with two or more groups."""
+    multi_cu, _, _ = recount.multi_units(part_dir, REFS)
+    multi = recount.rule_on_multi(part_dir, REFS, multi_cu, TAGS)
+    blocks = [recount.ref_block(part_dir, REFS, r, multi_cu, multi, TAGS) for r in range(len(REFS))]
+    return [b[~b.multi].reset_index(drop=True) for b in blocks], multi
+
+
+def test_a5_invariants_hold_on_the_synthetic_groups(synth10x, parts):
+    alone, multi = _whole_units(parts)
+    for table in (*alone, multi):
+        v = recount.check_groups(table, SETTINGS_10X)
+        assert len(v) == 0 and list(v.columns) == ["invariant", "key", "tag"]
+    assert len(recount.check_groups(multi.iloc[:0], SETTINGS_10X)) == 0
+
+
+def _case_key(s, case, gene):
+    r = s.groups[(s.groups.case == case) & (s.groups.gene == gene)].iloc[0]
+    return _key(r.cb, r.ub, r.gene)
+
+
+def _violations(table, key, **values):
+    """check_groups on the table with the given columns of one group changed, as (invariant, tag) of that group."""
+    t = table.copy()
+    row = t.index[t.key == np.uint64(key)]
+    assert len(row) == 1
+    for col, v in values.items():
+        t.loc[row, col] = v
+    found = recount.check_groups(t, SETTINGS_10X)
+    assert (found.key == np.uint64(key)).all()
+    return sorted(zip(found.invariant, found.tag))
+
+
+def test_a5_each_invariant_of_the_groups_with_a_planted_violation(synth10x, parts):
+    (chr_a, chr_b), multi = _whole_units(parts)
+    e, i, ce, ci = TAGS                                           # default mode, -i, and the control of each
+    # more reads removed than the group has: protected has one read and none removed
+    k = _case_key(synth10x, "protected", "g1")
+    assert _violations(chr_a, k, **{f"rm_{ci}": 2, "lost": 0b1000}) == [("removed_exceeds_reads", ci)]
+    # more reads removed at a setting than at its control: two_one_inside loses 1 of 2 at the settings, 2 at the controls
+    k = _case_key(synth10x, "two_one_inside", "g1")
+    assert _violations(chr_a, k, **{f"rm_{ce}": 0, "lost": 0b1000}) == [("exceeds_control", e)]
+    # a loss where nothing is removed
+    k = _case_key(synth10x, "protected", "g1")
+    assert _violations(chr_a, k, lost=0b0010) == [("event_without_removal", i), ("single_group_loss", i)]
+    # a switch where nothing is removed, in a cell and UMI with two groups: tie has two reads on each gene, none removed
+    k = _case_key(synth10x, "tie", "g2")
+    assert _violations(multi, k, switched=0b0001) == [("event_without_removal", e)]
+    # the group holds the UMI with no read left: one_inside loses its read at every setting
+    k = _case_key(synth10x, "one_inside", "g1")
+    assert _violations(chr_a, k, lost=0b1110) == [("held_without_reads", e), ("single_group_loss", e)]
+    # the same in a cell and UMI with two groups: at -i all three reads of g1 in three_vs_one are removed
+    k = _case_key(synth10x, "three_vs_one", "g1")
+    assert _violations(multi, k, lost=0b0101) == [("held_without_reads", i), ("held_without_reads", ci)]
+    # a gain in a cell and UMI with one group: g3_two on chrB, and two_one_inside where a read is removed and one is left
+    k = _case_key(synth10x, "g3_two", "g3")
+    assert _violations(chr_b, k, counted=False, lost=0, gained=0b0001) == [("event_without_removal", e), ("gain_in_single_group", e)]
+    k = _case_key(synth10x, "two_one_inside", "g1")
+    assert _violations(chr_a, k, counted=False, lost=0, gained=0b0001) == [("gain_in_single_group", e)]
+    # a group that is alone, keeps a read and is called lost
+    k = _case_key(synth10x, "two_one_inside", "g1")
+    assert _violations(chr_a, k, lost=0b1101) == [("single_group_loss", e)]
+    # the planted violations are the only ones, and a group is named by its key
+    assert _violations(chr_a, k) == []
+
+
+def test_a5_invariants_of_the_matrices_and_totals_with_planted_violations(synth10x, parts):
+    (cell, gene), (m0, lost, gained) = _totals(synth10x, parts)
+    ok = recount.check_matrices(m0, lost, gained)
+    assert len(ok) == 0 and list(ok.columns) == ["invariant", "cell", "gene", "tag", "value"]
+    sums = {"unfiltered": int(m0.sum())} | {t: int(matrices.filtered(m0, lost[t], gained[t]).sum()) for t in TAGS}
+    assert len(recount.check_totals(cell, gene, sums)) == 0
+    # a loss above the unfiltered count, and one where nothing was counted: c1 has 8 UMIs of g1 and none of g2
+    c1 = CALLED.index(CELLS_10X["c1"])
+    more = lost[TAGS[1]].tolil()
+    more[c1, 0], more[c1, 1] = 9, 1
+    bad = recount.check_matrices(m0, lost | {TAGS[1]: more.tocsr()}, gained)
+    assert sorted(bad.itertuples(index=False, name=None)) == [
+        ("loss_above_unfiltered", c1, 0, TAGS[1], -1), ("loss_above_unfiltered", c1, 1, TAGS[1], -1),
+        ("negative_entry", c1, 0, TAGS[1], -1), ("negative_entry", c1, 1, TAGS[1], -1)]
+    # a gain makes up for the loss in the filtered matrix; the loss matrix alone still shows it
+    back = gained[TAGS[1]].tolil()
+    back[c1, 0], back[c1, 1] = 1, 1
+    bad = recount.check_matrices(m0, lost | {TAGS[1]: more.tocsr()}, gained | {TAGS[1]: back.tocsr()})
+    assert sorted(bad.invariant) == ["loss_above_unfiltered"] * 2
+    # totals: the UMIs of the cells, of the genes and of the matrix are one number per tag
+    off = cell.copy()
+    off.loc[(off.tag == TAGS[2]) & (off.cb == CALLED[1]), "umis"] += 1
+    assert recount.check_totals(off, gene, sums).to_dict("records") == [
+        {"tag": TAGS[2], "cells": sums[TAGS[2]] + 1, "genes": sums[TAGS[2]], "matrix": sums[TAGS[2]]}]
+    assert recount.check_totals(cell, gene, sums | {"unfiltered": 19}).to_dict("records") == [
+        {"tag": "unfiltered", "cells": 20, "genes": 20, "matrix": 19}]
+    off = gene.copy()
+    off.loc[(off.tag == TAGS[0]) & (off.gene_id == "g1"), "umis"] -= 2
+    assert recount.check_totals(cell, off, sums).tag.tolist() == [TAGS[0]]
