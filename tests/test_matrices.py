@@ -10,8 +10,10 @@ from pafbench import matrices
 
 TAGS = ["c200_l8_m0_e", "c200_l8_m0_i"]
 M0 = np.array([[3, 0, 1, 0], [0, 2, 0, 0], [1, 1, 0, 5]])
-LOST = {TAGS[0]: np.array([[3, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0]]), TAGS[1]: np.array([[1, 0, 1, 0], [0, 2, 0, 0], [0, 1, 0, 2]])}
-GAINED = {TAGS[0]: np.array([[0, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]), TAGS[1]: np.array([[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0]])}
+LOST = {TAGS[0]: np.array([[3, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0]]),
+        TAGS[1]: np.array([[1, 0, 1, 0], [0, 2, 0, 0], [0, 1, 0, 2]])}
+GAINED = {TAGS[0]: np.array([[0, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]),
+          TAGS[1]: np.array([[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0]])}
 META = {"bam": "/x/possorted_genome_bam.bam", "rule_version": 1, "barcodes_sha256": "ab", "features_sha256": "cd"}
 
 

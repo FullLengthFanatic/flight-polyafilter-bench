@@ -39,7 +39,8 @@ def main():
     with pysam.AlignmentFile(str(bam)) as fh:
         refs = [s.contig for s in fh.get_index_statistics() if s.mapped > 0]
     folder, a4_refs = SUBSET.get(lib, (OUT / lib / "original", None))
-    bams = original_bams(folder, "" if a4_refs is None else "_".join(a4_refs) + ".", [s for s in published() if s in IMPACT_SETTINGS])
+    bams = original_bams(folder, "" if a4_refs is None else "_".join(a4_refs) + ".",
+                         [s for s in published() if s in IMPACT_SETTINGS])
     check = OUT / "design_m3_draft" / "review" / "v2" / f"a1b_genomewide_{lib}.json"
     res = run(lib, bam, refs, IMPACT_SETTINGS, args.out or OUT / lib / "recount", args.matrices or OUT / lib / "matrices",
               OUT / lib / "grid", bams, a4_refs, check if check.exists() else None)

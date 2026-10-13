@@ -228,7 +228,8 @@ def sum_records(part_dir, refs, n_cells, tags):
     for ref in refs:
         part = pd.read_parquet(Path(part_dir) / f"{ref}.cell_records.parquet")
         # a part has one row per cell, RE and GX, and cell -1 is the last row of rec
-        rec[part.cell.to_numpy(), part.re.map(RE_CODES.index).to_numpy(), part.gx.to_numpy().astype(np.int64)] += part[cols].to_numpy()
+        where = part.cell.to_numpy(), part.re.map(RE_CODES.index).to_numpy(), part.gx.to_numpy().astype(np.int64)
+        rec[where] += part[cols].to_numpy()
     return rec
 
 
@@ -416,12 +417,15 @@ def check_groups(g, settings):
         if s.min_len is not None and control in rm:
             bad["exceeds_control"] = rm[tag] > rm[control]
         if len(g):
-            bad["event_without_removal"] = (lost | gained | switched) & ~np.repeat(np.logical_or.reduceat(rm[tag] > 0, start), size)
+            touched = np.repeat(np.logical_or.reduceat(rm[tag] > 0, start), size)
+            bad["event_without_removal"] = (lost | gained | switched) & ~touched
         bad["held_without_reads"] = ((held0 & ~lost) | gained) & (rm[tag] >= n)
         bad["gain_in_single_group"] = gained & single
         bad["single_group_loss"] = single & (lost != (held0 & (rm[tag] >= n)))
         found += [pd.DataFrame({"invariant": name, "key": key[x], "tag": tag}) for name, x in bad.items() if x.any()]
-    return pd.concat(found, ignore_index=True) if found else pd.DataFrame({"invariant": [], "key": np.zeros(0, np.uint64), "tag": []})
+    if not found:
+        return pd.DataFrame({"invariant": [], "key": np.zeros(0, np.uint64), "tag": []})
+    return pd.concat(found, ignore_index=True)
 
 
 def check_matrices(m0, lost, gained):
@@ -432,7 +436,8 @@ def check_matrices(m0, lost, gained):
         for name, m in (("loss_above_unfiltered", m0 - lost[tag]), ("negative_entry", filtered(m0, lost[tag], gained[tag]))):
             m = m.tocoo()
             neg = m.data < 0
-            found.append(pd.DataFrame({"invariant": name, "cell": m.row[neg], "gene": m.col[neg], "tag": tag, "value": m.data[neg]}))
+            found.append(pd.DataFrame({"invariant": name, "cell": m.row[neg], "gene": m.col[neg], "tag": tag,
+                                       "value": m.data[neg]}))
     return pd.concat(found, ignore_index=True)
 
 
@@ -477,8 +482,11 @@ def original_bams(folder, prefix, settings):
     name them. Stop (SystemExit) when one is missing or its run did not end with exit status 0 in <prefix><tag>.time.txt
     (validation.time_exit_status; a killed run leaves a truncated BAM)."""
     bams = {setting_tag(s): Path(folder) / f"{prefix}{setting_tag(s)}.bam" for s in settings}
-    missing = [str(path) for path in bams.values()
-               if not (path.exists() and path.with_suffix(".time.txt").exists() and time_exit_status(path.with_suffix(".time.txt")) == 0)]
+    missing = []
+    for path in bams.values():
+        time_file = path.with_suffix(".time.txt")
+        if not (path.exists() and time_file.exists() and time_exit_status(time_file) == 0):
+            missing.append(str(path))
     if missing:
         raise SystemExit(f"check A4 needs the BAMs of the original tool, missing or not finished: {', '.join(missing)}")
     return bams
@@ -678,7 +686,8 @@ def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4
         features = [line.rstrip("\n").split("\t")[:2] for line in fh]
     cell_totals, gene_totals = totals(tally, m0, lost, gained, rec, barcodes, features, refs)
     sums = {"unfiltered": int(m0.sum())} | {tag: int(m0.sum() - lost[tag].sum() + gained[tag].sum()) for tag in tags}
-    bad = [pd.concat(violations, ignore_index=True), check_matrices(m0, lost, gained), check_totals(cell_totals, gene_totals, sums)]
+    bad = [pd.concat(violations, ignore_index=True), check_matrices(m0, lost, gained),
+           check_totals(cell_totals, gene_totals, sums)]
     res["A5"] = {"umis": sums, "violations": {name: int(n) for b in bad[:2] for name, n in b.invariant.value_counts().items()}
                  | ({"totals_differ": len(bad[2])} if len(bad[2]) else {}),
                  "passed": not any(len(b) for b in bad), "groups": _listing(bad[0], barcodes, gene_ids),

@@ -46,7 +46,8 @@ def test_module_shares_no_code_with_the_pass_or_the_rule():
     """Check A4 compares two counts of the same reads; it says something only while they have no code in common."""
     tree = ast.parse(Path(naive.__file__).read_text())
     imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    imported |= {(n.module or "pafbench") if n.level == 0 else "pafbench" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    imported |= {(n.module or "pafbench") if n.level == 0 else "pafbench" for n in ast.walk(tree)
+                 if isinstance(n, ast.ImportFrom)}
     assert "pafbench" not in imported and imported <= {"gzip", "array", "itertools", "numpy", "pysam", "scipy"}
 
 
