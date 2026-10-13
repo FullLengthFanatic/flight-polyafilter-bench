@@ -401,14 +401,15 @@ def context_tables(sites, by_class, by):
 
 
 def totals(sites, by_class):
-    """Counts of one library for isoform_context.json, from the site table of attach_stage16 and by_class: per version
-    the reads by their own class, the sites by top class, the tied sites and the sites whose top class holds at most half
-    of the reads; the sites whose placed top class holds chain_novel reads only; the flagged reads; per class of the
-    placed version its reads, those with a matched intron, 5' complete, covering the start and with a compatible
-    transcript of another class (other_class among the reads that are not chain_novel, chain_novel_other_class among
-    those that are); the novel-junction reads by sub-cause and the sites with a novel-junction top class by main
-    sub-cause."""
-    out = {"accepted_reads": int(sites.n_accepted.sum()), "sites": len(sites)}
+    """Counts of one library for isoform_context.json, from the site table of attach_stage16 and by_class: the sites of
+    the milestone 2 region intron; per version the reads by their own class, the sites by top class, the tied sites, the
+    sites whose top class holds at most half of the reads and the intron sites whose top class is a no_model reason; the
+    sites whose placed top class holds chain_novel reads only; the flagged reads; per class of the placed version its
+    reads, those with a matched intron, 5' complete, covering the start and with a compatible transcript of another
+    class (other_class among the reads that are not chain_novel, chain_novel_other_class among those that are); the
+    novel-junction reads by sub-cause and the sites with a novel-junction top class by main sub-cause."""
+    intron = (sites.region == "intron").to_numpy()
+    out = {"accepted_reads": int(sites.n_accepted.sum()), "sites": len(sites), "intron_sites": int(intron.sum())}
     novel = by_class.chain_novel.to_numpy()
     for version, col, suffix in zip(VERSIONS, ("context", "context_without_chain_novel"), ("", "_without_chain_novel")):
         own = np.where(novel & (version == "strict"), NOVEL_JUNCTION, by_class.klass)
@@ -416,7 +417,8 @@ def totals(sites, by_class):
         out[version] = {"reads_by_class": {c: int(by_class.reads[own == c].sum()) for c in CLASSES},
                         "sites_by_context": {c: int(by_top.get(c, 0)) for c in CLASSES},
                         "sites_tied": int(sites["tied" + suffix].sum()),
-                        "sites_top_share_at_most_half": int((sites["top_share" + suffix] <= 0.5).sum())}
+                        "sites_top_share_at_most_half": int((sites["top_share" + suffix] <= 0.5).sum()),
+                        "intron_sites_top_no_model": int((intron & sites[col].str.startswith("no_model_").to_numpy()).sum())}
     out["sites_top_class_on_chain_novel_only"] = int(sites.chain_novel_only.sum())
     out["flagged_reads"] = {k: int(sites["n_" + k].sum()) for k in ("starts_outside", "chain_novel", "chain_novel_suffix1",
                                                                     "retained_after_junction", "end_NF", "no_splice")}

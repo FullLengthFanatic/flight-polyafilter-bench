@@ -29,8 +29,15 @@ BD70/pigeon_crosscheck.parquet         structural_category, subcategory, context
                                        tecap's own files and <lib>/tecap/classify.log with its output.
 <lib>/tecap_site_buckets.parquet       ref, strand, site, bucket, reads, and <lib>/tecap_buckets.parquet: label, bucket, reads.
 
-The stage stops before writing anything when the sites or their accepted reads differ from stage 16, or when a site of the
-region intron has the top class no_model_antisense or no_model_intergenic; such sites are listed.
+The stage stops before writing any table when the sites or their accepted reads differ from stage 16, or when a site of the
+region intron has the top class no_model_antisense or no_model_intergenic; such sites are listed. The tagged BAMs of the
+references (<lib>/tecap/part.<ref>.bam) are written during the scan and are then left behind.
+
+The last line printed is JSON: per library the accepted reads and sites; per version the novel-junction reads, the sites with a
+no_model top class, among them those of the region intron, the tied sites and the sites whose top class holds at most half of
+the reads; the sites whose top class rests on chain_novel reads alone; the matched share and the label agreement of the 1179
+molecules by label, real and with the sites moved NULL_SHIFT nt upstream; and per label the reads written to the tagged BAM,
+those without a splice and those tecap classified.
 
 Options: --libs, --refs (default: the 23 references of stage 16), --workers (also tecap's --threads), --base, --out,
 --no-tecap (no tagged BAM and no tecap run: the context tables alone).
@@ -45,8 +52,8 @@ import pysam
 
 from pafbench import tecap
 from pafbench.config import FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT, OUT, PIGEON_DIR
-from pafbench.lrcontext import (CONTEXT_COLUMNS, attach_stage16, context_tables, intron_sites_off_model, isoform_ends, link_1179,
-                                load_models, pigeon_crosscheck, reduce_sites, scan_context, totals)
+from pafbench.lrcontext import (CONTEXT_COLUMNS, NOVEL_JUNCTION, VERSIONS, attach_stage16, context_tables, intron_sites_off_model,
+                                isoform_ends, link_1179, load_models, pigeon_crosscheck, reduce_sites, scan_context, totals)
 from pafbench.pool import map_forked
 
 REFS = [f"chr{i}" for i in range(1, 23)] + ["chrX"]
@@ -131,8 +138,14 @@ def main():
             table.to_parquet(d / "pigeon_crosscheck.parquet", index=False)
             summary["pigeon"] = {"gtf": str(PIGEON_GTF), "classification": str(PIGEON_CLASS)} | counts
         line[lib] = {"accepted_reads": summary["accepted_reads"], "sites": summary["sites"],
+                     "reads_novel_junction": {v: summary[v]["reads_by_class"][NOVEL_JUNCTION] for v in VERSIONS},
                      "sites_top_no_model": {v: sum(n for c, n in summary[v]["sites_by_context"].items() if c.startswith("no_model_"))
-                                            for v in ("placed", "strict")}}
+                                            for v in VERSIONS},
+                     "intron_sites": summary["intron_sites"]}
+        line[lib] |= {k: {v: summary[v][k] for v in VERSIONS}
+                      for k in ("intron_sites_top_no_model", "sites_tied", "sites_top_share_at_most_half")}
+        line[lib]["sites_top_class_on_chain_novel_only"] = summary["sites_top_class_on_chain_novel_only"]
+        line[lib]["vs_1179"] = {k: {x: summary["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")} for k in ("real", "null")}
         if not args.no_tecap:
             t1 = time.time()
             bam = tecap.merge_parts({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, d / "tecap" / "accepted.bam")

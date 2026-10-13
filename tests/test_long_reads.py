@@ -517,8 +517,17 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         assert j["tecap"]["sites_with_a_classified_read"] == buckets[["strand", "site"]].drop_duplicates().shape[0]
         # top class a no_model reason: the eight sites of sites_no_model.parquet; strict, also the two sites at 1900, where both
         # reads are chain_novel (at 1550 one of two is, and the tie stays with intron_after_junction)
-        assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "sites_top_no_model": {"placed": 8, "strict": 10},
-                                "tecap": per_label}
+        # tied, with a top class that holds half of the reads: placed, the two sites at 1900 (annotated_end and 3UTR, both reads
+        # chain_novel, so the top class rests on chain_novel reads alone); strict, the two at 1550. The sites of the region
+        # intron are those at 1330 and 1550, none with a no_model top class
+        link = {k: {"share_matched_by_label": j["vs_1179"][k]["share_matched_by_label"], "agreement": j["vs_1179"][k]["agreement"]}
+                for k in ("real", "null")}
+        assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "reads_novel_junction": {"placed": 6, "strict": 16},
+                                "sites_top_no_model": {"placed": 8, "strict": 10},
+                                "intron_sites": 4, "intron_sites_top_no_model": {"placed": 0, "strict": 0},
+                                "sites_tied": {"placed": 2, "strict": 2}, "sites_top_share_at_most_half": {"placed": 2, "strict": 2},
+                                "sites_top_class_on_chain_novel_only": 2, "vs_1179": link, "tecap": per_label}
+        assert (acc.region == "intron").sum() == 4
         assert at("+", 1900).context_without_chain_novel == NJ and at("+", 1550).context_without_chain_novel == "intron_after_junction"
     # pigeon cross-check, BD70 only: ends at +1805 (5 nt from the site 1800), +1811 (11 nt), chrE (no site) and, on minus,
     # at the site of the mirrored full_chain_annotated_end read; the isoform of chrX is not on a scanned reference

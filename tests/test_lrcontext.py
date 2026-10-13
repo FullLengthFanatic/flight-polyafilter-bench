@@ -386,13 +386,14 @@ def test_totals_of_the_json():
     sites, by_class = _attached()
     t = totals(sites, by_class)
     zero = dict.fromkeys(CLASSES, 0)
-    assert t["accepted_reads"] == 16 and t["sites"] == 7
+    # the sites of the region intron are (+,200), novel junction in both versions, and (+,500), novel junction when strict
+    assert t["accepted_reads"] == 16 and t["sites"] == 7 and t["intron_sites"] == 2
     assert t["placed"] == {"reads_by_class": zero | {"annotated_end": 1, "3UTR": 2, "CDS": 3, "intron_after_junction": 1, NJ: 4, AS: 3, IG: 2},
                            "sites_by_context": zero | {"annotated_end": 1, "3UTR": 1, "CDS": 1, "intron_after_junction": 1, NJ: 2, AS: 1},
-                           "sites_tied": 4, "sites_top_share_at_most_half": 4}
+                           "sites_tied": 4, "sites_top_share_at_most_half": 4, "intron_sites_top_no_model": 1}
     assert t["strict"] == {"reads_by_class": zero | {"annotated_end": 1, "3UTR": 1, "CDS": 1, NJ: 8, AS: 3, IG: 2},
                            "sites_by_context": zero | {"annotated_end": 1, "3UTR": 1, NJ: 4, AS: 1},
-                           "sites_tied": 4, "sites_top_share_at_most_half": 4}
+                           "sites_tied": 4, "sites_top_share_at_most_half": 4, "intron_sites_top_no_model": 2}
     assert t["sites_top_class_on_chain_novel_only"] == 2
     assert t["flagged_reads"] == {"starts_outside": 1, "chain_novel": 4, "chain_novel_suffix1": 2, "retained_after_junction": 1,
                                   "end_NF": 1, "no_splice": 2}
