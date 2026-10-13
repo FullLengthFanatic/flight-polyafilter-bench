@@ -6,8 +6,13 @@ bookkeeping are its own. The kernel gives each record one bit per setting. Kept 
 - read groups: (cell, UB, gene) over the records of a called cell with a UB, a single-gene GX of the feature list and xf bit 1;
 - record counters per called cell, RE and presence of a GX tag, and the same over all barcodes (the tie to stage 13);
 - units: distinct (cell, UB, strand, 1 kb bin of the leftmost aligned position) among the records of a called cell with a UB.
+Parts are written per reference with the restart protocol of stage 13 (read_groups_to_parts, part_meta).
 """
 import gzip
+import hashlib
+import json
+import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -18,6 +23,7 @@ from .config import UNIT_BIN
 from .flags import setting_tag
 from .stream import RE_CODES, SECONDARY_OR_SUPPLEMENTARY, _pack, coverage_prefix_chunked, reference_pieces
 
+RULE_VERSION = 1  # bump with every change of the read-group rule or of the row format of the parts: old parts are then stale
 UMI_LEN = 12
 GROUP_MAX = 65_535  # n_reads and the rm columns are uint16
 # A 0, C 1, G 2, T 3, first base highest: the code of the umi column of molecule_info.h5 (our observation: with it all 467,969
@@ -321,3 +327,43 @@ def scan_read_groups(bam_path, fasta_path, ref, transcripts, settings, cell_idx,
     counts["called"] = int(celc[:, :, 0].sum(dtype=np.int64))
     counts |= {"in_groups": int(groups.n_reads.sum()), "read_groups": len(groups)}
     return groups, records, counts
+
+
+def _sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def part_meta(bam_path, matrix_dir, settings):
+    """What the parts of a run are made from, stored in every <ref>.json and compared by stream.stale_parts.
+
+    The BAM by path, size and mtime, the barcode and feature files of matrix_dir by content, the settings as tags in mask
+    bit order, RULE_VERSION, and the sha256 of this module's file: any edit of the module makes old parts stale (design of
+    2026-10-12, section 3.1, Restart).
+    """
+    bam, matrix_dir = Path(bam_path).resolve(), Path(matrix_dir)
+    st = bam.stat()
+    return {"bam": str(bam), "bam_size": st.st_size, "bam_mtime_ns": st.st_mtime_ns,
+            "barcodes_sha256": _sha256(matrix_dir / "barcodes.tsv.gz"),
+            "features_sha256": _sha256(matrix_dir / "features.tsv.gz"),
+            "settings": [setting_tag(s) for s in settings], "rule_version": RULE_VERSION, "module_sha256": _sha256(__file__)}
+
+
+def read_groups_to_parts(bam_path, fasta_path, ref, transcripts, settings, cell_idx, gene_idx, part_dir, meta, chunk=1_000_000):
+    """scan_read_groups written to part_dir as <ref>.read_groups.parquet and <ref>.cell_records.parquet, then <ref>.json (ref,
+    the counts, seconds and the entries of meta, see part_meta).
+
+    The protocol of stream.scan_to_parts: the json is written last, so a reference whose json exists is complete; it is not
+    scanned again and its stored stats are returned.
+    """
+    part_dir = Path(part_dir)
+    done = part_dir / f"{ref}.json"
+    if done.exists():
+        return json.loads(done.read_text())
+    t0 = time.monotonic()
+    groups, records, counts = scan_read_groups(bam_path, fasta_path, ref, transcripts, settings, cell_idx, gene_idx, chunk)
+    part_dir.mkdir(parents=True, exist_ok=True)
+    groups.to_parquet(part_dir / f"{ref}.read_groups.parquet", index=False)
+    records.to_parquet(part_dir / f"{ref}.cell_records.parquet", index=False)
+    stats = {"ref": ref} | counts | {"seconds": round(time.monotonic() - t0, 1)} | meta
+    done.write_text(json.dumps(stats))
+    return stats

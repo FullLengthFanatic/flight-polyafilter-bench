@@ -1,12 +1,17 @@
 """The read-group pass of stage 23 (pafbench.molstream) on the synthetic 10x BAM, against the designed tables of
 tests/synth.build_10x, flags.flag_reference, stream.scan_reference and plain counts of the BAM."""
 import dataclasses
+import gzip
+import hashlib
+import json
 import os
 import shutil
 from collections import Counter, defaultdict
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pysam
 import pytest
 
@@ -14,7 +19,8 @@ from pafbench import molstream, stream
 from pafbench.config import IMPACT_SETTINGS
 from pafbench.flags import Setting, flag_reference, setting_tag
 from pafbench.intervals import blocks_hit, flatten
-from pafbench.molstream import row_index, scan_read_groups
+from pafbench.molstream import part_meta, read_groups_to_parts, row_index, scan_read_groups
+from pafbench.stream import stale_parts
 from pafbench.transcripts import load_transcripts
 from tests.synth import CELLS_10X, CHROMS, HEADER, SETTINGS_10X, UNCALLED_10X, _sorted_bam
 from tests.test_synth10x import CELL, CELL_RECORDS, GENES, GROUPS
@@ -433,3 +439,142 @@ def test_more_settings_cells_or_features_than_the_mask_and_the_key_hold_are_refu
             scan_read_groups(synth10x.bam, synth10x.fasta, "chrB", tx, settings, cell_idx, gene_idx)
     groups, _, _ = scan_read_groups(synth10x.bam, synth10x.fasta, "chrB", tx, many[:32], cells, genes)
     assert len(groups) == 6 and groups.shape[1] == len(GROUP_COLS) + 32
+
+
+def _matrix(s):
+    return s.outs / "filtered_feature_bc_matrix"
+
+
+def _to_parts(s, ref, part_dir, meta, settings=SETTINGS_10X):
+    return read_groups_to_parts(s.bam, s.fasta, ref, load_transcripts(s.gtf), settings, row_index(_matrix(s) / "barcodes.tsv.gz"),
+                                row_index(_matrix(s) / "features.tsv.gz"), part_dir, meta)
+
+
+def _sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def test_part_meta_names_the_inputs_the_rule_version_and_the_module(synth10x):
+    meta = part_meta(synth10x.bam, _matrix(synth10x), SETTINGS_10X)
+    st = synth10x.bam.stat()
+    assert meta == {"bam": str(synth10x.bam.resolve()), "bam_size": st.st_size, "bam_mtime_ns": st.st_mtime_ns,
+                    "barcodes_sha256": _sha(_matrix(synth10x) / "barcodes.tsv.gz"),
+                    "features_sha256": _sha(_matrix(synth10x) / "features.tsv.gz"),
+                    "settings": TAGS, "rule_version": molstream.RULE_VERSION, "module_sha256": _sha(molstream.__file__)}
+    assert json.loads(json.dumps(meta)) == meta and type(molstream.RULE_VERSION) is int   # stored and compared as json
+    assert Path(molstream.__file__).name == "molstream.py"
+
+
+def test_parts_hold_the_tables_of_the_scan_and_the_json_names_counts_and_inputs(planted, tmp_path):
+    part_dir = tmp_path / "parts"
+    meta = part_meta(planted.bam, _matrix(planted), SETTINGS_10X)
+    for ref in REFS:
+        stats = _to_parts(planted, ref, part_dir, meta)
+        groups, rec, counts = _scan(planted, ref)
+        pd.testing.assert_frame_equal(pd.read_parquet(part_dir / f"{ref}.read_groups.parquet"), groups)
+        pd.testing.assert_frame_equal(pd.read_parquet(part_dir / f"{ref}.cell_records.parquet"), rec)
+        stored = json.loads((part_dir / f"{ref}.json").read_text())
+        assert stored == stats and stored.pop("seconds") >= 0
+        assert stored == {"ref": ref} | counts | meta and list(counts) == COUNTS
+    assert sorted(p.name for p in part_dir.iterdir()) == sorted(f"{ref}.{kind}" for ref in REFS for kind in (
+        "read_groups.parquet", "cell_records.parquet", "json"))
+    # a reference without genes (chrC) or without called cells (chrD) writes a read-group part without rows, with the
+    # columns and types of a full one
+    full = pq.read_schema(part_dir / "chrA.read_groups.parquet")
+    assert [str(t) for t in full.types] == GROUP_TYPES + ["uint16"] * 4
+    assert full.names == GROUP_COLS + [f"rm_{t}" for t in TAGS]
+    for ref in ("chrC", "chrD"):
+        part = pq.read_table(part_dir / f"{ref}.read_groups.parquet")
+        assert part.num_rows == 0 and part.schema.equals(full)
+    assert pq.read_table(part_dir / "chrA.read_groups.parquet").num_rows == 27
+    records = pq.read_schema(part_dir / "chrD.cell_records.parquet")
+    assert records.names == RECORD_COLS + TAGS
+    assert [str(t) for t in records.types] == ["int32", "large_string", "bool"] + ["uint32"] * 8
+
+
+def test_finished_reference_is_not_scanned_again(synth10x, tmp_path, monkeypatch):
+    part_dir = tmp_path / "parts"
+    meta = part_meta(synth10x.bam, _matrix(synth10x), SETTINGS_10X)
+    first = {ref: _to_parts(synth10x, ref, part_dir, meta) for ref in CHROMS}
+    before = {p.name: p.stat().st_mtime_ns for p in part_dir.iterdir()}
+
+    def boom(*args, **kwargs):
+        raise AssertionError("scan_read_groups ran again")
+
+    monkeypatch.setattr(molstream, "scan_read_groups", boom)
+    assert {ref: _to_parts(synth10x, ref, part_dir, meta) for ref in CHROMS} == first
+    assert {p.name: p.stat().st_mtime_ns for p in part_dir.iterdir()} == before
+    (part_dir / "chrB.json").unlink()                 # the parquet parts alone do not make a reference finished
+    with pytest.raises(AssertionError, match="ran again"):
+        _to_parts(synth10x, "chrB", part_dir, meta)
+
+
+def test_json_is_written_after_the_parquet_parts(synth10x, tmp_path, monkeypatch):
+    part_dir = tmp_path / "parts"
+    meta = part_meta(synth10x.bam, _matrix(synth10x), SETTINGS_10X)
+    real = pd.DataFrame.to_parquet
+    for failing in (".read_groups.parquet", ".cell_records.parquet"):
+        def boom(self, path, *a, **k):
+            if str(path).endswith(failing):
+                raise OSError("disk full")
+            return real(self, path, *a, **k)
+
+        with monkeypatch.context() as m:
+            m.setattr(pd.DataFrame, "to_parquet", boom)
+            with pytest.raises(OSError):
+                _to_parts(synth10x, "chrA", part_dir, meta)
+        assert not (part_dir / "chrA.json").exists()
+    assert (part_dir / "chrA.read_groups.parquet").exists()      # left by the second failure, and written again by the rerun
+    _to_parts(synth10x, "chrA", part_dir, meta)
+    pd.testing.assert_frame_equal(pd.read_parquet(part_dir / "chrA.read_groups.parquet"), _scan(synth10x, "chrA")[0])
+    assert (part_dir / "chrA.json").exists()
+
+
+def _private_copy(s, d):
+    """The library under d with its own BAM and matrix files, which a test may change."""
+    shutil.copytree(s.outs, d / "outs")
+    return dataclasses.replace(s, tmp=d, bam=d / "outs" / "possorted_genome_bam.bam", outs=d / "outs")
+
+
+def test_parts_of_other_inputs_another_rule_version_or_another_module_are_stale(synth10x, tmp_path, monkeypatch):
+    lib = _private_copy(synth10x, tmp_path)
+    part_dir = tmp_path / "parts"
+    refs = list(CHROMS)
+
+    def stale(settings=SETTINGS_10X):
+        return stale_parts(part_dir, refs, part_meta(lib.bam, _matrix(lib), settings))
+
+    _to_parts(lib, "chrB", part_dir, part_meta(lib.bam, _matrix(lib), SETTINGS_10X))
+    assert stale() == []                              # chrA has no part yet
+    # another settings list: a setting less, and the same settings in another order (the position of a setting is its bit)
+    assert stale(SETTINGS_10X[:3]) == ["chrB"] and stale(SETTINGS_10X[::-1]) == ["chrB"]
+    with monkeypatch.context() as m:                  # a change of the read-group rule or of the row format
+        m.setattr(molstream, "RULE_VERSION", molstream.RULE_VERSION + 1)
+        assert stale() == ["chrB"]
+    edited = tmp_path / "molstream.py"                # any edit of the module
+    edited.write_bytes(Path(molstream.__file__).read_bytes() + b"\n")
+    with monkeypatch.context() as m:
+        m.setattr(molstream, "__file__", str(edited))
+        assert stale() == ["chrB"]
+    assert stale() == []
+    # the BAM written again: another mtime, another size, another place
+    st = lib.bam.stat()
+    os.utime(lib.bam, ns=(st.st_atime_ns, st.st_mtime_ns + 1))
+    assert stale() == ["chrB"]
+    with open(lib.bam, "ab") as fh:
+        fh.write(b"\0")
+    os.utime(lib.bam, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert stale() == ["chrB"] and lib.bam.stat().st_size == st.st_size + 1
+    os.truncate(lib.bam, st.st_size)
+    os.utime(lib.bam, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert stale() == []
+    assert stale_parts(part_dir, refs, part_meta(synth10x.bam, _matrix(lib), SETTINGS_10X)) == ["chrB"]
+    # another cell calling, another feature list
+    for name, line in (("barcodes.tsv.gz", "TTTTGGGGCCCCAAAA-1\n"), ("features.tsv.gz", "g5\tG5\tGene Expression\n")):
+        path = _matrix(lib) / name
+        content = path.read_bytes()
+        with gzip.open(path, "at") as fh:
+            fh.write(line)
+        assert stale() == ["chrB"], name
+        path.write_bytes(content)
+        assert stale() == []
