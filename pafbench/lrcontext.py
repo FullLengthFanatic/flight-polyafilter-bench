@@ -210,8 +210,8 @@ def classify(models, minus, body):
     choice is: 3' end within LONG_END_TOL of the last base first, then the largest exonic overlap with the whole body,
     then the nearest 3' end, then the transcript id. other_class says that another compatible transcript gives another
     class. retained_after_junction: the block after the last junction covers a whole intron of the chosen transcript.
-    complete_5p (the 5' end within FIVE_PRIME_TOL of the transcript's) and covers_start (an aligned block holds the first
-    base of its CDS) are never set for a chain_novel read, whose 5' part follows no transcript."""
+    complete_5p (the 5' end within FIVE_PRIME_TOL of the transcript's) is never set for a chain_novel read, whose 5' part
+    follows no transcript. covers_start: an aligned block holds the first base of the transcript's CDS."""
     tx = models.tx
     p, a0, b0 = body[-1][1] - 1, body[0][0], body[-1][1]
     introns = [(body[i][1], body[i + 1][0]) for i in range(len(body) - 1)]
@@ -243,7 +243,7 @@ def classify(models, minus, body):
     return ReadContext(klass, t.tid, chain_novel or len(introns), chain_novel, starts_outside, retained,
                        klass == "annotated_end" and t.end_nf,
                        not chain_novel and abs(a0 - t.start) <= FIVE_PRIME_TOL,
-                       not chain_novel and t.cds is not None and any(s <= t.cds[0] < e for s, e in body),
+                       t.cds is not None and any(s <= t.cds[0] < e for s, e in body),
                        len(cands) > 1 and any(_klass(tx[k], p, bool(introns)) != klass for k in cands))
 
 

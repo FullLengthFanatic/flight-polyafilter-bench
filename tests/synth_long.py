@@ -67,19 +67,21 @@ DESIGNED = {
     # TA, TB and TC have 40 exonic nt each and none ends here: the nearest annotated 3' end (TC, 1900) decides
     "unspliced_nearest_end": ([(1410, 1462)], 1450, ctx("ncexon", "TC", other_class=True)),
     # the reads of the prototype's self-test for the placement by the 3' part. The first one starts 20 nt from the 5' end
-    # of TA and covers its first CDS base, and is still neither 5' complete nor counted as covering the start
+    # of TA and is still not 5' complete; that it covers the first CDS base of TA is a fact about the read and is kept
     "novel_first_intron_last_two_annotated": ([(1020, 1080), (1200, 1300), (1400, 1500), (1600, 1662)], 1650,
-                                              ctx("CDS", "TA", 2, 2)),
+                                              ctx("CDS", "TA", 2, 2, covers_start=True)),
     "last_intron_novel": ([(1050, 1100), (1200, 1300), (1400, 1500), (1650, 1812)], 1800, ctx(NJ, sub_cause=DONOR)),
     "last_intron_3nt_off": ([(1050, 1100), (1200, 1300), (1400, 1500), (1603, 1812)], 1800, ctx(NJ, sub_cause=NEAR)),
     # introns of TA (first two) then of TB (last). TC also holds the last intron and ends within the tolerance of the
     # read end, so a rule that took every transcript with the last intron would answer annotated_end
-    "all_annotated_two_transcripts": ([(1050, 1100), (1200, 1300), (1400, 1500), (1700, 1912)], 1900, ctx("3UTR", "TB", 2, 2)),
+    "all_annotated_two_transcripts": ([(1050, 1100), (1200, 1300), (1400, 1500), (1700, 1912)], 1900,
+                                      ctx("3UTR", "TB", 2, 2, covers_start=True)),
     "suffix_1_two_holders": ([(1050, 1100), (1200, 1300), (1420, 1500), (1700, 1912)], 1900,
                              ctx("annotated_end", "TC", 1, 1, other_class=True)),
-    "anchored_ends_in_intron": ([(1020, 1080), (1200, 1300), (1400, 1562)], 1550, ctx("intron_after_junction", "TA", 1, 1)),
+    "anchored_ends_in_intron": ([(1020, 1080), (1200, 1300), (1400, 1562)], 1550,
+                                ctx("intron_after_junction", "TA", 1, 1, covers_start=True)),
     # exon 2 of TA skipped: not compatible with TA, placed by its last intron only
-    "skips_upstream_exon": ([(1050, 1100), (1400, 1500), (1600, 1812)], 1800, ctx("3UTR", "TA", 1, 1)),
+    "skips_upstream_exon": ([(1050, 1100), (1400, 1500), (1600, 1812)], 1800, ctx("3UTR", "TA", 1, 1, covers_start=True)),
     # exon 3 skipped: the last intron joins two annotated splice sites that no transcript joins
     "skips_last_internal_exon": ([(1050, 1100), (1200, 1300), (1600, 1812)], 1800, ctx(NJ, sub_cause=NOT_JOINED)),
     # no transcript of the strand, inside the mirrored locus of the other strand
