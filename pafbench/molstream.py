@@ -26,6 +26,7 @@ from .stream import RE_CODES, SECONDARY_OR_SUPPLEMENTARY, _pack, coverage_prefix
 RULE_VERSION = 1  # bump with every change of the read-group rule or of the row format of the parts: old parts are then stale
 UMI_LEN = 12
 GROUP_MAX = 65_535  # n_reads and the rm columns are uint16
+COUNTS = ("records", "primary", "called", "xf1_no_ub", "xf1_no_gene", "in_groups", "read_groups")  # of scan_read_groups
 # A 0, C 1, G 2, T 3, first base highest: the code of the umi column of molecule_info.h5 (our observation: with it all 467,969
 # molecules of 1417 chr21 and chr22 join the BAM, design_m3_draft/design/checks/count_vs_support_1417.json)
 _UMI_CODE = np.full(256, 4, np.uint8)
@@ -221,7 +222,7 @@ def scan_read_groups(bam_path, fasta_path, ref, transcripts, settings, cell_idx,
     # distinct units of the last bin seen (bin, key, has a read-group record): its records can go on in the next chunk
     pend = (np.empty(0, np.int64), np.empty(0, np.int64), np.empty(0, np.bool_))
     rg = ([], [], [], [])  # key, removed, flags and end3 of the records of read groups
-    counts = {"records": 0, "primary": 0, "called": 0, "xf1_no_ub": 0, "xf1_no_gene": 0}
+    counts = dict.fromkeys(COUNTS, 0)
 
     def flush(c, last):
         nonlocal pend

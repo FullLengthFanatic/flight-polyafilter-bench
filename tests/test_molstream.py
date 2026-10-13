@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -16,13 +18,14 @@ import pysam
 import pytest
 
 from pafbench import molstream, stream
-from pafbench.config import IMPACT_SETTINGS
+from pafbench.config import IMPACT_SETTINGS, REPO
 from pafbench.flags import Setting, flag_reference, setting_tag
 from pafbench.intervals import blocks_hit, flatten
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index, scan_read_groups
 from pafbench.stream import stale_parts
 from pafbench.transcripts import load_transcripts
 from tests.synth import CELLS_10X, CHROMS, HEADER, SETTINGS_10X, UNCALLED_10X, _sorted_bam
+from tests.test_stream import RUNNER
 from tests.test_synth10x import CELL, CELL_RECORDS, GENES, GROUPS
 
 TAGS = [setting_tag(s) for s in SETTINGS_10X]
@@ -578,3 +581,100 @@ def test_parts_of_other_inputs_another_rule_version_or_another_module_are_stale(
         assert stale() == ["chrB"], name
         path.write_bytes(content)
         assert stale() == []
+
+
+def _stage23(lib, out, *extra):
+    script = REPO / "scripts" / "23_read_groups.py"
+    return subprocess.run([sys.executable, "-c", RUNNER, str(lib.fasta), str(lib.gtf), str(lib.bam), str(script), "X",
+                           "--workers", "2", "--out", str(out), *extra],
+                          capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(REPO)), cwd=REPO)
+
+
+def _stage23_outputs(out):
+    """Per reference the two tables and the stored counts, and the summary without its run times."""
+    parts = {ref: (pd.read_parquet(out / "parts" / f"{ref}.read_groups.parquet"),
+                   pd.read_parquet(out / "parts" / f"{ref}.cell_records.parquet"),
+                   {k: v for k, v in json.loads((out / "parts" / f"{ref}.json").read_text()).items() if k in COUNTS})
+             for ref in REFS}
+    summary = json.loads((out / "read_groups.json").read_text())
+    per_ref = {ref: {k: v for k, v in st.items() if k != "seconds"} for ref, st in summary["per_ref"].items()}
+    return parts, {k: v for k, v in summary.items() if k not in ("seconds", "scanned")} | {"per_ref": per_ref}
+
+
+@pytest.fixture(scope="module")
+def stage23_fresh(planted, tmp_path_factory):
+    out = tmp_path_factory.mktemp("fresh") / "recount"
+    r = _stage23(planted, out, "--refs", *REFS, "chrZ")
+    assert r.returncode == 0, r.stderr
+    return out, r
+
+
+def test_stage23_parts_are_the_scan_at_the_impact_settings_and_the_summary_sums_them(planted, stage23_fresh):
+    out, r = stage23_fresh
+    assert "chrZ" in r.stderr                         # asked for, but not in the BAM index
+    tags = [setting_tag(s) for s in IMPACT_SETTINGS]
+    meta = part_meta(planted.bam, _matrix(planted), IMPACT_SETTINGS)
+    summary = json.loads((out / "read_groups.json").read_text())
+    total = Counter()
+    for ref in REFS:
+        groups, rec, counts = _scan(planted, ref, settings=IMPACT_SETTINGS)
+        pd.testing.assert_frame_equal(pd.read_parquet(out / "parts" / f"{ref}.read_groups.parquet"), groups)
+        pd.testing.assert_frame_equal(pd.read_parquet(out / "parts" / f"{ref}.cell_records.parquet"), rec)
+        stored = json.loads((out / "parts" / f"{ref}.json").read_text())
+        assert summary["per_ref"][ref] == counts | {"seconds": stored.pop("seconds")}
+        assert stored == {"ref": ref} | counts | meta
+        total.update(counts)
+    assert len(tags) == 14 and meta["settings"] == tags
+    assert list(summary) == ["library", "settings", "workers", "scanned", "seconds", *COUNTS, "per_ref"]
+    assert (summary["library"], summary["settings"], summary["workers"], summary["scanned"]) == ("X", tags, 2, 4)
+    assert {k: summary[k] for k in COUNTS} == dict(total) and list(summary["per_ref"]) == REFS
+    assert json.loads(r.stdout.strip().splitlines()[-1]) == {"library": "X", "settings": 14, "refs": 4} | {
+        k: summary[k] for k in ("scanned", "records", "primary", "called", "in_groups", "read_groups", "seconds")}
+    # the impact settings remove reads of the synthetic groups, and the references without genes or without called cells
+    # have a read-group part without rows
+    chrA = pd.read_parquet(out / "parts" / "chrA.read_groups.parquet")
+    assert len(chrA) == 27 and (chrA[[f"rm_{t}" for t in tags]].sum() > 0).all()
+    assert [pq.read_metadata(out / "parts" / f"{ref}.read_groups.parquet").num_rows for ref in REFS] == [27, 6, 0, 0]
+
+
+def test_stage23_resume_after_crash_and_stale_parts(planted, stage23_fresh, tmp_path):
+    fresh_out, _ = stage23_fresh
+    lib = _private_copy(planted, tmp_path)
+    out = tmp_path / "recount"
+    # a run that finished chrA only, then a crash in chrC after its read-group part was written and before its json
+    r = _stage23(lib, out, "--refs", "chrA")
+    assert r.returncode == 0, r.stderr
+    shutil.copy(out / "parts" / "chrA.read_groups.parquet", out / "parts" / "chrC.read_groups.parquet")
+    r = _stage23(lib, out)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout.strip().splitlines()[-1])["scanned"] == 3          # chrB, chrC and chrD, not chrA again
+    got, want = _stage23_outputs(out), _stage23_outputs(fresh_out)
+    for ref in REFS:
+        pd.testing.assert_frame_equal(got[0][ref][0], want[0][ref][0])
+        pd.testing.assert_frame_equal(got[0][ref][1], want[0][ref][1])
+        assert got[0][ref][2] == want[0][ref][2]
+    assert got[1] == want[1]
+    # a second resume scans nothing and writes no part
+    before = {p.name: p.stat().st_mtime_ns for p in (out / "parts").iterdir()}
+    r = _stage23(lib, out)
+    assert r.returncode == 0 and json.loads(r.stdout.strip().splitlines()[-1])["scanned"] == 0
+    assert {p.name: p.stat().st_mtime_ns for p in (out / "parts").iterdir()} == before and _stage23_outputs(out)[1] == want[1]
+    # the BAM was written again: refused, every finished reference named, nothing rewritten
+    before |= {"read_groups.json": (out / "read_groups.json").stat().st_mtime_ns}
+    bam_times = {p: p.stat().st_mtime_ns for p in (lib.bam, Path(str(lib.bam) + ".bai"))}
+    for p, t in bam_times.items():
+        os.utime(p, ns=(t, t + 10**9))
+    r = _stage23(lib, out)
+    assert r.returncode == 1 and "the parts of chrA, chrB, chrC, chrD " in r.stderr and f"gio trash {out / 'parts'}" in r.stderr
+    for p, t in bam_times.items():
+        os.utime(p, ns=(t, t))
+    # parts written with another rule version, and by another pafbench/molstream.py
+    for ref, entry in (("chrB", {"rule_version": molstream.RULE_VERSION - 1}), ("chrD", {"module_sha256": "0" * 64})):
+        path = out / "parts" / f"{ref}.json"
+        text = path.read_text()
+        path.write_text(json.dumps(json.loads(text) | entry))
+        r = _stage23(lib, out)
+        assert r.returncode == 1 and f"the parts of {ref} " in r.stderr and f"gio trash {out / 'parts'}" in r.stderr
+        path.write_text(text)
+        os.utime(path, ns=(before[path.name], before[path.name]))
+    assert {p.name: p.stat().st_mtime_ns for p in [*(out / "parts").iterdir(), out / "read_groups.json"]} == before
