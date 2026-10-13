@@ -90,6 +90,27 @@ def test_mask_kernel_matches_blocks_hit_random():
     assert sum(s.size > 0 for s, _ in pieces) >= 30
 
 
+def test_record_counter_matches_a_plain_count_random():
+    rng = np.random.default_rng(11)
+    n, n_cells, n_cls, n_tags = 4000, 6, 8, 32
+    mask = rng.integers(0, 1 << 32, n, dtype=np.uint64).astype(np.uint32)
+    prim, has_ub = rng.random(n) < 0.9, rng.random(n) < 0.7
+    cls, cell = rng.integers(0, n_cls, n), rng.integers(-1, n_cells, n)
+    allc = np.zeros((n_cls, 2 + n_tags), np.int64)
+    celc = np.zeros((n_cells, n_cls, 2 + n_tags), np.uint32)
+    for part in (slice(0, 1500), slice(1500, n)):      # as the pass calls it: chunk after chunk into the same counters
+        molstream._count_records(mask[part], prim[part], cls[part], cell[part], has_ub[part], allc, celc)
+    want_all, want_cell = np.zeros_like(allc), np.zeros(celc.shape, np.int64)
+    for r in np.flatnonzero(prim):
+        row = [1, int(has_ub[r])] + [(int(mask[r]) >> b) & 1 for b in range(n_tags)]
+        want_all[cls[r]] += row
+        if cell[r] >= 0:
+            want_cell[cell[r], cls[r]] += row
+    assert np.array_equal(allc, want_all) and np.array_equal(celc, want_cell)
+    # every column counts in every class and cell, the one of bit 31 included, and none counts every record
+    assert want_cell.min() > 0 and (want_all[:, 1:] < want_all[:, :1]).all() and (want_cell.sum(axis=0) < want_all).all()
+
+
 def _scan(s, ref, settings=SETTINGS_10X, chunk=1_000_000, bam=None, fasta=None):
     matrix = s.outs / "filtered_feature_bc_matrix"
     return scan_read_groups(bam or s.bam, fasta or s.fasta, ref, load_transcripts(s.gtf), settings,
@@ -221,24 +242,28 @@ def test_cell_records_are_the_designed_counters_and_units_a_naive_set_count(synt
     assert sum(row[3] for row in got.values()) < sum(row[2] for row in got.values())
 
 
-def test_all_barcodes_rows_and_cell_sums_equal_scan_reference(synth10x):
+@pytest.mark.parametrize("settings", [SETTINGS_10X, IMPACT_SETTINGS], ids=["test settings", "impact settings"])
+def test_all_barcodes_rows_and_cell_sums_equal_scan_reference(synth10x, settings):
     """Check A3 of the design on synthetic data: the pass against the engine of stage 13 on the same BAM."""
     tx = load_transcripts(synth10x.gtf)
+    tags = [setting_tag(s) for s in settings]
+    removed = np.zeros(len(tags), np.int64)
     for ref in CHROMS:
-        _, region, cells = stream.scan_reference(synth10x.bam, synth10x.fasta, ref, tx, SETTINGS_10X, set(), cells=CALLED)
-        _, rec, counts = _scan(synth10x, ref)
+        _, region, cells = stream.scan_reference(synth10x.bam, synth10x.fasta, ref, tx, settings, set(), cells=CALLED)
+        _, rec, counts = _scan(synth10x, ref, settings=settings)
         every = rec[rec.cell < 0]
         assert len(every) > 0 and (every.units == 0).all() and (every.units_rg == 0).all()
-        by_re = every.groupby("re")[["total"] + TAGS].sum()
-        got = sorted((t, re_, int(by_re.loc[re_, t]), int(by_re.loc[re_, "total"])) for t in TAGS for re_ in by_re.index)
+        by_re = every.groupby("re")[["total"] + tags].sum()
+        got = sorted((t, re_, int(by_re.loc[re_, t]), int(by_re.loc[re_, "total"])) for t in tags for re_ in by_re.index)
         assert got == sorted(region[["tag", "re", "removed", "total"]].itertuples(index=False, name=None))
-        per_cell = rec[rec.cell >= 0].groupby("cell")[["total"] + TAGS].sum().reindex(range(len(CALLED)), fill_value=0)
+        per_cell = rec[rec.cell >= 0].groupby("cell")[["total"] + tags].sum().reindex(range(len(CALLED)), fill_value=0)
         assert cells.index.tolist() == CALLED
         assert np.array_equal(per_cell.to_numpy(np.int64), cells.to_numpy(np.int64))
         assert counts["records"] == region.attrs["records"]
         # the uncalled barcode and the record without CB are in the all-barcodes rows only
         assert int(every.total.sum()) >= int(per_cell.total.sum()) + 1
-    assert int(cells.total.sum()) > 0
+        removed += cells[tags].to_numpy(np.int64).sum(axis=0)
+    assert (removed > 0).all()                         # every setting removes records of called cells, the last one too
 
 
 def test_counts_name_the_records_outside_read_groups(synth10x):
