@@ -3,7 +3,10 @@ of tests/synth.build_10x and plain counts."""
 import dataclasses
 import gzip
 import json
+import os
 import shutil
+import subprocess
+import sys
 from collections import Counter
 
 import h5py
@@ -16,7 +19,9 @@ import pytest
 import scipy.sparse as sp
 
 from pafbench import matrices, molstream, recount, stream
+from pafbench.config import IMPACT_SETTINGS, REPO
 from pafbench.flags import setting_tag
+from pafbench.grid import published
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index
 from pafbench.transcripts import load_transcripts
 from tests.synth import CELLS_10X, CHROMS, SETTINGS_10X, run_original
@@ -1163,3 +1168,123 @@ def test_read_groups_of_given_cells_and_umis_come_from_every_reference(synth10x,
         (_key(r.cb, r.ub, r.gene), r.n_reads, r.n_winner_reads, r.n_pa, r.re_class, "chrB" if r.gene == "g3" else "chrA")
         for r in want.itertuples())
     assert len(got) == 3 and len(recount.groups_of_units(parts, REFS, np.zeros(0, np.uint64))) == 0
+
+
+# Runs scripts/24_recount.py with pafbench.config pointed at test inputs: BAM(of library X) OUT RULE_AGREEMENT_MAX SCRIPT ARGS...
+RUNNER = """
+import runpy, sys
+from pathlib import Path
+import pafbench.config as c
+c.LIBRARIES, c.OUT, c.RULE_AGREEMENT_MAX = {"X": Path(sys.argv[1])}, Path(sys.argv[2]), float(sys.argv[3])
+sys.argv = sys.argv[4:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+IMPACT_TAGS = [setting_tag(s) for s in IMPACT_SETTINGS]
+
+
+def _stage24(lib, out, *args, gate=GATE):
+    script = REPO / "scripts" / "24_recount.py"
+    return subprocess.run([sys.executable, "-c", RUNNER, str(lib.bam), str(out), str(gate), str(script), "X", *args],
+                          capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(REPO)), cwd=REPO)
+
+
+@pytest.fixture(scope="module")
+def script_inputs(synth10x, tmp_path_factory):
+    """OUT for library X as the script expects it: recount/parts at the 14 impact settings, the stage 13 tables, the
+    original tool's BAMs at the 8 published settings and the json of the design's A1b check."""
+    out = tmp_path_factory.mktemp("stage24_script") / "out"
+    _write_parts(synth10x, out / "X" / "recount" / "parts", IMPACT_SETTINGS)
+    tx = load_transcripts(synth10x.gtf)
+    regions, cells = [], None
+    for ref in REFS:
+        _, region, cell = stream.scan_reference(synth10x.bam, synth10x.fasta, ref, tx, IMPACT_SETTINGS, set(), cells=CALLED)
+        regions.append(region)
+        cells = cell if cells is None else cells + cell
+    (out / "X" / "grid").mkdir()
+    cells.to_parquet(out / "X" / "grid" / "cell_counts.parquet")
+    stream.merge_regions(regions, IMPACT_TAGS).to_parquet(out / "X" / "grid" / "region_counts.parquet", index=False)
+    _original(synth10x, out / "X" / "original", published())
+    check = out / "design_m3_draft" / "review" / "v2" / "a1b_genomewide_X.json"
+    check.parent.mkdir(parents=True)
+    check.write_text(json.dumps({"exceptions": [{"barcode": CELLS_10X["c4"], "umi": "GATCCTGAGGTG"},
+                                                {"barcode": CELLS_10X["c5"], "umi": "CTGTTCTTGTTT"}],
+                                 "A1b_documented_rule": {"entries_differing": 2}}))
+    return out
+
+
+def test_stage24_script_runs_the_stage_at_the_impact_settings(synth10x, script_inputs):
+    out = script_inputs
+    r = _stage24(synth10x, out)
+    assert r.returncode == 0, r.stderr
+    res = json.loads((out / "X" / "recount" / "recount.json").read_text())
+    summary = json.loads(r.stdout.strip().splitlines()[-1])
+    assert summary == {"library": "X", "refs": 2, "read_groups": 33, "counted_molecules": 20, "other_read_groups": 13,
+                       "cell_umis_two_or_more_groups": 8, "seconds": res["seconds"]} | {
+        name: True for name in ("A1", "A1b", "A2", "A3", "A4", "A5")} | {"passed": True}
+    assert res["passed"] is True and list(res)[-1] == "passed" and res["settings"] == IMPACT_TAGS and len(IMPACT_TAGS) == 14
+    # A4 on the BAMs of the 8 published settings, A3 at all 14, A1b next to the check script
+    published_tags = [setting_tag(s) for s in published()]
+    assert list(res["A4"]["settings"]) == published_tags and (res["A4"]["bams"], res["A4"]["refs"]) == (8, "all")
+    assert [one["bam"] for one in res["A4"]["settings"].values()] == [str(out / "X" / "original" / f"{t}.bam") for t in published_tags]
+    assert (res["A3"]["settings"], res["A3"]["cells"], res["A3"]["passed"]) == (14, 5, True)
+    assert res["A1b"]["check_script"]["same"] is True and res["A1b"]["check_script"]["file"].endswith("v2/a1b_genomewide_X.json")
+    assert list(res["events"]) == IMPACT_TAGS and sum(e["lost"] for e in res["events"].values()) > 0
+    m = out / "X" / "matrices"
+    assert json.loads((m / "manifest.json").read_text())["tags"] == IMPACT_TAGS
+    assert sorted(p.stem for p in (m / "lost").iterdir()) == sorted(p.stem for p in (m / "gained").iterdir()) == sorted(IMPACT_TAGS)
+    assert pd.read_parquet(m / "cell_totals.parquet").tag.unique().tolist() == ["unfiltered", *IMPACT_TAGS]
+    assert recount.require_passed("X", out / "X" / "recount") == res
+    # the controls remove what their settings remove, group by group: the invariant of A5 that needs the real settings
+    assert res["A5"]["passed"] and res["A5"]["violations"] == {}
+
+
+def test_stage24_script_takes_the_recount_and_the_matrices_folder(synth10x, script_inputs, tmp_path):
+    shutil.copytree(script_inputs / "X" / "recount" / "parts", tmp_path / "recount" / "parts")
+    r = _stage24(synth10x, script_inputs, "--out", str(tmp_path / "recount"), "--matrices", str(tmp_path / "m"))
+    assert r.returncode == 0, r.stderr
+    assert json.loads((tmp_path / "recount" / "recount.json").read_text())["passed"] is True
+    assert (tmp_path / "m" / "unfiltered.npz").exists() and (tmp_path / "recount" / "counted_molecules.parquet").exists()
+    assert np.array_equal(matrices.load("X", IMPACT_TAGS[0], tmp_path / "m").toarray(),
+                          matrices.load("X", IMPACT_TAGS[0], script_inputs / "X" / "matrices").toarray())
+
+
+def test_stage24_script_exits_1_without_passed_when_a_check_fails(synth10x, script_inputs, tmp_path):
+    """With the gate of the real libraries, one entry per million, the two source patterns of the synthetic library stop
+    the stage at A1b."""
+    shutil.copytree(script_inputs / "X" / "recount" / "parts", tmp_path / "recount" / "parts")
+    r = _stage24(synth10x, script_inputs, "--out", str(tmp_path / "recount"), "--matrices", str(tmp_path / "m"), gate=1e-6)
+    assert r.returncode == 1
+    summary = json.loads(r.stdout.strip().splitlines()[-1])
+    assert (summary["passed"], summary["A1"], summary["A1b"], summary["A2"]) == (False, True, False, True) and "A4" not in summary
+    assert "passed" not in json.loads((tmp_path / "recount" / "recount.json").read_text()) and not (tmp_path / "m").exists()
+    assert "stage 24, X: A1b\n" in r.stderr and "stage 24, X: resolution\n" in r.stderr
+    with pytest.raises(SystemExit):
+        recount.require_passed("X", tmp_path / "recount")
+
+
+def test_stage24_script_refuses_incomplete_and_stale_parts_and_a_missing_original_bam(synth10x, script_inputs, tmp_path):
+    out = tmp_path / "out"
+    shutil.copytree(script_inputs, out)
+    parts = out / "X" / "recount" / "parts"
+    files = lambda: {str(p.relative_to(out)): p.stat().st_mtime_ns for p in out.rglob("*") if p.is_file()}
+    # an original-tool BAM whose run did not finish
+    tag = setting_tag(published()[3])
+    time_file = out / "X" / "original" / f"{tag}.time.txt"
+    time_file.write_text("\tExit status: 1\n")
+    before = files()
+    r = _stage24(synth10x, out)
+    assert r.returncode == 1 and f"missing or not finished: {out / 'X' / 'original' / tag}.bam\n" in r.stderr and files() == before
+    time_file.write_text("\tExit status: 0\n")
+    # a part of stage 23 is missing
+    (parts / "chrB.read_groups.parquet").rename(parts / "kept")
+    before = files()
+    r = _stage24(synth10x, out)
+    assert r.returncode == 1 and "stage 23 is not complete, missing chrB.read_groups.parquet" in r.stderr and files() == before
+    (parts / "kept").rename(parts / "chrB.read_groups.parquet")
+    # the parts were written by another pafbench/molstream.py
+    done = parts / "chrA.json"
+    done.write_text(json.dumps(json.loads(done.read_text()) | {"module_sha256": "0" * 64}))
+    before = files()
+    r = _stage24(synth10x, out)
+    assert r.returncode == 1 and "the parts of chrA were made from other inputs" in r.stderr and f"`gio trash {parts}`" in r.stderr
+    assert files() == before
