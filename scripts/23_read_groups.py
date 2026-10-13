@@ -17,11 +17,25 @@ the counts from each <ref>.json, and checks that both parquet parts of every ref
 Measured with 14 settings on 2026-10-13 (/usr/bin/time -v, resident size of the largest process). 1417, chr1 alone, one
 worker, three runs with the same bytes in both parts: 6.96M records and 1.98M read groups, 122 to 134 s in the reference
 (52,000 to 57,000 records per second over the two passes), 136 to 150 s wall, 2.61 GiB (stage 13 on the same reference:
-2.71 GiB, set by chromosome length). 1417, chr21 and chr22, two workers: 2.78M records, 42 s wall, 0.93 GiB; on chr22
-pass 1 takes about 5 s, the pieces 4.5 s and pass 2 with the reduction 9 s. 1179, chr1 alone, one worker: 49.9M records
-and 19.9M read groups, 917 s in the reference (54,000 records per second), 932 s wall, 3.73 GiB (stage 13: 2.75 GiB).
-There the tables of pass 2 set the peak: 28.7M records of read groups at 17 bytes, held as chunks, concatenated and
-sorted, and the table at 51 bytes a row. 1179, chr21 and chr22, two workers: 18.4M records, 151 s wall, 1.12 GiB.
+202 s wall, 2.71 GiB, set by chromosome length). 1417, chr21 and chr22, two workers: 2.78M records, 42 s wall, 0.93 GiB;
+on chr22 pass 1 takes about 5 s, the pieces 4.5 s and pass 2 with the reduction 9 s. 1179, chr21 and chr22, two workers:
+18.4M records, 145 to 151 s wall, 1.12 GiB.
+
+1179, its two largest references, each alone with one worker. chr1: 49.9M records, 19.9M read groups from 28.7M records,
+3.73 GiB (stage 13: 2.75 GiB). chr11: 44.7M records, 22.0M read groups from 30.5M records, 3.97 GiB, the largest worker
+peak measured. There the tables of pass 2 set the peak: the records of read groups at 17 bytes, held as chunks,
+concatenated and sorted, and the table at 51 bytes a row. The wall time depends on where the BAM is read from.
+/usr/bin/time reports the file system inputs of a run ("The number of times the filesystem had to perform input.",
+ru_inblock in getrusage(2)). The runs with 1.5 to 1.6 million of them got 81% and 82% of a CPU, which we read as a BAM
+that came from disk: chr1 932 s, chr11 900 s, 50,000 to 54,000 records per second in the reference. The runs with none
+got 100%, the BAM in the page cache: chr1 745 s, chr11 728 s, 63,000 to 68,000 records per second. The parts have the
+same bytes each time. Stage 13 took 740 s wall on chr1 (its docstring, which does not say where the BAM came from): on
+1179 this stage is not faster than stage 13, as it is on 1417.
+
+Not measured: a whole library at 8 workers. Estimates for 1179: 23 to 29 min wall, the 1,381 s of stage 13 scaled by
+chr1 alone (745 s from the cache, 932 s from disk, against 740 s), where the design expected 19 to 23 min; at most
+8 x 3.97 = 31.8 GiB as a sum of worker peaks, reached only if eight workers peaked like chr11 at the same moment, where
+the design expected at most 2.7 GiB per worker.
 """
 import argparse
 import json
