@@ -4,11 +4,15 @@ per reference (pafbench.molstream; design of 2026-10-12, section 3.1).
 Writes per reference, under OUT/LIB/recount/parts/: <ref>.read_groups.parquet (one row per cell, UMI and gene: reads,
 winner reads, pa reads, region class, 3' ends and the reads removed at each setting), <ref>.cell_records.parquet (primary
 records per called cell, RE and presence of a GX tag: total, with a UB, units and removed at each setting; cell -1 holds
-all barcodes) and <ref>.json. OUT/LIB/recount/read_groups.json holds the counts per reference and their sums. A reference
-whose json exists is not scanned again. Each part json names its inputs (BAM path, size and mtime, sha256 of the barcode
-and feature files, the settings in mask bit order), the unit bin, the rule version and the sha256 of
-pafbench/molstream.py; when those of any finished reference of the BAM differ from this run's, with or without --refs,
-the stage stops and asks for parts/ to be trashed (after an edit of the module, for example).
+all barcodes) and <ref>.json. A reference whose json exists is not scanned again. Each part json names its inputs (BAM
+path, size and mtime, sha256 of the barcode and feature files, the settings in mask bit order), the unit bin, the rule
+version and the sha256 of pafbench/molstream.py; when those of any finished reference of the BAM differ from this run's,
+with or without --refs, the stage stops and asks for parts/ to be trashed (after an edit of the module, for example).
+
+OUT/LIB/recount/read_groups.json holds the counts per reference and their sums for the references of the last invocation
+only: after a run with --refs it lists those and no others. A reference counts as finished on its json alone; the stage
+does not look at the two parquet parts again. So a later stage takes the references with mapped reads from the BAM index,
+the counts from each <ref>.json, and checks that both parquet parts of every reference are there.
 
 Measured with 14 settings on 2026-10-13 (/usr/bin/time -v, resident size of the largest process). 1417, chr1 alone, one
 worker, three runs with the same bytes in both parts: 6.96M records and 1.98M read groups, 122 to 134 s in the reference
