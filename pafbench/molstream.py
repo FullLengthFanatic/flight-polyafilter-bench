@@ -172,19 +172,22 @@ def _reduce_groups(key, removed, flags, end3, tags):
         raise ValueError(f"a read group has {n_reads.max():,} reads; the pass stops at {GROUP_MAX:,}, its counts are uint16")
     lowest = np.iinfo(np.int32).min
     nonpa = np.maximum.reduceat(np.where(flags & 4, lowest, end3), start)
+    # The table of a reference is held once, at 23 + 2 bytes per setting a row: every column is made at its width in the
+    # part (a count is a uint16 sum, a group has fewer than GROUP_MAX records), and the frame is built without a copy.
+    # DataFrame docstring of pandas 3.0.6: "For dict data, the default of None behaves like ``copy=True``."; our
+    # observation with that version: with copy=False the columns share memory with these arrays.
     cols = {
         "key": key[start],
-        "n_reads": n_reads,
-        "n_winner_reads": np.add.reduceat((flags & 8) == 0, start, dtype=np.int64),
-        "n_pa": np.add.reduceat((flags & 4) != 0, start, dtype=np.int64),
+        "n_reads": n_reads.astype(np.uint16),
+        "n_winner_reads": np.add.reduceat((flags & 8) == 0, start, dtype=np.uint16),
+        "n_pa": np.add.reduceat((flags & 4) != 0, start, dtype=np.uint16),
         "re_class": np.bitwise_or.reduceat(flags & 3, start),
         "end3": np.abs(np.maximum.reduceat(end3, start)),
         "end3_nonpa": np.where(nonpa == lowest, -1, np.abs(nonpa)),
     }
     for t, tag in enumerate(tags):
-        cols[f"rm_{tag}"] = np.add.reduceat((removed >> np.uint32(t)) & np.uint32(1), start, dtype=np.int64)
-    dtypes = {c: np.uint16 for c in cols} | {"key": np.uint64, "re_class": np.uint8, "end3": np.int32, "end3_nonpa": np.int32}
-    return pd.DataFrame({c: v.astype(dtypes[c]) for c, v in cols.items()})
+        cols[f"rm_{tag}"] = np.add.reduceat((removed & np.uint32(1 << t)) != 0, start, dtype=np.uint16)
+    return pd.DataFrame(cols, copy=False)
 
 
 def scan_read_groups(bam_path, fasta_path, ref, transcripts, settings, cell_idx, gene_idx, chunk=1_000_000):

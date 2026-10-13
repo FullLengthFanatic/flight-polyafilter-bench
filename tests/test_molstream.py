@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tracemalloc
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -429,6 +430,51 @@ def test_re_other_than_e_n_and_i_stops_the_pass(synth10x, tmp_path):
     pysam.index(str(tmp_path / "re.bam"))
     with pytest.raises(KeyError, match="X"):
         _scan(synth10x, "chrA", bam=tmp_path / "re.bam")
+
+
+def _random_records(n_groups, reads_per_group, n_tags):
+    """key, removed, flags and end3 of the records of n_groups read groups in random order, as the pass collects them."""
+    rng = np.random.default_rng(5)
+    key = np.repeat(rng.permutation(n_groups).astype(np.uint64) << np.uint64(16), reads_per_group)
+    rng.shuffle(key)
+    removed = rng.integers(0, 1 << n_tags, key.size).astype(np.uint32)
+    return key, removed, rng.integers(0, 16, key.size).astype(np.uint8), rng.integers(-10**6, 10**6, key.size).astype(np.int32)
+
+
+def test_reduction_of_random_records_equals_a_groupby():
+    tags = [f"t{t}" for t in range(32)]                # every bit of the mask, the highest included
+    key, removed, flags, end3 = _random_records(5000, 4, 32)
+    got = molstream._reduce_groups(key, removed, flags, end3, tags)
+    pa = (flags & 4) != 0
+    rec = pd.DataFrame({"key": key, "n_reads": 1, "n_winner_reads": (flags & 8) == 0, "n_pa": pa, "re_class": flags & 3,
+                        "end3": end3, "end3_nonpa": pd.Series(end3).where(~pa)}
+                       | {f"rm_{tag}": (removed >> t) & 1 for t, tag in enumerate(tags)})
+    how = {c: "sum" for c in rec.columns[1:]} | {"re_class": lambda x: np.bitwise_or.reduce(x.to_numpy()), "end3": "max",
+                                                 "end3_nonpa": "max"}
+    want = rec.groupby("key").agg(how).reset_index()
+    want["end3"], want["end3_nonpa"] = want.end3.abs(), want.end3_nonpa.abs().fillna(-1)
+    assert list(got.columns) == list(want.columns) and len(got) == 5000
+    assert got.dtypes.astype(str).tolist() == GROUP_TYPES + ["uint16"] * 32
+    assert np.array_equal(got.to_numpy(np.int64), want.to_numpy(np.int64))
+    assert (got.end3_nonpa < 0).any() and (got.re_class == 0).any() and got.rm_t31.sum() > 0
+
+
+@pytest.mark.parametrize("reads_per_group", [1, 3])
+def test_reduction_holds_no_more_than_twice_its_records_and_twice_its_table(reads_per_group):
+    """Design 3.1, in-memory state: next to the records it is given (17 bytes each) the reduction holds their sorted copy
+    with the sort index, and the table at its row width (51 bytes with 14 settings). The counts of every setting held as
+    int64 before the cast would alone be 112 bytes per group."""
+    tags = [setting_tag(s) for s in IMPACT_SETTINGS]
+    records = _random_records(200_000 // reads_per_group, reads_per_group, len(tags))
+    tracemalloc.start()
+    try:
+        groups = molstream._reduce_groups(*records, tags)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    given, table = sum(x.nbytes for x in records), int(groups.memory_usage(index=False).sum())
+    assert given == 17 * records[0].size and table == 51 * len(groups)
+    assert peak <= 2 * given + 2 * table
 
 
 def test_more_settings_cells_or_features_than_the_mask_and_the_key_hold_are_refused(synth10x):
