@@ -50,11 +50,11 @@ from pathlib import Path
 import pandas as pd
 import pysam
 
-from pafbench import tecap
 from pafbench.config import FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT, OUT, PIGEON_DIR
 from pafbench.lrcontext import (CONTEXT_COLUMNS, NOVEL_JUNCTION, VERSIONS, attach_stage16, context_tables, intron_sites_off_model,
                                 isoform_ends, link_1179, load_models, pigeon_crosscheck, reduce_sites, scan_context, totals)
 from pafbench.pool import map_forked
+from pafbench.tecap import classify_library
 
 REFS = [f"chr{i}" for i in range(1, 23)] + ["chrX"]
 PIGEON_GTF = PIGEON_DIR / "20260608_FLIGHT-seq_horg_BD70_BD70.trimmed.min20count.gtf"
@@ -147,16 +147,7 @@ def main():
         line[lib]["sites_top_class_on_chain_novel_only"] = summary["sites_top_class_on_chain_novel_only"]
         line[lib]["vs_1179"] = {k: {x: summary["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")} for k in ("real", "null")}
         if not args.no_tecap:
-            t1 = time.time()
-            bam = tecap.merge_parts({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, d / "tecap" / "accepted.bam")
-            result = tecap.run_classify(bam, lib, d / "tecap" / "out", args.workers)
-            buckets = tecap.site_buckets(result)
-            by_label = tecap.label_buckets(buckets, sites)
-            buckets.to_parquet(d / "tecap_site_buckets.parquet", index=False)
-            by_label.to_parquet(d / "tecap_buckets.parquet", index=False)
-            summary["tecap"] = {"bam": str(bam), "json": str(result), "json_bytes": result.stat().st_size,
-                                "sites_with_a_classified_read": len(buckets.drop_duplicates(["ref", "strand", "site"])),
-                                "per_label": tecap.label_counts(sites, by_label), "seconds": time.time() - t1}
+            summary["tecap"] = classify_library({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, lib, d, sites, args.workers)
             line[lib]["tecap"] = summary["tecap"]["per_label"]
         summary["per_ref"] = {p[1]: p[4] for p in parts}
         (d / "isoform_context.json").write_text(json.dumps(summary, indent=1))

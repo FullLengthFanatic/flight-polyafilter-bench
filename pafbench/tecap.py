@@ -1,13 +1,16 @@
 """Stage 30, step 10 of design 3.8: tecap buckets per long-read site. The accepted reads go to one BAM with their site key in
 a tag, `tecap classify` breaks its buckets down by that tag, and its per-tag counts become tables per site and per label.
 
-tecap, `tecap classify --help` (copy in design_m3_draft/design/checks/tecap_help.txt): "--cell-barcode-tag CELL_BARCODE_TAG
-Per-cell breakdown via this BAM tag (e.g. CB). Opt-in; no-ops with a warning if the tag is absent." Our observation on
-tecap 0.3.2: the breakdown is the key per_cell_metrics of <sample>_terminal_exon.json, one entry per tag value with
-total, counts (bucket name to reads) and fractions; only reads that tecap puts into a bucket are counted there.
+tecap 0.4.0 (`tecap --version`). `tecap classify --help` (copy in design_m3_draft/design/checks/tecap_help.txt):
+"--cell-barcode-tag CELL_BARCODE_TAG  Per-cell breakdown via this BAM tag (e.g. CB). Opt-in; no-ops with a warning if the tag
+is absent." Its source, src/tecap/bam.py: per_cell_summary returns the "Compact per-cell dict: {cb: {counts: {cat: n}, total:
+N, fractions: ...}}", which cli.py writes as per_cell_metrics of <sample>_terminal_exon.json. A read is counted under its tag
+value once it has a bucket (lines 200 to 203); a read without a CIGAR N, or that overlaps no gene, is skipped before that
+(lines 149 to 154 and 167 to 168).
 """
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -76,3 +79,21 @@ def label_counts(sites, by_label):
     classified = by_label.groupby("label").reads.sum()
     return {label: {"written": int(r.n_accepted), "without_splice": int(r.n_no_splice), "classified": int(classified.get(label, 0))}
             for label, r in g.iterrows()}
+
+
+def classify_library(parts, sample, out, sites, threads):
+    """The tecap step of one library: the tagged BAMs of its references (parts: {ref: path}) become out/tecap/accepted.bam
+    (merge_parts), tecap runs on it (run_classify, output in out/tecap/out), and its buckets are written per site to
+    out/tecap_site_buckets.parquet and per label of the sites (ref, strand, site, label, n_accepted, n_no_splice) to
+    out/tecap_buckets.parquet. Returns the paths of the BAM and of tecap's JSON, the size of that JSON, the sites with a
+    classified read, label_counts and the seconds taken."""
+    t0 = time.time()
+    bam = merge_parts(parts, out / "tecap" / "accepted.bam")
+    result = run_classify(bam, sample, out / "tecap" / "out", threads)
+    buckets = site_buckets(result)
+    by_label = label_buckets(buckets, sites)
+    buckets.to_parquet(out / "tecap_site_buckets.parquet", index=False)
+    by_label.to_parquet(out / "tecap_buckets.parquet", index=False)
+    return {"bam": str(bam), "json": str(result), "json_bytes": result.stat().st_size,
+            "sites_with_a_classified_read": len(buckets.drop_duplicates(_KEY)), "per_label": label_counts(sites, by_label),
+            "seconds": time.time() - t0}

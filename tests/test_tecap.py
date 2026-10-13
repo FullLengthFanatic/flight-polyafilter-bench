@@ -7,7 +7,7 @@ import pytest
 
 from pafbench import tecap
 from pafbench.config import GTF, POLYASITE
-from pafbench.tecap import TAG, label_buckets, label_counts, merge_parts, run_classify, site_buckets, site_key
+from pafbench.tecap import TAG, classify_library, label_buckets, label_counts, merge_parts, run_classify, site_buckets, site_key
 from tests.synth_long import HDR, long_read
 
 CAPTURED, EXON, INTRONIC = "Captured (>=50%)", "MechB-exon: upstream TE, priming on upstream exon", "MechB-aspecific: upstream TE, intronic/flanking"
@@ -78,7 +78,8 @@ def test_run_classify_calls_tecap_with_the_options_of_the_design(tmp_path, monke
     assert kw["check"] is True and kw["stdout"].name == str(out.parent / "classify.log") and kw["stderr"] == subprocess.STDOUT
 
 
-def test_merge_parts_concatenates_in_header_order_and_indexes(tmp_path):
+def _parts(tmp_path):
+    """Tagged BAMs of two references, given against the order of the header: e1 on chrE, s1 and s2 on chrS."""
     parts = {}
     for ref, names in (("chrE", ["e1"]), ("chrS", ["s1", "s2"])):
         parts[ref] = tmp_path / f"{ref}.bam"
@@ -88,6 +89,11 @@ def test_merge_parts_concatenates_in_header_order_and_indexes(tmp_path):
                 a.reference_name = ref
                 a.set_tag(TAG, site_key(ref, False, 1080 + 100 * i), "Z")
                 out.write(a)
+    return parts
+
+
+def test_merge_parts_concatenates_in_header_order_and_indexes(tmp_path):
+    parts = _parts(tmp_path)
     bam = merge_parts(parts, tmp_path / "tecap" / "accepted.bam")
     assert bam == tmp_path / "tecap" / "accepted.bam" and not any(p.exists() for p in parts.values())
     with pysam.AlignmentFile(str(bam)) as fh:
@@ -96,3 +102,31 @@ def test_merge_parts_concatenates_in_header_order_and_indexes(tmp_path):
         assert [(a.reference_name, a.query_name, a.get_tag(TAG)) for a in fh.fetch()] == [
             ("chrS", "s1", "chrS:+:1080"), ("chrS", "s2", "chrS:+:1180"), ("chrE", "e1", "chrE:+:1080")]
         assert [a.query_name for a in fh.fetch("chrE")] == ["e1"]
+
+
+def test_classify_library_merges_runs_tecap_and_writes_both_tables(tmp_path, monkeypatch):
+    out, calls = tmp_path / "BD70", []
+    sites = pd.DataFrame({"ref": ["chrS", "chrS", "chrE"], "strand": "+", "site": [1080, 1180, 1080],
+                          "label": ["templated", "ambiguous", "templated"], "n_accepted": [1, 1, 1], "n_no_splice": [1, 1, 0]})
+
+    def fake(bam, sample, out_dir, threads):
+        """Stands in for tecap: the first two tag values of the merged, indexed BAM get two reads in one bucket each."""
+        calls.append((bam, sample, out_dir, threads))
+        with pysam.AlignmentFile(str(bam)) as fh:
+            keys = [a.get_tag(TAG) for a in fh.fetch()]
+        out_dir.mkdir(parents=True)
+        return _tecap_json(out_dir / f"{sample}_terminal_exon.json", {k: {CAPTURED: 2} for k in keys[:2]})
+
+    monkeypatch.setattr(tecap, "run_classify", fake)
+    got = classify_library(_parts(tmp_path), "BD70", out, sites, 3)
+    assert calls == [(out / "tecap" / "accepted.bam", "BD70", out / "tecap" / "out", 3)]
+    result = out / "tecap" / "out" / "BD70_terminal_exon.json"
+    assert pd.read_parquet(out / "tecap_site_buckets.parquet").to_dict("list") == {
+        "ref": ["chrS", "chrS"], "strand": ["+", "+"], "site": [1080, 1180], "bucket": [CAPTURED] * 2, "reads": [2, 2]}
+    assert pd.read_parquet(out / "tecap_buckets.parquet").to_dict("list") == {
+        "label": ["ambiguous", "templated"], "bucket": [CAPTURED] * 2, "reads": [2, 2]}
+    assert got.pop("seconds") >= 0
+    assert got == {"bam": str(out / "tecap" / "accepted.bam"), "json": str(result), "json_bytes": result.stat().st_size,
+                   "sites_with_a_classified_read": 2,
+                   "per_label": {"ambiguous": {"written": 1, "without_splice": 1, "classified": 2},
+                                 "templated": {"written": 2, "without_splice": 1, "classified": 2}}}
