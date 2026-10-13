@@ -9,11 +9,14 @@ whose json exists is not scanned again. Each part json names its inputs (BAM pat
 and feature files, the settings in mask bit order), the rule version and the sha256 of pafbench/molstream.py; when they
 differ from this run's, the stage stops and asks for parts/ to be trashed (after an edit of the module, for example).
 
-Measured on 1417 (14 settings, 2026-10-13, /usr/bin/time -v, resident size of the largest process). chr1 alone, one
-worker, run twice with the same bytes in both parts: 6.96M records and 1.98M read groups, 134 and 128 s in the reference
-(52,000 and 54,000 records per second over the two passes), 150 and 142 s wall, 2.61 GiB (stage 13 on the same reference:
-2.71 GiB, set by chromosome length). chr21 and chr22, two workers: 2.78M records, 44 s wall, 0.93 GiB. On chr22 pass 1
-takes 4.9 s, the pieces 4.3 s and pass 2 with the reduction 8.7 s.
+Measured with 14 settings on 2026-10-13 (/usr/bin/time -v, resident size of the largest process). 1417, chr1 alone, one
+worker, three runs with the same bytes in both parts: 6.96M records and 1.98M read groups, 122 to 134 s in the reference
+(52,000 to 57,000 records per second over the two passes), 136 to 150 s wall, 2.61 GiB (stage 13 on the same reference:
+2.71 GiB, set by chromosome length). 1417, chr21 and chr22, two workers: 2.78M records, 42 s wall, 0.93 GiB; on chr22
+pass 1 takes about 5 s, the pieces 4.5 s and pass 2 with the reduction 9 s. 1179, chr1 alone, one worker: 49.9M records
+and 19.9M read groups, 917 s in the reference (54,000 records per second), 932 s wall, 3.73 GiB (stage 13: 2.75 GiB).
+There the tables of pass 2 set the peak: 28.7M records of read groups at 17 bytes, held as chunks, concatenated and
+sorted, and the table at 51 bytes a row. 1179, chr21 and chr22, two workers: 18.4M records, 151 s wall, 1.12 GiB.
 """
 import argparse
 import json
