@@ -7,8 +7,8 @@ records per called cell, RE and presence of a GX tag: total, with a UB, units an
 all barcodes) and <ref>.json. OUT/LIB/recount/read_groups.json holds the counts per reference and their sums. A reference
 whose json exists is not scanned again. Each part json names its inputs (BAM path, size and mtime, sha256 of the barcode
 and feature files, the settings in mask bit order), the unit bin, the rule version and the sha256 of
-pafbench/molstream.py; when they differ from this run's, the stage stops and asks for parts/ to be trashed (after an edit
-of the module, for example).
+pafbench/molstream.py; when those of any finished reference of the BAM differ from this run's, with or without --refs,
+the stage stops and asks for parts/ to be trashed (after an edit of the module, for example).
 
 Measured with 14 settings on 2026-10-13 (/usr/bin/time -v, resident size of the largest process). 1417, chr1 alone, one
 worker, three runs with the same bytes in both parts: 6.96M records and 1.98M read groups, 122 to 134 s in the reference
@@ -60,14 +60,16 @@ def main():
     part_dir = out_dir / "parts"
     matrix = bam.parent / "filtered_feature_bc_matrix"
     with pysam.AlignmentFile(str(bam)) as fh:
-        stats = [s for s in fh.get_index_statistics() if s.mapped > 0 and (args.refs is None or s.contig in args.refs)]
+        index = fh.get_index_statistics()
+    stats = [s for s in index if s.mapped > 0 and (args.refs is None or s.contig in args.refs)]
     refs = [s.contig for s in stats]
     if args.refs:
         absent = [r for r in args.refs if r not in refs]
         if absent:
             print(f"--refs not in the BAM index or without mapped reads, ignored: {', '.join(absent)}", file=sys.stderr)
     meta = part_meta(bam, matrix, IMPACT_SETTINGS)
-    stale = stale_parts(part_dir, refs, meta)
+    # every finished reference of the BAM, whatever --refs says: the next stage reads the whole directory
+    stale = stale_parts(part_dir, [s.contig for s in index], meta)
     if stale:
         sys.exit(f"{part_dir}: the parts of {', '.join(stale)} were made from other inputs, with another unit bin or rule "
                  f"version or by another pafbench/molstream.py (this run: {json.dumps(meta)}); trash them with "

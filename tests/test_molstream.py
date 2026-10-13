@@ -787,3 +787,17 @@ def test_stage23_resume_after_crash_and_stale_parts(planted, stage23_fresh, tmp_
         path.write_text(text)
         os.utime(path, ns=(before[path.name], before[path.name]))
     assert {p.name: p.stat().st_mtime_ns for p in [*(out / "parts").iterdir(), out / "read_groups.json"]} == before
+
+
+def test_stage23_refuses_stale_parts_of_references_outside_refs(planted, tmp_path):
+    """Without this a run with --refs writes its parts next to stale ones of the references it was not asked for, and the
+    directory then holds parts of two kinds."""
+    out = tmp_path / "recount"
+    r = _stage23(planted, out, "--refs", "chrA")
+    assert r.returncode == 0, r.stderr
+    done = out / "parts" / "chrA.json"
+    done.write_text(json.dumps(json.loads(done.read_text()) | {"module_sha256": "0" * 64}))
+    before = {p.name: p.stat().st_mtime_ns for p in [*(out / "parts").iterdir(), out / "read_groups.json"]}
+    r = _stage23(planted, out, "--refs", "chrB")
+    assert r.returncode == 1 and "the parts of chrA " in r.stderr and f"gio trash {out / 'parts'}" in r.stderr
+    assert {p.name: p.stat().st_mtime_ns for p in [*(out / "parts").iterdir(), out / "read_groups.json"]} == before
