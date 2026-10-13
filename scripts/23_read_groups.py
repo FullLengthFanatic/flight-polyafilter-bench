@@ -6,8 +6,9 @@ winner reads, pa reads, region class, 3' ends and the reads removed at each sett
 records per called cell, RE and presence of a GX tag: total, with a UB, units and removed at each setting; cell -1 holds
 all barcodes) and <ref>.json. OUT/LIB/recount/read_groups.json holds the counts per reference and their sums. A reference
 whose json exists is not scanned again. Each part json names its inputs (BAM path, size and mtime, sha256 of the barcode
-and feature files, the settings in mask bit order), the rule version and the sha256 of pafbench/molstream.py; when they
-differ from this run's, the stage stops and asks for parts/ to be trashed (after an edit of the module, for example).
+and feature files, the settings in mask bit order), the unit bin, the rule version and the sha256 of
+pafbench/molstream.py; when they differ from this run's, the stage stops and asks for parts/ to be trashed (after an edit
+of the module, for example).
 
 Measured with 14 settings on 2026-10-13 (/usr/bin/time -v, resident size of the largest process). 1417, chr1 alone, one
 worker, three runs with the same bytes in both parts: 6.96M records and 1.98M read groups, 122 to 134 s in the reference
@@ -68,9 +69,9 @@ def main():
     meta = part_meta(bam, matrix, IMPACT_SETTINGS)
     stale = stale_parts(part_dir, refs, meta)
     if stale:
-        sys.exit(f"{part_dir}: the parts of {', '.join(stale)} were made from other inputs, with another rule version or by "
-                 f"another pafbench/molstream.py (this run: {json.dumps(meta)}); trash them with `gio trash {part_dir}` and "
-                 "rerun")
+        sys.exit(f"{part_dir}: the parts of {', '.join(stale)} were made from other inputs, with another unit bin or rule "
+                 f"version or by another pafbench/molstream.py (this run: {json.dumps(meta)}); trash them with "
+                 f"`gio trash {part_dir}` and rerun")
     todo = [s for s in sorted(stats, key=lambda s: -s.mapped) if not (part_dir / f"{s.contig}.json").exists()]
     if todo:
         jobs = [(bam, s.contig, part_dir, meta) for s in todo]

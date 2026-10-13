@@ -341,15 +341,17 @@ def part_meta(bam_path, matrix_dir, settings):
     """What the parts of a run are made from, stored in every <ref>.json and compared by stream.stale_parts.
 
     The BAM by path, size and mtime, the barcode and feature files of matrix_dir by content, the settings as tags in mask
-    bit order, RULE_VERSION, and the sha256 of this module's file: any edit of the module makes old parts stale (design of
-    2026-10-12, section 3.1, Restart).
+    bit order, UNIT_BIN (it defines the units and lives in config, where the module hash does not see it), RULE_VERSION,
+    and the sha256 of this module's file: any edit of the module makes old parts stale (design of 2026-10-12, section 3.1,
+    Restart).
     """
     bam, matrix_dir = Path(bam_path).resolve(), Path(matrix_dir)
     st = bam.stat()
     return {"bam": str(bam), "bam_size": st.st_size, "bam_mtime_ns": st.st_mtime_ns,
             "barcodes_sha256": _sha256(matrix_dir / "barcodes.tsv.gz"),
             "features_sha256": _sha256(matrix_dir / "features.tsv.gz"),
-            "settings": [setting_tag(s) for s in settings], "rule_version": RULE_VERSION, "module_sha256": _sha256(__file__)}
+            "settings": [setting_tag(s) for s in settings], "unit_bin": UNIT_BIN, "rule_version": RULE_VERSION,
+            "module_sha256": _sha256(__file__)}
 
 
 def read_groups_to_parts(bam_path, fasta_path, ref, transcripts, settings, cell_idx, gene_idx, part_dir, meta, chunk=1_000_000):

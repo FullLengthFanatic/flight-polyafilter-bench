@@ -19,7 +19,7 @@ import pysam
 import pytest
 
 from pafbench import molstream, stream
-from pafbench.config import IMPACT_SETTINGS, REPO
+from pafbench.config import IMPACT_SETTINGS, REPO, UNIT_BIN
 from pafbench.flags import Setting, flag_reference, setting_tag
 from pafbench.intervals import blocks_hit, flatten
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index, scan_read_groups
@@ -513,7 +513,8 @@ def test_part_meta_names_the_inputs_the_rule_version_and_the_module(synth10x):
     assert meta == {"bam": str(synth10x.bam.resolve()), "bam_size": st.st_size, "bam_mtime_ns": st.st_mtime_ns,
                     "barcodes_sha256": _sha(_matrix(synth10x) / "barcodes.tsv.gz"),
                     "features_sha256": _sha(_matrix(synth10x) / "features.tsv.gz"),
-                    "settings": TAGS, "rule_version": molstream.RULE_VERSION, "module_sha256": _sha(molstream.__file__)}
+                    "settings": TAGS, "unit_bin": UNIT_BIN, "rule_version": molstream.RULE_VERSION,
+                    "module_sha256": _sha(molstream.__file__)}
     assert json.loads(json.dumps(meta)) == meta and type(molstream.RULE_VERSION) is int   # stored and compared as json
     assert Path(molstream.__file__).name == "molstream.py"
 
@@ -601,6 +602,9 @@ def test_parts_of_other_inputs_another_rule_version_or_another_module_are_stale(
     assert stale() == []                              # chrA has no part yet
     # another settings list: a setting less, and the same settings in another order (the position of a setting is its bit)
     assert stale(SETTINGS_10X[:3]) == ["chrB"] and stale(SETTINGS_10X[::-1]) == ["chrB"]
+    with monkeypatch.context() as m:                  # another bin: the units of cell_records are other units
+        m.setattr(molstream, "UNIT_BIN", UNIT_BIN // 10)
+        assert stale() == ["chrB"]
     with monkeypatch.context() as m:                  # a change of the read-group rule or of the row format
         m.setattr(molstream, "RULE_VERSION", molstream.RULE_VERSION + 1)
         assert stale() == ["chrB"]
