@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import random
+import subprocess
 import sys
 
 import numpy as np
@@ -597,6 +598,25 @@ def test_stage30_without_tecap_and_one_library(stage30_inputs, tmp_path, monkeyp
                                                                 "sites_no_model.parquet"]
     assert "tecap" not in json.loads((out / "BD67" / "isoform_context.json").read_text()) and not (out / "BD70").exists()
     assert list(pd.read_parquet(out / "1179" / "truth" / "long_read_context.parquet").columns) == ["mol", "context_BD67"]
+
+
+def test_stage30_writes_the_context_outputs_before_tecap_runs(stage30_inputs, tmp_path, monkeypatch, capsys):
+    stage, base, _ = stage30_inputs
+    out = tmp_path / "out"
+
+    def failing(bam, sample, out_dir, threads):
+        raise subprocess.CalledProcessError(1, "tecap")
+
+    monkeypatch.setattr(tecap, "run_classify", failing)
+    with pytest.raises(subprocess.CalledProcessError):
+        _run30(stage, monkeypatch, capsys, base, out)
+    # tecap failed on the first library: the context outputs of both are complete, and nothing of tecap is in them
+    for lib in ("BD67", "BD70"):
+        j = json.loads((out / lib / "isoform_context.json").read_text())
+        assert j["acceptance"]["sites_and_accepted_reads_equal_stage16"] and "per_ref" in j and "tecap" not in j
+        assert (out / lib / "sites_no_model.parquet").exists() and not (out / lib / "tecap_buckets.parquet").exists()
+    assert list(pd.read_parquet(out / "1179" / "truth" / "long_read_context.parquet").columns) == ["mol", "context_BD67",
+                                                                                                  "context_BD70"]
 
 
 def test_stage30_stops_when_an_acceptance_condition_fails(stage30_inputs, tmp_path, monkeypatch, capsys):

@@ -19,8 +19,8 @@ pafbench.lrcontext.classify. Inputs are read under --base: <lib>/long_read_sites
                                        placed top class is a no_model reason (novel_junction, antisense, intergenic), with
                                        the main sub-cause of a novel junction.
 <lib>/isoform_context.json             totals in both versions (lrcontext.totals), record counts, the acceptance checks,
-                                       the link to 1179 and its null, per reference counts and seconds, and for BD70 the
-                                       counts of the pigeon cross-check.
+                                       the link to 1179 and its null, per reference counts and seconds, for BD70 the
+                                       counts of the pigeon cross-check, and under "tecap" the counts of that step.
 BD70/pigeon_crosscheck.parquet         structural_category, subcategory, context, isoforms: the ends of the min20 collapsed
                                        isoforms against the nearest site within 10 nt ("none" without one).
 1179/truth/long_read_context.parquet   mol, context_<lib>: the placed top class of the long-read site within 10 nt of each
@@ -28,6 +28,8 @@ BD70/pigeon_crosscheck.parquet         structural_category, subcategory, context
 <lib>/tecap/accepted.bam (indexed)     the accepted reads with the site key ref:strand:site in tag XK, <lib>/tecap/out/ with
                                        tecap's own files and <lib>/tecap/classify.log with its output.
 <lib>/tecap_site_buckets.parquet       ref, strand, site, bucket, reads, and <lib>/tecap_buckets.parquet: label, bucket, reads.
+                                       tecap runs after every other output of both libraries is written; the key "tecap"
+                                       is then added to isoform_context.json.
 
 The stage stops before writing any table when the sites or their accepted reads differ from stage 16, or when a site of the
 region intron has the top class no_model_antisense or no_model_intergenic; such sites are listed. The tagged BAMs of the
@@ -115,7 +117,7 @@ def main():
     mol = pd.read_parquet(args.base / "1179" / "truth" / "molecules_labeled.parquet",
                           columns=["mol", "ref", "strand", "site", "label"])
     mol = mol[mol.ref.isin(args.refs)].reset_index(drop=True)
-    link, line = mol[["mol"]].copy(), {}
+    link, line, summaries = mol[["mol"]].copy(), {}, {}
     for lib, (sites, by_class, parts) in scans.items():
         d = out / lib
         d.mkdir(parents=True, exist_ok=True)
@@ -151,14 +153,18 @@ def main():
         line[lib]["sites_top_class_on_chain_novel_only"] = summary["sites_top_class_on_chain_novel_only"]
         line[lib]["vs_1179"] = {k: {x: summary["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")}
                                 for k in ("real", "null")}
-        if not args.no_tecap:
-            summary["tecap"] = classify_library({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, lib, d, sites,
-                                                min(args.workers, len(args.refs)))
-            line[lib]["tecap"] = summary["tecap"]["per_label"]
         summary["per_ref"] = {p[1]: p[4] for p in parts}
         (d / "isoform_context.json").write_text(json.dumps(summary, indent=1))
+        summaries[lib] = summary
     (out / "1179" / "truth").mkdir(parents=True, exist_ok=True)
     link.to_parquet(out / "1179" / "truth" / "long_read_context.parquet", index=False)
+    if not args.no_tecap:   # last, so that a failure of tecap leaves the context outputs complete
+        for lib, (sites, _, parts) in scans.items():
+            d = out / lib
+            summaries[lib]["tecap"] = classify_library({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, lib, d, sites,
+                                                       min(args.workers, len(args.refs)))
+            line[lib]["tecap"] = summaries[lib]["tecap"]["per_label"]
+            (d / "isoform_context.json").write_text(json.dumps(summaries[lib], indent=1))
     print(json.dumps(line | {"seconds": round(time.time() - t0, 1)}))
 
 
