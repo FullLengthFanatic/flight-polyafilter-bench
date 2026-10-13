@@ -260,9 +260,11 @@ def _record(hdr, name, ref, pos, flag=0, **tags):
 C1, C2, C3 = (CELLS_10X[c] for c in ("c1", "c2", "c3"))
 # (name, reference, position, flag, tags) of the records the shared fixture does not hold
 PLANTS = [
-    # copies of two read-group records as secondary and supplementary alignments, inside a removal window
+    # copies of two read-group records as secondary and supplementary alignments, inside a removal window, and a secondary
+    # one without UB
     ("secondary", "chrA", 1150, 256, dict(CB=C1, UB="AACCGGTTAACC", GX="g1", RE="E", xf=17)),
     ("supplementary", "chrA", 2150, 2048, dict(CB=C1, UB="ACACACGTGTGT", GX="g1", RE="E", xf=17)),
+    ("secondary", "chrA", 1150, 256, dict(CB=C1, GX="g1", RE="E", xf=17)),
     # chrC, a reference without annotation and without a gene of the feature list: intergenic records of a called cell
     # (three with one UB: two forward in one bin, one reverse), one without UB and a secondary copy
     ("intergenic", "chrC", 100, 0, dict(CB=C1, UB="ACGTACGTACGT", RE="I", xf=0)),
@@ -305,14 +307,17 @@ def planted(synth10x, tmp_path_factory):
     return _library(tmp_path_factory.mktemp("planted"), synth10x, PLANTS)
 
 
-def test_secondary_and_supplementary_records_are_fetched_and_not_counted(synth10x, planted):
+@pytest.mark.parametrize("chunk", [1, 1000])
+def test_secondary_and_supplementary_records_are_fetched_and_not_counted(synth10x, planted, chunk):
+    """With a chunk of one record the xf, gene and pa buffers still hold the values of the last primary record of a called
+    cell when a secondary record comes: they are not written for it, and not read."""
     for ref in CHROMS:
-        groups, rec, counts = _scan(planted, ref)
+        groups, rec, counts = _scan(planted, ref, chunk=chunk)
         want_groups, want_rec, want_counts = _scan(synth10x, ref)
         pd.testing.assert_frame_equal(groups, want_groups)
         pd.testing.assert_frame_equal(rec, want_rec)
         extra = sum(p[1] == ref for p in PLANTS)
-        assert counts == want_counts | {"records": want_counts["records"] + extra} and extra == 2 * (ref == "chrA")
+        assert counts == want_counts | {"records": want_counts["records"] + extra} and extra == 3 * (ref == "chrA")
 
 
 def test_reference_without_genes_or_without_called_cells_gives_empty_tables(planted):
