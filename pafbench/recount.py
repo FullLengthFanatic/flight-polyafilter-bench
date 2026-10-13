@@ -12,6 +12,10 @@ all parts are sorted first to find the cells and UMIs with two or more groups (m
 from every part and go through the rule together (rule_on_multi); a group that is alone holds the UMI while it has a read
 (ref_block).
 """
+import gzip
+import json
+import sys
+import time
 from pathlib import Path
 
 import h5py
@@ -22,12 +26,17 @@ import pyarrow.parquet as pq
 import scipy.io
 import scipy.sparse as sp
 
+from . import matrices, naive
+from .config import A4_PARALLEL, OUT, RULE_AGREEMENT_MAX, XF_RECOUNT_TOLERANCE
 from .flags import Setting, setting_tag
 from .matrices import filtered
-from .molstream import GROUP_MAX
-from .stream import RE_CODES
+from .molstream import COUNTS, GROUP_MAX, RULE_VERSION, UMI_LEN, part_meta, row_index
+from .pool import map_forked
+from .stream import RE_CODES, stale_parts
+from .validation import time_exit_status
 
 _COUNTS = ("n_reads", "n_winner_reads", "n_pa")       # summed when a key sits on two references, like the rm columns
+EXAMPLES = 100                # offending entries listed per check in recount.json and on stderr; the counts are complete
 
 
 def counted(reads, cu_start):
@@ -433,3 +442,282 @@ def check_totals(cell_totals, gene_totals, sums):
     t = pd.DataFrame({"cells": cell_totals.groupby("tag").umis.sum(), "genes": gene_totals.groupby("tag").umis.sum(),
                       "matrix": pd.Series(sums)}).rename_axis("tag").reset_index()
     return t[(t.cells != t.genes) | (t.cells != t.matrix)].reset_index(drop=True)
+
+
+def require_parts(part_dir, refs, meta):
+    """Stop (SystemExit) unless every reference of refs has its three part files of stage 23 and all were made from meta
+    (molstream.part_meta of this run): stage 23 calls a reference finished on its json alone and describes only its last
+    invocation, so the files are looked at here."""
+    part_dir = Path(part_dir)
+    missing = [f"{ref}.{kind}" for ref in refs for kind in ("json", "read_groups.parquet", "cell_records.parquet")
+               if not (part_dir / f"{ref}.{kind}").exists()]
+    if missing:
+        raise SystemExit(f"{part_dir}: stage 23 is not complete, missing {', '.join(missing)}; run scripts/23_read_groups.py "
+                         "for the whole library first")
+    stale = stale_parts(part_dir, refs, meta)
+    if stale:
+        raise SystemExit(f"{part_dir}: the parts of {', '.join(stale)} were made from other inputs, with another unit bin or "
+                         f"rule version or by another pafbench/molstream.py (this run: {json.dumps(meta)}); trash them with "
+                         f"`gio trash {part_dir}` and rerun stage 23")
+
+
+def require_passed(lib, recount_dir=None):
+    """The recount.json of lib; stop (SystemExit) unless stage 24 wrote it with passed, that is after every acceptance
+    check ran and passed. Stages 25 to 28 start with this (design 3.2). recount_dir: default OUT/<lib>/recount."""
+    path = Path(recount_dir or OUT / lib / "recount") / "recount.json"
+    res = json.loads(path.read_text()) if path.exists() else {}
+    if res.get("passed") is not True:
+        raise SystemExit(f"{path}: stage 24 has not passed its acceptance checks for {lib} (no recount.json, or one without "
+                         f"passed); run scripts/24_recount.py {lib} and resolve what it reports")
+    return res
+
+
+def original_bams(folder, prefix, settings):
+    """{tag: BAM the original tool wrote at that setting} for check A4: <folder>/<prefix><tag>.bam, as stages 02 and 20
+    name them. Stop (SystemExit) when one is missing or its run did not end with exit status 0 in <prefix><tag>.time.txt
+    (validation.time_exit_status; a killed run leaves a truncated BAM)."""
+    bams = {setting_tag(s): Path(folder) / f"{prefix}{setting_tag(s)}.bam" for s in settings}
+    missing = [str(path) for path in bams.values()
+               if not (path.exists() and path.with_suffix(".time.txt").exists() and time_exit_status(path.with_suffix(".time.txt")) == 0)]
+    if missing:
+        raise SystemExit(f"check A4 needs the BAMs of the original tool, missing or not finished: {', '.join(missing)}")
+    return bams
+
+
+def groups_of_units(part_dir, refs, units):
+    """Every read group of the given cells and UMIs (key >> 16) over the parts of refs, sorted by key: key, n_reads,
+    n_winner_reads, n_pa, re_class, ref. The printout of the resolution step (design 3.2): n_winner_reads above 0 is xf bit
+    2 unset, re_class the RE of the records; UR and the flags are not in the parts."""
+    cols = ["key", "n_reads", "n_winner_reads", "n_pa", "re_class"]
+    units, frames = np.unique(units), []
+    for ref in refs:
+        part = pq.read_table(Path(part_dir) / f"{ref}.read_groups.parquet", columns=cols)
+        sel = _in_sorted(units, part.column("key").to_numpy() >> np.uint64(16))
+        frames.append(part.filter(pa.array(sel)).to_pandas().assign(ref=ref))
+    return pd.concat(frames, ignore_index=True).sort_values("key", ignore_index=True)
+
+
+def _umi_letters(code):
+    return "".join("ACGT"[(code >> 2 * (UMI_LEN - 1 - i)) & 3] for i in range(UMI_LEN))
+
+
+def _listing(frame, barcodes, gene_ids, limit=EXAMPLES):
+    """The first limit rows of a frame of offending entries as json records: a key column taken apart, and cell, gene and
+    umi as barcode, gene id and letters."""
+    f = frame if limit is None else frame.head(limit)
+    if "key" in f:
+        key = f.key.to_numpy().astype(np.uint64)
+        f = f.drop(columns="key").assign(cell=(key >> np.uint64(40)).astype(np.int64),
+                                         umi=((key >> np.uint64(16)) & np.uint64(0xFFFFFF)).astype(np.int64),
+                                         gene=(key & np.uint64(0xFFFF)).astype(np.int64))
+    names = {"cell": lambda c: barcodes[c], "gene": lambda g: gene_ids[g], "umi": _umi_letters}
+    f = f.assign(**{c: [fn(int(x)) for x in f[c]] for c, fn in names.items() if c in f})
+    return json.loads(f.to_json(orient="records"))
+
+
+def _jsonable(check, barcodes, gene_ids, limit=EXAMPLES):
+    """A check result with its frames of offending entries as listings."""
+    return {k: _listing(v, barcodes, gene_ids, limit) if isinstance(v, pd.DataFrame) else v for k, v in check.items()}
+
+
+def against_check_script(path, entries_differing, groups):
+    """Check A1b next to the genome-wide check of the design (design_m3_draft/review/v2/a1b_genomewide_<lib>.json, script
+    a1b_genomewide.py): its number of differing entries, whether the count and the cells and UMIs are the same, and the
+    cells and UMIs that are new here or gone, as [barcode, UMI]. groups: the listing of rule_vs_xf."""
+    theirs = json.loads(Path(path).read_text())
+    known = {(e["barcode"], e["umi"]) for e in theirs["exceptions"]}
+    mine = {(g["cell"], g["umi"]) for g in groups}
+    n = theirs["A1b_documented_rule"]["entries_differing"]
+    return {"file": str(path), "entries_differing": n, "same": n == entries_differing and mine == known,
+            "new": sorted(map(list, mine - known)), "gone": sorted(map(list, known - mine))}
+
+
+def _molecules(g, r, refs, event):
+    """Rows of counted_molecules.parquet (event "lost") or other_read_groups.parquet (event "gained") from the groups g of
+    refs[r]."""
+    key = g.key.to_numpy()
+    cols = {"cell": (key >> np.uint64(40)).astype(np.int32), "gene": (key & np.uint64(0xFFFF)).astype(np.int32),
+            "umi": ((key >> np.uint64(16)) & np.uint64(0xFFFFFF)).astype(np.uint32),
+            "ref": pa.DictionaryArray.from_arrays(pa.array(np.full(len(g), r, np.int16)), pa.array(refs, pa.string()))}
+    cols |= {c: g[c].to_numpy() for c in ("n_reads", "n_pa", "re_class", "end3", "end3_nonpa", "any_removed", event, "switched")}
+    return pa.table(cols)
+
+
+def rule_matrices(part_dir, refs, tags, shape):
+    """{tag: matrix after filtering} by the rule on the read groups of refs alone, before and after removal. For check A4 on
+    a BAM that holds only these references: a group whose winning gene sits elsewhere has no partner there and is counted,
+    in the BAM and here (design 3.2, A4)."""
+    multi_cu, _, _ = multi_units(part_dir, refs)
+    multi = rule_on_multi(part_dir, refs, multi_cu, tags)
+    tally = Tally(*shape, tags)
+    for r in range(len(refs)):
+        tally.add(ref_block(part_dir, refs, r, multi_cu, multi, tags), r)
+    m0 = tally.matrix("unfiltered")
+    return {tag: filtered(m0, tally.matrix(("lost", tag)), tally.matrix(("gained", tag))) for tag in tags}
+
+
+def check_a4(job):
+    """Checks A4 and A6 for one BAM the original tool wrote. job: (tag, BAM, Cell Ranger's filtered_feature_bc_matrix
+    folder, the matrix of the rule at tag). A4: the naive recount by the documented rule equals the matrix, tolerance 0.
+    A6, reported only: the entries on which Cell Ranger's counting code on the raw UMIs of the same reads differs from it,
+    and the UMIs only the rule or only that code counts."""
+    tag, bam, cr_matrix_dir, expected = job
+    t0 = time.monotonic()
+    got = naive.recount_bam(bam, cr_matrix_dir)
+    a4, a6 = check_entries(got["rule"], expected, 0), check_entries(expected, got["port"], 0)
+    d = a6["differing"].ours - a6["differing"].theirs
+    a6 = {k: a6[k] for k in ("entries_compared", "entries_differing", "per_million")} | {
+        "umis_rule": int(expected.sum()), "umis_code": int(got["port"].sum()), "umis_only_rule": int(d[d > 0].sum()),
+        "umis_only_code": int(-d[d < 0].sum()), "differing": a6["differing"]}
+    counts = {k: got[k] for k in ("records", "in_groups", "read_groups", "raw_groups")}
+    return tag, {"bam": str(bam)} | counts | a4 | {"seconds": round(time.monotonic() - t0, 1)}, a6
+
+
+def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4_refs=None, check_script=None):
+    """Stage 24 for one library: the rule on the parts of stage 23 under recount_dir/parts, the output tables and matrices,
+    and the acceptance checks A1 to A6 in the order of design 3.2. Returns the content of recount.json.
+
+    refs: the references with mapped reads, in the order of the BAM index. grid_dir: the stage 13 folder with
+    cell_counts.parquet and region_counts.parquet. a4_bams: {tag: BAM the original tool wrote at that setting}; a4_refs:
+    the references those BAMs hold when they are a subset (the rule is then applied to the read groups of these alone).
+    check_script: the json of the design's genome-wide check of A1b, when there is one.
+    A failed check of A1 to A5 ends the run: recount.json then holds the checks so far, without passed, and the failed
+    check is printed to stderr with its offending entries. passed is written last, after every check has run and passed.
+    """
+    t0 = time.monotonic()
+    recount_dir, matrix_dir = Path(recount_dir), Path(matrix_dir)
+    part_dir, cr_dir = recount_dir / "parts", Path(bam).parent / "filtered_feature_bc_matrix"
+    meta = part_meta(bam, cr_dir, settings)
+    require_parts(part_dir, refs, meta)
+    tags = meta["settings"]
+    cells, genes = row_index(cr_dir / "barcodes.tsv.gz"), row_index(cr_dir / "features.tsv.gz")
+    barcodes, gene_ids = list(cells), list(genes)
+    stats = [json.loads((part_dir / f"{ref}.json").read_text()) for ref in refs]
+    res = {"library": lib, "rule_version": RULE_VERSION, "settings": tags, "refs": len(refs)} | {
+        k: sum(st[k] for st in stats) for k in COUNTS} | {"seconds": {}}
+    seconds, last = res["seconds"], [t0]
+
+    def lap(name):
+        now = time.monotonic()
+        seconds[name], last[0] = round(now - last[0], 1), now
+
+    def save():
+        (recount_dir / "recount.json").write_text(json.dumps(res, indent=1))
+        return res
+
+    def stop(*names):
+        for name in names:
+            print(f"stage 24, {lib}: {name}\n{json.dumps(res[name], indent=1)}", file=sys.stderr)
+        return save()
+
+    save()               # the recount.json of an earlier run is gone, with its passed, before an output is written again
+    multi_cu, n_units, n_dup = multi_units(part_dir, refs)
+    multi = rule_on_multi(part_dir, refs, multi_cu, tags)
+    tally = Tally(len(cells), len(genes), tags)
+    violations = [check_groups(multi, settings)]
+    cu = multi.key.to_numpy() >> np.uint64(16)
+    differ = [multi[_in_sorted(np.unique(cu[(multi.counted != (multi.n_winner_reads > 0)).to_numpy()]), cu)]]
+    n_rows = {"lost": 0, "gained": 0}
+    files = {"lost": recount_dir / "counted_molecules.parquet", "gained": recount_dir / "other_read_groups.parquet"}
+    writers = {}
+    try:
+        for r in range(len(refs)):
+            block = ref_block(part_dir, refs, r, multi_cu, multi, tags)
+            tally.add(block, r)
+            alone = block[~block.multi]
+            violations.append(check_groups(alone, settings))
+            differ.append(alone[alone.n_winner_reads == 0])          # counted by the rule, discarded by Cell Ranger
+            for event, held in (("lost", True), ("gained", False)):
+                table = _molecules(block[block.counted == held], r, refs, event)
+                if event not in writers:
+                    writers[event] = pq.ParquetWriter(files[event], table.schema)
+                writers[event].write_table(table)
+                n_rows[event] += table.num_rows
+    finally:
+        for w in writers.values():
+            w.close()
+    vs = pd.concat(differ, ignore_index=True).sort_values("key", ignore_index=True)
+    vs = vs[["key", "n_reads", "n_winner_reads"]].assign(counted_by_rule=vs.counted, counted_by_xf=vs.n_winner_reads > 0)
+    res |= {"duplicate_keys": n_dup, "cell_umis": n_units, "cell_umis_two_or_more_groups": int(multi_cu.size),
+            "counted_molecules": n_rows["lost"], "other_read_groups": n_rows["gained"],
+            "events": {tag: dict(zip(("lost", "gained", "switched"), map(int, tally.cell_events[t, :, :3].sum(axis=0))))
+                       for t, tag in enumerate(tags)}}
+    lap("rule")
+
+    m0, cr = tally.matrix("unfiltered"), read_cr_matrix(cr_dir)
+    a1 = check_entries(tally.matrix("xf"), cr, XF_RECOUNT_TOLERANCE)
+    a1b = check_entries(m0, cr, RULE_AGREEMENT_MAX * cr.nnz)      # at most one differing entry per million of the matrix
+    res["A1"] = _jsonable(a1, barcodes, gene_ids)
+    groups = _listing(vs, barcodes, gene_ids, None if a1b["passed"] else EXAMPLES)
+    res["A1b"] = _jsonable(a1b, barcodes, gene_ids) | {
+        "cell_umis_differing": int(np.unique(vs.key.to_numpy() >> np.uint64(16)).size),
+        "rule_only_molecules": int((vs.counted_by_rule & ~vs.counted_by_xf).sum()),
+        "xf_only_molecules": int((vs.counted_by_xf & ~vs.counted_by_rule).sum()), "read_groups": groups}
+    if check_script is not None:
+        res["A1b"]["check_script"] = against_check_script(check_script, a1b["entries_differing"], groups)
+    h5 = Path(bam).parent / "molecule_info.h5"
+    if not (a1["passed"] and a1b["passed"]):
+        # resolution step of design 3.2: the join to molecule_info.h5 shows which molecules are missing or extra, and the
+        # read groups of their cells and UMIs are listed
+        a2 = check_a2(*winner_groups(part_dir, refs), *molecule_info(h5, cells, gene_ids))
+        res["A2"] = _jsonable(a2, barcodes, gene_ids)
+        units = np.concatenate((a2["left_over"].key.to_numpy(), vs.key.to_numpy())) >> np.uint64(16)
+        res["resolution"] = _listing(groups_of_units(part_dir, refs, units[:EXAMPLES]), barcodes, gene_ids)
+        return stop("A1", "A1b", "A2", "resolution")
+
+    rec = sum_records(part_dir, refs, len(cells), tags)
+    a3 = check_a3(rec, barcodes, pd.read_parquet(Path(grid_dir) / "cell_counts.parquet", columns=["total", *tags]),
+                  pd.read_parquet(Path(grid_dir) / "region_counts.parquet"), tags)
+    res["A3"] = _jsonable(a3, barcodes, gene_ids)
+    if not a3["passed"]:
+        return stop("A3")
+
+    lost, gained = ({tag: tally.matrix((kind, tag)) for tag in tags} for kind in ("lost", "gained"))
+    with gzip.open(cr_dir / "features.tsv.gz", "rt") as fh:
+        features = [line.rstrip("\n").split("\t")[:2] for line in fh]
+    cell_totals, gene_totals = totals(tally, m0, lost, gained, rec, barcodes, features, refs)
+    sums = {"unfiltered": int(m0.sum())} | {tag: int(m0.sum() - lost[tag].sum() + gained[tag].sum()) for tag in tags}
+    bad = [pd.concat(violations, ignore_index=True), check_matrices(m0, lost, gained), check_totals(cell_totals, gene_totals, sums)]
+    res["A5"] = {"umis": sums, "violations": {name: int(n) for b in bad[:2] for name, n in b.invariant.value_counts().items()}
+                 | ({"totals_differ": len(bad[2])} if len(bad[2]) else {}),
+                 "passed": not any(len(b) for b in bad), "groups": _listing(bad[0], barcodes, gene_ids),
+                 "entries": _listing(bad[1], barcodes, gene_ids), "totals": _listing(bad[2], barcodes, gene_ids)}
+    if not res["A5"]["passed"]:
+        return stop("A5")
+    lap("checks")
+
+    manifest = {"library": lib} | {k: v for k, v in meta.items() if k != "settings"}
+    matrices.save(matrix_dir, m0, lost, gained, cr_dir, manifest)
+    cell_totals.to_parquet(matrix_dir / "cell_totals.parquet", index=False)
+    gene_totals.to_parquet(matrix_dir / "gene_totals.parquet", index=False)
+    key = vs.key.to_numpy()
+    vs.drop(columns="key").assign(cell=(key >> np.uint64(40)).astype(np.int32), umi=((key >> np.uint64(16)) & np.uint64(0xFFFFFF))
+                                  .astype(np.uint32), gene=(key & np.uint64(0xFFFF)).astype(np.int32))[
+        ["cell", "umi", "gene", "n_reads", "n_winner_reads", "counted_by_rule", "counted_by_xf"]].to_parquet(
+        recount_dir / "rule_vs_xf.parquet", index=False)
+    del tally, m0, lost, gained, cr, rec, cell_totals, gene_totals, multi, violations, bad
+    lap("write")
+
+    a2 = check_a2(*winner_groups(part_dir, refs), *molecule_info(h5, cells, gene_ids))
+    res["A2"] = _jsonable(a2, barcodes, gene_ids)
+    if not a2["passed"]:
+        res["resolution"] = _listing(groups_of_units(part_dir, refs, a2["left_over"].key.to_numpy()[:EXAMPLES] >> np.uint64(16)),
+                                     barcodes, gene_ids)
+        return stop("A2", "resolution")
+    del a2
+    lap("A2")
+
+    if a4_refs is None:
+        expected = {tag: matrices.load(lib, tag, matrix_dir) for tag in a4_bams}
+    else:
+        expected = rule_matrices(part_dir, list(a4_refs), tags, (len(cells), len(genes)))
+    done = map_forked(check_a4, [(tag, path, cr_dir, expected[tag]) for tag, path in a4_bams.items()], A4_PARALLEL)
+    res["A4"] = {"bams": len(done), "refs": "all" if a4_refs is None else list(a4_refs),
+                 "passed": bool(done) and all(a4["passed"] for _, a4, _ in done),
+                 "settings": {tag: _jsonable(a4, barcodes, gene_ids) for tag, a4, _ in done}}
+    res["A6"] = {tag: _jsonable(a6, barcodes, gene_ids) for tag, _, a6 in done}
+    lap("A4")
+    if not res["A4"]["passed"]:
+        return stop("A4")
+    res["passed"] = True
+    return save()

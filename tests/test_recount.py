@@ -1,6 +1,7 @@
 """The counting rule of stage 24 (pafbench.recount) on the parts of the synthetic 10x library, against the designed tables
 of tests/synth.build_10x and plain counts."""
 import gzip
+import json
 import shutil
 from collections import Counter
 
@@ -12,7 +13,7 @@ from pafbench import matrices, recount, stream
 from pafbench.flags import setting_tag
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index
 from pafbench.transcripts import load_transcripts
-from tests.synth import CELLS_10X, CHROMS, SETTINGS_10X
+from tests.synth import CELLS_10X, CHROMS, SETTINGS_10X, run_original
 from tests.test_synth10x import CELL, CELL_RECORDS, MATRIX
 
 TAGS = [setting_tag(s) for s in SETTINGS_10X]
@@ -637,3 +638,48 @@ def test_a5_invariants_of_the_matrices_and_totals_with_planted_violations(synth1
     off = gene.copy()
     off.loc[(off.tag == TAGS[0]) & (off.gene_id == "g1"), "umis"] -= 2
     assert recount.check_totals(cell, off, sums).tag.tolist() == [TAGS[0]]
+
+
+def _original(s, d, settings=SETTINGS_10X):
+    """The BAMs the original tool writes from the synthetic library, under d as stage 02 names them, each with the time
+    file of a finished run. Returns {tag: path}."""
+    d.mkdir(parents=True, exist_ok=True)
+    bams = {}
+    for st in settings:
+        run_original(s, st.covlen, st.min_len, st.mism, st.introns)
+        bams[setting_tag(st)] = d / f"{setting_tag(st)}.bam"
+        shutil.copy(s.tmp / f"orig_{st.covlen}_{st.min_len}_{st.mism}_{int(st.introns)}.bam", bams[setting_tag(st)])
+        (d / f"{setting_tag(st)}.time.txt").write_text("\tExit status: 0\n")
+    return bams
+
+
+def _library(s, d, stage13):
+    """What stage 24 reads for the synthetic library, under d: recount/parts (stage 23 at the four test settings), grid
+    (stage 13) and original (the original tool's BAMs)."""
+    _write_parts(s, d / "recount" / "parts")
+    (d / "grid").mkdir()
+    stage13[0].to_parquet(d / "grid" / "cell_counts.parquet")
+    stage13[1].to_parquet(d / "grid" / "region_counts.parquet", index=False)
+    return _original(s, d / "original")
+
+
+GATE = 0.25         # of the 9 entries of the synthetic Cell Ranger matrix: the two designed differences of A1b pass, a third does not
+
+
+def _run(s, d, bams, gate=GATE, **kwargs):
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(recount, "RULE_AGREEMENT_MAX", gate)
+        return recount.run("X", s.bam, REFS, SETTINGS_10X, d / "recount", d / "matrices", d / "grid", bams, **kwargs)
+
+
+@pytest.fixture(scope="module")
+def stage24(synth10x, stage13, tmp_path_factory):
+    d = tmp_path_factory.mktemp("stage24")
+    bams = _library(synth10x, d, stage13)
+    return d, bams, _run(synth10x, d, bams)
+
+
+def test_run_passes_every_check_on_the_synthetic_library(stage24):
+    d, bams, res = stage24
+    assert res["passed"] is True and list(res)[-1] == "passed"
+    assert json.loads((d / "recount" / "recount.json").read_text()) == res
