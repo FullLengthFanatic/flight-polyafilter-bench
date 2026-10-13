@@ -257,7 +257,10 @@ def test_counts_name_the_records_outside_read_groups(synth10x):
 
 
 def _record(hdr, name, ref, pos, flag=0, **tags):
-    """A 90M record with its sequence and the given tags (RE as type A, as Cell Ranger writes it)."""
+    """A 90M record with its sequence and the given tags. RE gets type A: "RE A Single character indicating the region type
+    of this alignment (E = exonic, N = intronic, I = intergenic)." (Cell Ranger 9.0 BAM page,
+    https://www.10xgenomics.com/support/software/cell-ranger/9.0/analysis/outputs/cr-outputs-bam; copy in
+    design_m3_draft/research/dl/bam.txt, line 102)."""
     a = pysam.AlignedSegment(hdr)
     a.query_name, a.reference_name, a.reference_start, a.cigarstring, a.flag, a.mapping_quality = name, ref, pos, "90M", flag, 255
     a.query_sequence, a.query_qualities = ("ACGT" * 23)[:90], pysam.qualitystring_to_array("I" * 90)
@@ -387,8 +390,9 @@ def test_unit_that_starts_outside_the_read_group_and_pa_tag_of_zero(synth10x, tm
 
 
 def test_unsorted_bam_stops_the_pass(synth10x, tmp_path):
-    """Records out of coordinate order behind an index: htslib refuses to index such a file, so the index is the one of the
-    sorted file with the same records (same sizes, so the same offsets)."""
+    """Records out of coordinate order behind an index. Such a file cannot be indexed (our observation, pysam 0.24.1:
+    pysam.index stops with "[E::hts_idx_push] Unsorted positions on sequence #1: 2151 followed by 1811"), so the index is
+    the one of the sorted file with the same records; the fetch below shows that it still returns all four, in file order."""
     hdr = pysam.AlignmentHeader.from_dict(HEADER)
     bam = tmp_path / "swapped.bam"
     for order in ((1150, 1810, 2150, 2505), (1150, 2150, 1810, 2505)):
