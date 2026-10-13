@@ -216,6 +216,8 @@ Phase 1 and phase 2 do not overlap inside a worker, so a worker's peak stays nea
 
 **Restart.** Same protocol as stage 13: each reference writes its parts and, last, `<ref>.json`; a reference whose json exists is skipped; the json names the inputs (settings list, sha256 of the barcode and feature files, BAM path, size and mtime), and `stream.stale_parts` stops the stage with the `gio trash` hint when parts were made from other inputs. Two more entries close a hole of version 1, where a rerun after a rule fix would have skipped finished references and mixed old parts with new ones (`stream.scan_to_parts` returns the stored stats when the json exists, `stream.py` lines 343 to 346): `rule_version`, a constant `RULE_VERSION` in `molstream.py` that every change of the read-group rule or of the row format bumps, and `module_sha256`, the sha256 of the `molstream.py` file itself. Any edit of the module therefore makes old parts stale; that is the intent.
 
+**Note of 2026-10-13 (stage 23 as built).** The json carries a third entry of this kind, `unit_bin`, the `UNIT_BIN` of `pafbench/config.py`. The constant defines the units of `cell_records` and lives outside `molstream.py`, so `module_sha256` does not see a change of it and nothing forces a bump of `rule_version`. Without the entry a rerun after such a change kept the finished references and mixed units of two bin sizes (our observation on the synthetic library of the tests: chrA written at 1,000 stayed at 48 units where a fresh run at 100 gives 52; review of stage 23, finding F4).
+
 **Inputs.** `possorted_genome_bam.bam`, `filtered_feature_bc_matrix/{barcodes,features}.tsv.gz`, `genome.fa`, `genes.gtf`, `IMPACT_SETTINGS`.
 
 **Outputs** under `<lib>/recount/parts/`:
