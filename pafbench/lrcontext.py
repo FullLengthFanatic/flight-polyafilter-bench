@@ -39,8 +39,8 @@ READ_COLUMNS = ["minus", "site", "klass", "matched", "chain_novel", "starts_outs
 _READ_TYPES = ("b", "q", "b", "h", "h", "b", "b", "b", "b", "b", "b", "b", "i", "b")
 _READ_BOOL = ["minus"] + READ_COLUMNS[5:11] + ["no_splice"]
 _KEY = ["ref", "strand", "site"]
-_COUNTS = [f"n_{c}" for c in CLASSES] + ["n_starts_outside", "n_chain_novel", "n_chain_novel_suffix1", "n_retained_after_junction",
-                                         "n_end_NF"]
+_COUNTS = [f"n_{c}" for c in CLASSES] + ["n_starts_outside", "n_chain_novel", "n_chain_novel_suffix1",
+                                         "n_retained_after_junction", "n_end_NF"]
 _TOP = ["context", "context_without_chain_novel", "top_share", "tied", "share_spliced", "share_5p_complete", "median_length"]
 # reduce_sites: the columns that stage 30 writes per site, then those it needs for its totals
 SITE_COLUMNS = _KEY + ["n_accepted"] + _COUNTS + _TOP + ["tied_without_chain_novel", "top_share_without_chain_novel",
@@ -340,7 +340,8 @@ def reduce_sites(reads, ref):
                             "median_length": reads.length.groupby(code).median().to_numpy(),
                             "tied_without_chain_novel": tied_strict, "top_share_without_chain_novel": share_strict,
                             "chain_novel_only": moved[rows, m.argmax(axis=1)] == m.max(axis=1),
-                            "sub_cause": np.where(top == NOVEL_JUNCTION, causes, ""), "n_no_splice": count(reads.no_splice.to_numpy())})
+                            "sub_cause": np.where(top == NOVEL_JUNCTION, causes, ""),
+                            "n_no_splice": count(reads.no_splice.to_numpy())})
     width = len(SUB_CAUSES) + 1
     cell, inv, n_reads = np.unique(((code * len(CLASSES) + klass) * 2 + novel) * width + cause + 1, return_inverse=True,
                                    return_counts=True)
@@ -351,9 +352,11 @@ def reduce_sites(reads, ref):
     k = cell // (len(CLASSES) * 2 * width)
     by_class = pd.DataFrame({"ref": ref, "strand": strand[k], "site": site[k],
                              "klass": np.asarray(CLASSES, object)[cell // (2 * width) % len(CLASSES)],
-                             "chain_novel": cell // width % 2 == 1, "sub_cause": np.asarray(("",) + SUB_CAUSES, object)[cell % width],
+                             "chain_novel": cell // width % 2 == 1,
+                             "sub_cause": np.asarray(("",) + SUB_CAUSES, object)[cell % width],
                              "reads": n_reads, "spliced": total(spliced), "complete_5p": total(reads.complete_5p.to_numpy()),
-                             "covers_start": total(reads.covers_start.to_numpy()), "other_class": total(reads.other_class.to_numpy())})
+                             "covers_start": total(reads.covers_start.to_numpy()),
+                             "other_class": total(reads.other_class.to_numpy())})
     return sites[SITE_COLUMNS], by_class[BY_CLASS_COLUMNS]
 
 
@@ -445,7 +448,8 @@ def isoform_ends(gtf, refs=None):
             f = line.split("\t")
             if line.startswith("#") or f[2] != "transcript" or (refs is not None and f[0] not in refs):
                 continue
-            rows.append((f[8].split('transcript_id "', 1)[1].split('"', 1)[0], f[0], f[6], int(f[4]) if f[6] == "+" else int(f[3]) - 1))
+            tid = f[8].split('transcript_id "', 1)[1].split('"', 1)[0]
+            rows.append((tid, f[0], f[6], int(f[4]) if f[6] == "+" else int(f[3]) - 1))
     return pd.DataFrame(rows, columns=["isoform", "ref", "strand", "site"])
 
 
@@ -462,7 +466,8 @@ def pigeon_crosscheck(ends, classification, sites):
     t = j.groupby(["structural_category", "subcategory", "context"]).size().rename("isoforms").reset_index()
     t = t.iloc[np.lexsort([t.context.map((CLASSES + ("none",)).index), t.subcategory, t.structural_category])]
     matched = int((context != "none").sum())
-    return t.reset_index(drop=True), {"isoform_ends": len(ends), "without_classification": int(j.structural_category.eq("not_classified").sum()),
+    return t.reset_index(drop=True), {"isoform_ends": len(ends),
+                                      "without_classification": int(j.structural_category.eq("not_classified").sum()),
                                       "matched": matched, "share_matched": matched / len(ends) if len(ends) else None}
 
 

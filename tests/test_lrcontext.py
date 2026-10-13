@@ -255,7 +255,8 @@ def test_reduce_sites_gives_both_versions_per_site():
     sites, by_class = reduce_sites(_reads(REDUCE_READS), "chrS")
     assert list(sites.columns) == SITE_COLUMNS and list(by_class.columns) == BY_CLASS_COLUMNS
     assert (sites.ref == "chrS").all() and (by_class.ref == "chrS").all()
-    assert list(zip(sites.strand, sites.site)) == [("+", 100), ("+", 200), ("+", 300), ("+", 400), ("+", 500), ("-", 50), ("-", 100)]
+    assert list(zip(sites.strand, sites.site)) == [("+", 100), ("+", 200), ("+", 300), ("+", 400), ("+", 500), ("-", 50),
+                                                   ("-", 100)]
     assert sites.n_accepted.tolist() == [3, 3, 3, 2, 2, 2, 1]
     counts = sites[[f"n_{c}" for c in CLASSES]]
     assert (counts.sum(axis=1) == sites.n_accepted).all()
@@ -263,7 +264,8 @@ def test_reduce_sites_gives_both_versions_per_site():
             (f"n_{IG}", 2): 1, (f"n_{AS}", 3): 1, (f"n_{IG}", 3): 1, (f"n_{NJ}", 4): 1, ("n_intron_after_junction", 4): 1,
             ("n_annotated_end", 5): 1, (f"n_{AS}", 5): 1, ("n_3UTR", 6): 1}
     assert {(c, i): int(v) for c in counts for i, v in enumerate(counts[c]) if v} == want
-    assert sites.n_starts_outside.tolist() == [1, 0, 0, 0, 0, 0, 0] and sites.n_retained_after_junction.tolist() == [0, 1, 0, 0, 0, 0, 0]
+    assert sites.n_starts_outside.tolist() == [1, 0, 0, 0, 0, 0, 0]
+    assert sites.n_retained_after_junction.tolist() == [0, 1, 0, 0, 0, 0, 0]
     assert sites.n_chain_novel.tolist() == [1, 1, 0, 0, 1, 0, 1] and sites.n_chain_novel_suffix1.tolist() == [1, 0, 0, 0, 1, 0, 0]
     assert sites.n_end_NF.tolist() == [0, 0, 0, 0, 0, 1, 0] and sites.n_no_splice.tolist() == [1, 0, 0, 0, 0, 1, 0]
     # placed: the chain_novel reads count under their class; a tie goes to the first class of CLASSES
@@ -288,7 +290,8 @@ def test_reduce_sites_gives_both_versions_per_site():
         ("+", 100, "CDS", True, "", 1, 1, 0, 0, 1),
         ("+", 200, "CDS", True, "", 1, 1, 0, 0, 0), ("+", 200, NJ, False, DONOR, 1, 0, 0, 0, 0),
         ("+", 200, NJ, False, NEITHER, 1, 0, 0, 0, 0),
-        ("+", 300, NJ, False, NEAR, 1, 0, 0, 0, 0), ("+", 300, AS, False, "", 1, 0, 0, 0, 0), ("+", 300, IG, False, "", 1, 0, 0, 0, 0),
+        ("+", 300, NJ, False, NEAR, 1, 0, 0, 0, 0), ("+", 300, AS, False, "", 1, 0, 0, 0, 0),
+        ("+", 300, IG, False, "", 1, 0, 0, 0, 0),
         ("+", 400, AS, False, "", 1, 0, 0, 0, 0), ("+", 400, IG, False, "", 1, 0, 0, 0, 0),
         ("+", 500, "intron_after_junction", True, "", 1, 1, 0, 0, 0), ("+", 500, NJ, False, SHORT, 1, 0, 0, 0, 0),
         ("-", 50, "annotated_end", False, "", 1, 1, 1, 1, 1), ("-", 50, AS, False, "", 1, 0, 0, 0, 0),
@@ -297,7 +300,8 @@ def test_reduce_sites_gives_both_versions_per_site():
 
 def test_reduce_sites_without_reads():
     sites, by_class = reduce_sites(_reads([]), "chrE")
-    assert list(sites.columns) == SITE_COLUMNS and list(by_class.columns) == BY_CLASS_COLUMNS and not len(sites) and not len(by_class)
+    assert list(sites.columns) == SITE_COLUMNS and list(by_class.columns) == BY_CLASS_COLUMNS
+    assert not len(sites) and not len(by_class)
 
 
 def _stage16(sites, label, region):
@@ -342,7 +346,8 @@ def test_intron_sites_with_a_reason_other_than_novel_junction():
     bad = intron_sites_off_model(sites.assign(region="intron"))
     assert list(zip(bad.strand, bad.site, bad.context)) == [("+", 400, AS)]
     # intergenic when placed and novel junction when strict
-    bad = intron_sites_off_model(sites.assign(region="intron", context=sites.context.replace(AS, IG), context_without_chain_novel=NJ))
+    bad = intron_sites_off_model(sites.assign(region="intron", context=sites.context.replace(AS, IG),
+                                              context_without_chain_novel=NJ))
     assert list(zip(bad.strand, bad.site, bad.context)) == [("+", 400, IG)]
     # the strict version is checked too
     sites.loc[0, ["region", "context_without_chain_novel"]] = ["intron", IG]
@@ -391,8 +396,10 @@ def test_totals_of_the_json():
     zero = dict.fromkeys(CLASSES, 0)
     # the sites of the region intron are (+,200), novel junction in both versions, and (+,500), novel junction when strict
     assert t["accepted_reads"] == 16 and t["sites"] == 7 and t["intron_sites"] == 2
-    assert t["placed"] == {"reads_by_class": zero | {"annotated_end": 1, "3UTR": 2, "CDS": 3, "intron_after_junction": 1, NJ: 4, AS: 3, IG: 2},
-                           "sites_by_context": zero | {"annotated_end": 1, "3UTR": 1, "CDS": 1, "intron_after_junction": 1, NJ: 2, AS: 1},
+    assert t["placed"] == {"reads_by_class": zero | {"annotated_end": 1, "3UTR": 2, "CDS": 3, "intron_after_junction": 1, NJ: 4,
+                                                     AS: 3, IG: 2},
+                           "sites_by_context": zero | {"annotated_end": 1, "3UTR": 1, "CDS": 1, "intron_after_junction": 1, NJ: 2,
+                                                       AS: 1},
                            "sites_tied": 4, "sites_top_share_at_most_half": 4, "intron_sites_top_no_model": 1}
     assert t["strict"] == {"reads_by_class": zero | {"annotated_end": 1, "3UTR": 1, "CDS": 1, NJ: 8, AS: 3, IG: 2},
                            "sites_by_context": zero | {"annotated_end": 1, "3UTR": 1, NJ: 4, AS: 1},
@@ -404,8 +411,8 @@ def test_totals_of_the_json():
     # compatible transcript with another class, and the same for the other reads
     assert t["by_class"]["CDS"] == {"reads": 3, "matched_intron": 3, "complete_5p": 1, "covers_start": 1, "other_class": 0,
                                     "chain_novel": 2, "chain_novel_other_class": 1}
-    assert t["by_class"]["annotated_end"] == {"reads": 1, "matched_intron": 1, "complete_5p": 1, "covers_start": 1, "other_class": 1,
-                                              "chain_novel": 0, "chain_novel_other_class": 0}
+    assert t["by_class"]["annotated_end"] == {"reads": 1, "matched_intron": 1, "complete_5p": 1, "covers_start": 1,
+                                              "other_class": 1, "chain_novel": 0, "chain_novel_other_class": 0}
     assert t["by_class"][NJ] == dict.fromkeys(("matched_intron", "complete_5p", "covers_start", "other_class", "chain_novel",
                                                "chain_novel_other_class"), 0) | {"reads": 4}
     assert list(t["by_class"]) == list(CLASSES)
@@ -441,8 +448,10 @@ def test_pigeon_crosscheck_matches_isoform_ends_to_sites():
     ends = pd.DataFrame({"isoform": ["a", "b", "c", "d", "e", "f"], "ref": ["chrS"] * 5 + ["chrE"],
                          "strand": ["+", "+", "-", "-", "+", "+"], "site": [510, 531, 90, 111, 895, 900]})
     cls = pd.DataFrame({"isoform": ["a", "b", "c", "d", "e", "x"],
-                        "structural_category": ["full-splice_match"] * 3 + ["incomplete-splice_match", "full-splice_match", "genic"],
-                        "subcategory": ["reference_match", "reference_match", "mono-exon", "3prime_fragment", "reference_match", "mono-exon"]})
+                        "structural_category": ["full-splice_match"] * 3 + ["incomplete-splice_match", "full-splice_match",
+                                                                            "genic"],
+                        "subcategory": ["reference_match", "reference_match", "mono-exon", "3prime_fragment", "reference_match",
+                                        "mono-exon"]})
     table, stats = pigeon_crosscheck(ends, cls, sites)
     assert list(table.columns) == ["structural_category", "subcategory", "context", "isoforms"]
     # a: 500 and 520 are both 10 away, the lower site wins (the stage 16 match); b: 520 is 11 away; c: 100 is 10 away;
@@ -465,7 +474,8 @@ def test_link_1179_gives_the_context_and_the_shifted_null():
     # real: 1005 -> 1000 (CDS, same label), 2990 -> 3000 (annotated_end, same), 5010 on minus -> 5000 (other label),
     # 3000 on minus and 4000 on plus have no site within 10 nt
     assert context.tolist() == ["CDS", "annotated_end", "intron_unspliced", "none", "none"]
-    assert link["real"]["matched"] == 3 and link["real"]["share_matched_by_label"] == {"templated": 0.5, "nontemplated": 1.0, "ambiguous": 0.0}
+    assert link["real"]["matched"] == 3
+    assert link["real"]["share_matched_by_label"] == {"templated": 0.5, "nontemplated": 1.0, "ambiguous": 0.0}
     assert link["real"]["agreement"] == {"templated": 1.0, "nontemplated": 0.5, "pooled": 2 / 3}
     # moved 1,000 nt upstream in transcript sense: plus sites go down (5, 1990, 3000), minus sites go up (6010, 4000).
     # 1990 -> 2000 (ambiguous site), 3000 -> 3000 (nontemplated site, the molecule is ambiguous), 4000 on minus -> 4000

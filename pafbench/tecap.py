@@ -77,8 +77,8 @@ def label_counts(sites, by_label):
     CIGAR N, and those tecap put into a bucket (label_buckets)."""
     g = sites.groupby("label")[["n_accepted", "n_no_splice"]].sum()
     classified = by_label.groupby("label").reads.sum()
-    return {label: {"written": int(r.n_accepted), "without_splice": int(r.n_no_splice), "classified": int(classified.get(label, 0))}
-            for label, r in g.iterrows()}
+    return {label: {"written": int(r.n_accepted), "without_splice": int(r.n_no_splice),
+                    "classified": int(classified.get(label, 0))} for label, r in g.iterrows()}
 
 
 def classify_library(parts, sample, out, sites, threads):

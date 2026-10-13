@@ -10,7 +10,8 @@ from pafbench.config import GTF, POLYASITE
 from pafbench.tecap import TAG, classify_library, label_buckets, label_counts, merge_parts, run_classify, site_buckets, site_key
 from tests.synth_long import HDR, long_read
 
-CAPTURED, EXON, INTRONIC = "Captured (>=50%)", "MechB-exon: upstream TE, priming on upstream exon", "MechB-aspecific: upstream TE, intronic/flanking"
+CAPTURED, EXON = "Captured (>=50%)", "MechB-exon: upstream TE, priming on upstream exon"
+INTRONIC = "MechB-aspecific: upstream TE, intronic/flanking"
 
 
 def test_site_key():
@@ -31,15 +32,18 @@ def _tecap_json(path, cells):
     return path
 
 
-CELLS = {"chr1:+:100": {CAPTURED: 4, EXON: 1}, "chr1:-:100": {INTRONIC: 2}, "chr2_KI270:1:+:7": {CAPTURED: 1}, "chr1:+:250": {EXON: 3}}
+CELLS = {"chr1:+:100": {CAPTURED: 4, EXON: 1}, "chr1:-:100": {INTRONIC: 2}, "chr2_KI270:1:+:7": {CAPTURED: 1},
+         "chr1:+:250": {EXON: 3}}
 SITES = pd.DataFrame({"ref": ["chr1", "chr1", "chr1", "chr1", "chr2_KI270:1"], "strand": ["+", "+", "-", "+", "+"],
-                      "site": [100, 250, 100, 900, 7], "label": ["templated", "nontemplated", "templated", "ambiguous", "templated"],
+                      "site": [100, 250, 100, 900, 7],
+                      "label": ["templated", "nontemplated", "templated", "ambiguous", "templated"],
                       "n_accepted": [6, 3, 5, 2, 1], "n_no_splice": [1, 0, 3, 2, 0]})
 
 
 def test_site_buckets_from_per_cell_metrics(tmp_path):
     t = site_buckets(_tecap_json(tmp_path / "S_terminal_exon.json", CELLS))
-    assert list(t.columns) == ["ref", "strand", "site", "bucket", "reads"] and t.site.dtype == "int64" and t.reads.dtype == "int64"
+    assert list(t.columns) == ["ref", "strand", "site", "bucket", "reads"]
+    assert t.site.dtype == "int64" and t.reads.dtype == "int64"
     # a reference name may hold a colon: the key is split from the right
     assert list(t.itertuples(index=False, name=None)) == [
         ("chr1", "+", 100, CAPTURED, 4), ("chr1", "+", 100, EXON, 1), ("chr1", "-", 100, INTRONIC, 2),
@@ -122,7 +126,8 @@ def test_classify_library_merges_runs_tecap_and_writes_both_tables(tmp_path, mon
     assert calls == [(out / "tecap" / "accepted.bam", "BD70", out / "tecap" / "out", 3)]
     result = out / "tecap" / "out" / "BD70_terminal_exon.json"
     assert pd.read_parquet(out / "tecap_site_buckets.parquet").to_dict("list") == {
-        "ref": ["chrS"] * 3, "strand": ["+"] * 3, "site": [1080, 1080, 1180], "bucket": [CAPTURED, EXON, CAPTURED], "reads": [2, 1, 2]}
+        "ref": ["chrS"] * 3, "strand": ["+"] * 3, "site": [1080, 1080, 1180], "bucket": [CAPTURED, EXON, CAPTURED],
+        "reads": [2, 1, 2]}
     assert pd.read_parquet(out / "tecap_buckets.parquet").to_dict("list") == {
         "label": ["ambiguous", "templated", "templated"], "bucket": [CAPTURED, CAPTURED, EXON], "reads": [2, 2, 1]}
     assert got.pop("seconds") >= 0

@@ -51,7 +51,8 @@ from pathlib import Path
 import pandas as pd
 import pysam
 
-from pafbench.config import FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT, OUT, PIGEON_DIR
+from pafbench.config import (FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT, OUT,
+                             PIGEON_DIR)
 from pafbench.lrcontext import (CONTEXT_COLUMNS, NOVEL_JUNCTION, VERSIONS, attach_stage16, context_tables, intron_sites_off_model,
                                 isoform_ends, link_1179, load_models, pigeon_crosscheck, reduce_sites, scan_context, totals)
 from pafbench.pool import map_forked
@@ -106,11 +107,13 @@ def main():
             raise SystemExit(f"{lib}: {e}")
         off = intron_sites_off_model(sites)
         if len(off):
-            listing = off[["ref", "strand", "site", "n_accepted", "context", "context_without_chain_novel"]].to_string(index=False)
+            listing = off[["ref", "strand", "site", "n_accepted", "context", "context_without_chain_novel"]].to_string(
+                index=False)
             raise SystemExit(f"{lib}: {len(off)} sites of the region intron with a top class no_model_antisense or "
                              f"no_model_intergenic\n{listing}")
         scans[lib] = (sites, pd.concat([p[3] for p in parts], ignore_index=True), parts)
-    mol = pd.read_parquet(args.base / "1179" / "truth" / "molecules_labeled.parquet", columns=["mol", "ref", "strand", "site", "label"])
+    mol = pd.read_parquet(args.base / "1179" / "truth" / "molecules_labeled.parquet",
+                          columns=["mol", "ref", "strand", "site", "label"])
     mol = mol[mol.ref.isin(args.refs)].reset_index(drop=True)
     link, line = mol[["mol"]].copy(), {}
     for lib, (sites, by_class, parts) in scans.items():
@@ -140,13 +143,14 @@ def main():
             summary["pigeon"] = {"gtf": str(PIGEON_GTF), "classification": str(PIGEON_CLASS)} | counts
         line[lib] = {"accepted_reads": summary["accepted_reads"], "sites": summary["sites"],
                      "reads_novel_junction": {v: summary[v]["reads_by_class"][NOVEL_JUNCTION] for v in VERSIONS},
-                     "sites_top_no_model": {v: sum(n for c, n in summary[v]["sites_by_context"].items() if c.startswith("no_model_"))
-                                            for v in VERSIONS},
+                     "sites_top_no_model": {v: sum(n for c, n in summary[v]["sites_by_context"].items()
+                                                   if c.startswith("no_model_")) for v in VERSIONS},
                      "intron_sites": summary["intron_sites"]}
         line[lib] |= {k: {v: summary[v][k] for v in VERSIONS}
                       for k in ("intron_sites_top_no_model", "sites_tied", "sites_top_share_at_most_half")}
         line[lib]["sites_top_class_on_chain_novel_only"] = summary["sites_top_class_on_chain_novel_only"]
-        line[lib]["vs_1179"] = {k: {x: summary["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")} for k in ("real", "null")}
+        line[lib]["vs_1179"] = {k: {x: summary["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")}
+                                for k in ("real", "null")}
         if not args.no_tecap:
             summary["tecap"] = classify_library({p[1]: d / "tecap" / f"part.{p[1]}.bam" for p in parts}, lib, d, sites,
                                                 min(args.workers, len(args.refs)))

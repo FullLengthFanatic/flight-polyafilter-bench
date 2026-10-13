@@ -322,7 +322,8 @@ def _context_reads():
 # classed at their last cDNA base (1049 on plus) as reads without introns, 5' UTR of TA, 49 nt from its 5' end, and in an
 # intron of TB; the plus one has MAPQ 20, the lowest that stage 16 uses. One read whose only junction lies in the run: it is
 # classed as a read without introns (CDS of TA from its first base on, intron of TB) and is still a read with a splice
-EXTRA = [(1050, ctx("5UTR", "TA", complete_5p=True, other_class=True)), (G - 1050, ctx("5UTR", "TAm", complete_5p=True, other_class=True)),
+EXTRA = [(1050, ctx("5UTR", "TA", complete_5p=True, other_class=True)),
+         (G - 1050, ctx("5UTR", "TAm", complete_5p=True, other_class=True)),
          (1090, ctx("CDS", "TA", complete_5p=True, covers_start=True, other_class=True))]
 
 
@@ -338,11 +339,13 @@ def test_scan_context_takes_the_reads_and_sites_of_stage_16(tmp_path):
     models = load_models(write_gtf(tmp_path / "genes.gtf"), list(CHROMS))
     reads, counts = scan_context(bam, "chrS", models["chrS"], tagged=tmp_path / "tagged.bam")
     sites16, counts16, _ = scan_long_reads(bam, "chrS")
-    assert counts == {k: counts16[k] for k in ("records", "secondary_supplementary", "low_mapq", "used", "accepted")} | {"empty_body": 2}
+    assert counts == {k: counts16[k] for k in ("records", "secondary_supplementary", "low_mapq", "used", "accepted")} | {
+        "empty_body": 2}
     assert counts["records"] == 2 * len(DESIGNED) + 8 and counts["accepted"] == 2 * len(DESIGNED) + 3 == len(reads)
     # the sites with an accepted read and their read counts are those of stage 16
     acc = sites16[sites16.n_accepted >= 1]
-    assert reads.groupby(["minus", "site"]).size().to_dict() == {(s == "-", p): n for s, p, n in zip(acc.strand, acc.site, acc.n_accepted)}
+    assert reads.groupby(["minus", "site"]).size().to_dict() == {(s == "-", p): n
+                                                                 for s, p, n in zip(acc.strand, acc.site, acc.n_accepted)}
     # one row per accepted read with its class and flags
     want = [_read_row(a, G - site if minus else site, expected(name, minus)) for a, (name, minus, site) in zip(
         records, [(name, minus, site) for name, (_, site, _) in DESIGNED.items() for minus in (False, True)])]
@@ -402,7 +405,8 @@ def stage30_inputs(tmp_path, monkeypatch):
     """Inputs of stage 30 for the designed reads: the BAM as BD67 and as BD70, the stage 16 site table of each made with
     stage 16's own functions, 1179 truth molecules, and a pigeon isoform GTF with its classification."""
     base = tmp_path / "base"
-    bam, gtf, fasta = write_bam(tmp_path / "long.bam", _context_reads()), write_gtf(tmp_path / "genes.gtf"), write_fasta(tmp_path / "genome.fa")
+    bam, gtf = write_bam(tmp_path / "long.bam", _context_reads()), write_gtf(tmp_path / "genes.gtf")
+    fasta = write_fasta(tmp_path / "genome.fa")
     seg = (load_region_segments(gtf), load_gene_segments(gtf))
     with pysam.FastaFile(str(fasta)) as fa:
         s16 = pd.concat([annotate_sites(scan_long_reads(bam, ref)[0], ref, fa.fetch(ref).upper(), *seg) for ref in CHROMS],
@@ -415,7 +419,8 @@ def stage30_inputs(tmp_path, monkeypatch):
     # at the site of three designed reads, 10 nt from another, 11 nt from it, on the other strand of the first, and on
     # a reference that is not scanned
     mol = pd.DataFrame({"mol": [3, 5, 8, 9, 11], "ref": ["chrS"] * 4 + ["chrX"], "strand": ["+", "+", "+", "-", "+"],
-                        "site": [1650, 1340, 1341, 1650, 1650], "label": ["templated", "nontemplated", "templated", "ambiguous", "templated"],
+                        "site": [1650, 1340, 1341, 1650, 1650],
+                        "label": ["templated", "nontemplated", "templated", "ambiguous", "templated"],
                         "a_band": "x"})
     mol.to_parquet(base / "1179" / "truth" / "molecules_labeled.parquet", index=False)
     pigeon = tmp_path / "pigeon.gtf"
@@ -461,7 +466,8 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
             assert sites[c].tolist() == acc[c].tolist(), c
         assert (sites[[f"n_{c}" for c in CLASSES]].sum(axis=1) == sites.n_accepted).all()
         t = _types(d / "isoform_context_sites.parquet")
-        assert {t[c] for c in ("ref", "strand", "label", "a_band", "region", "context", "context_without_chain_novel")} == {"string"}
+        assert {t[c] for c in ("ref", "strand", "label", "a_band", "region", "context", "context_without_chain_novel")} == {
+            "string"}
         assert {t[c] for c in CONTEXT_COLUMNS if c.startswith("n_")} | {t["site"]} == {"int64"}
         assert (t["hexamer"], t["tied"]) == ("bool", "bool")
         assert {t[c] for c in ("top_share", "share_spliced", "share_5p_complete", "median_length")} == {"double"}
@@ -480,8 +486,10 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         # 417 nt), two at +1550 (266 and 377 nt), and the read without a body (7S40M45S)
         assert (at("+", 1800).median_length, at("+", 1550).median_length, at("+", 1050).median_length) == (468, 321.5, 92)
         summary = pd.read_parquet(d / "isoform_context_summary.parquet")
-        assert list(summary.columns) == ["version", "label", "a_band", "context", "sites", "reads", "share_spliced", "share_5p_complete"]
-        assert _types(d / "isoform_context_summary.parquet") == dict(zip(summary.columns, ["string"] * 4 + ["int64"] * 2 + ["double"] * 2))
+        assert list(summary.columns) == ["version", "label", "a_band", "context", "sites", "reads", "share_spliced",
+                                         "share_5p_complete"]
+        assert _types(d / "isoform_context_summary.parquet") == dict(zip(summary.columns,
+                                                                         ["string"] * 4 + ["int64"] * 2 + ["double"] * 2))
         region = pd.read_parquet(d / "region_by_context.parquet")
         assert list(region.columns) == ["version", "region", "context", "sites", "reads"]
         assert _types(d / "region_by_context.parquet") == dict(zip(region.columns, ["string"] * 3 + ["int64"] * 2))
@@ -490,12 +498,13 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
                 v: {"sites": len(acc), "reads": n_reads} for v in ("placed", "strict")}
         # placed: 2 x 5 reads keep their class; strict: they are novel junction reads
         by = lambda v: summary[summary.version == v].groupby("context").reads.sum()
-        assert by("strict")[NJ] - by("placed")[NJ] == 10 and by("placed")[NJ] == 6 and by("placed")[AS] == 4 and by("placed")[IG] == 3
+        assert by("strict")[NJ] - by("placed")[NJ] == 10 and by("placed")[NJ] == 6
+        assert by("placed")[AS] == 4 and by("placed")[IG] == 3
         assert set(region.region) == set(acc.region) and "intron" in set(acc.region)
         no_model = pd.read_parquet(d / "sites_no_model.parquet")
         assert list(no_model.columns) == ["ref", "strand", "site", "region", "label", "n_accepted", "reason", "sub_cause"]
-        assert _types(d / "sites_no_model.parquet") == dict(zip(no_model.columns, ["string"] * 2 + ["int64"] + ["string"] * 2 + ["int64"]
-                                                                + ["string"] * 2))
+        assert _types(d / "sites_no_model.parquet") == dict(zip(
+            no_model.columns, ["string"] * 2 + ["int64"] + ["string"] * 2 + ["int64"] + ["string"] * 2))
         # near, donor_only and sites_not_joined have one read each at 1800: the first of SUB_CAUSES is the main one
         assert sorted(zip(no_model.strand, no_model.site, no_model.reason, no_model.sub_cause)) == sorted(
             [("+", 1800, "novel_junction", "near_annotated_intron"), ("-", G - 1800, "novel_junction", "near_annotated_intron"),
@@ -505,17 +514,21 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         merged = no_model.merge(sites, on=["ref", "strand", "site"], suffixes=("", "_s"))
         assert (merged.region == merged.region_s).all() and (merged.label == merged.label_s).all() and len(merged) == 9
         j = json.loads((d / "isoform_context.json").read_text())
-        assert j["library"] == lib and j["refs"] == ["chrS", "chrE", "chrA"] and j["accepted_reads"] == n_reads and j["sites"] == len(acc)
+        assert j["library"] == lib and j["refs"] == ["chrS", "chrE", "chrA"]
+        assert j["accepted_reads"] == n_reads and j["sites"] == len(acc)
         assert j["records"] == {"records": n_reads + 5, "secondary_supplementary": 2, "low_mapq": 1, "used": n_reads + 2,
                                 "accepted": n_reads, "empty_body": 2}
-        assert j["tolerances"] == {"LONG_END_TOL": 10, "NEAR_INTRON_TOL": 5, "MIN_INTRON": 50, "FIVE_PRIME_TOL": 50, "NULL_SHIFT": 1000}
+        assert j["tolerances"] == {"LONG_END_TOL": 10, "NEAR_INTRON_TOL": 5, "MIN_INTRON": 50, "FIVE_PRIME_TOL": 50,
+                                   "NULL_SHIFT": 1000}
         assert j["acceptance"] == {"sites_and_accepted_reads_equal_stage16": True, "one_class_per_accepted_read": True,
                                    "intron_sites_off_model": 0}
         assert j["placed"]["reads_by_class"][NJ] == 6 and j["strict"]["reads_by_class"][NJ] == 16
-        assert j["flagged_reads"]["chain_novel"] == 10 and j["per_ref"]["chrE"]["records"] == 0 and j["per_ref"]["chrS"]["seconds"] > 0
+        assert j["flagged_reads"]["chain_novel"] == 10
+        assert j["per_ref"]["chrE"]["records"] == 0 and j["per_ref"]["chrS"]["seconds"] > 0
         # link to 1179: the molecules on the scanned references; 1340 is 10 nt from the site 1330, 1341 is 11 nt from it
         v = j["vs_1179"]
-        assert v["real"]["molecules"] == 4 and v["real"]["matched"] == 2 and v["null_shift_nt"] == 1000 and v["null"]["matched"] == 0
+        assert v["real"]["molecules"] == 4 and v["real"]["matched"] == 2
+        assert v["null_shift_nt"] == 1000 and v["null"]["matched"] == 0
         # tecap: the tagged BAM holds the accepted reads in the order of the header; the stand-in puts the spliced ones into
         # one bucket. tecap gets one worker per reference, at most --workers
         with pysam.AlignmentFile(str(d / "tecap" / "accepted.bam")) as fh:
@@ -525,12 +538,15 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         assert json.loads((d / "tecap" / "out" / f"{lib}_terminal_exon.json").read_text())["threads"] == 3
         assert sorted(p.name for p in (d / "tecap").iterdir()) == ["accepted.bam", "accepted.bam.bai", "out"]
         buckets, by_label = pd.read_parquet(d / "tecap_site_buckets.parquet"), pd.read_parquet(d / "tecap_buckets.parquet")
-        assert list(buckets.columns) == ["ref", "strand", "site", "bucket", "reads"] and list(by_label.columns) == ["label", "bucket", "reads"]
-        assert _types(d / "tecap_site_buckets.parquet") == dict(zip(buckets.columns, ["string"] * 2 + ["int64", "string", "int64"]))
+        assert list(buckets.columns) == ["ref", "strand", "site", "bucket", "reads"]
+        assert list(by_label.columns) == ["label", "bucket", "reads"]
+        assert _types(d / "tecap_site_buckets.parquet") == dict(zip(buckets.columns,
+                                                                    ["string"] * 2 + ["int64", "string", "int64"]))
         assert _types(d / "tecap_buckets.parquet") == {"label": "string", "bucket": "string", "reads": "int64"}
         assert buckets.reads.sum() == by_label.reads.sum() == n_spliced and set(buckets.bucket) == {"spliced"}
         per_label = j["tecap"]["per_label"]
-        assert per_label == {k: {"written": int(g.n_accepted.sum()), "without_splice": w, "classified": int(g.n_accepted.sum()) - w}
+        assert per_label == {k: {"written": int(g.n_accepted.sum()), "without_splice": w,
+                                 "classified": int(g.n_accepted.sum()) - w}
                              for k, g in acc.groupby("label") for w in [per_label[k]["without_splice"]]}
         assert sum(v["without_splice"] for v in per_label.values()) == n_reads - n_spliced
         assert j["tecap"]["json_bytes"] == (d / "tecap" / "out" / f"{lib}_terminal_exon.json").stat().st_size
@@ -540,15 +556,16 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         # tied, with a top class that holds half of the reads: placed, the two sites at 1900 (annotated_end and 3UTR, both reads
         # chain_novel, so the top class rests on chain_novel reads alone); strict, the two at 1550. The sites of the region
         # intron are those at 1330 and 1550, none with a no_model top class
-        link = {k: {"share_matched_by_label": j["vs_1179"][k]["share_matched_by_label"], "agreement": j["vs_1179"][k]["agreement"]}
-                for k in ("real", "null")}
+        link = {k: {x: j["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")} for k in ("real", "null")}
         assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "reads_novel_junction": {"placed": 6, "strict": 16},
                                 "sites_top_no_model": {"placed": 9, "strict": 11},
                                 "intron_sites": 4, "intron_sites_top_no_model": {"placed": 0, "strict": 0},
-                                "sites_tied": {"placed": 2, "strict": 2}, "sites_top_share_at_most_half": {"placed": 2, "strict": 2},
+                                "sites_tied": {"placed": 2, "strict": 2},
+                                "sites_top_share_at_most_half": {"placed": 2, "strict": 2},
                                 "sites_top_class_on_chain_novel_only": 2, "vs_1179": link, "tecap": per_label}
         assert (acc.region == "intron").sum() == 4
-        assert at("+", 1900).context_without_chain_novel == NJ and at("+", 1550).context_without_chain_novel == "intron_after_junction"
+        assert at("+", 1900).context_without_chain_novel == NJ
+        assert at("+", 1550).context_without_chain_novel == "intron_after_junction"
     # pigeon cross-check, BD70 only: ends at +1805 (5 nt from the site 1800), +1811 (11 nt), chrE (no site) and, on minus,
     # at the site of the mirrored full_chain_annotated_end read; the isoform of chrX is not on a scanned reference
     assert not (out / "BD67" / "pigeon_crosscheck.parquet").exists()
