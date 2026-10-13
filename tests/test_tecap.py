@@ -19,7 +19,7 @@ def test_site_key():
 
 
 def _tecap_json(path, cells):
-    """<sample>_terminal_exon.json as tecap 0.3.2 writes it, cut down to the keys around per_cell_metrics (our
+    """<sample>_terminal_exon.json as tecap 0.4.0 writes it, cut down to the keys around per_cell_metrics (our
     observation: design_m3_draft/review/v3/lens_stage30_whole/tecap_site_tag_out/BD70_chr21_site_terminal_exon.json)."""
     per_cell = {k: {"total": sum(c.values()), "counts": c, "fractions": {b: n / sum(c.values()) for b, n in c.items()}}
                 for k, c in cells.items()}
