@@ -1,16 +1,19 @@
 """The counting rule of stage 24 (pafbench.recount) on the parts of the synthetic 10x library, against the designed tables
 of tests/synth.build_10x and plain counts."""
+import gzip
 import shutil
+from collections import Counter
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from pafbench import recount
+from pafbench import matrices, recount
 from pafbench.flags import setting_tag
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index
 from pafbench.transcripts import load_transcripts
 from tests.synth import CELLS_10X, CHROMS, SETTINGS_10X
+from tests.test_synth10x import CELL, CELL_RECORDS, MATRIX
 
 TAGS = [setting_tag(s) for s in SETTINGS_10X]
 REFS = list(CHROMS)
@@ -229,3 +232,155 @@ def test_key_on_two_references_is_summed_and_counted(synth10x, parts, tmp_path):
     clean, _ = _blocks(parts)
     for b, c in zip(blocks, clean):
         pd.testing.assert_frame_equal(b[~b.key.isin(keys)].reset_index(drop=True), c[~c.key.isin(keys)].reset_index(drop=True))
+
+
+def _dense(counts):
+    """{(barcode, gene): n} as a cells by genes array."""
+    m = np.zeros((len(CALLED), len(GENES)), np.int64)
+    for (cb, gene), n in counts.items():
+        m[CALLED.index(cb), GENES.index(gene)] = n
+    return m
+
+
+def _designed_matrices(s):
+    """Dense M0 and, per tag, L, G and the matrix after filtering, counted from the events table of the fixture."""
+    ev = s.events
+    first = ev[ev.tag == TAGS[0]]
+    m0 = _dense(Counter(zip(first.cb[first.before.notna()], first.before.dropna())))
+    out = {}
+    for tag in TAGS:
+        e = ev[ev.tag == tag]
+        out[tag] = (_dense(Counter(zip(e.cb[e.lost], e.before[e.lost]))), _dense(Counter(zip(e.cb[e.gained], e.after[e.gained]))),
+                    _dense(Counter(zip(e.cb[e.after.notna()], e.after.dropna()))))
+    return m0, out
+
+
+def _tally(part_dir, refs=REFS, tags=TAGS):
+    blocks, _ = _blocks(part_dir, refs, tags)
+    tally = recount.Tally(len(CALLED), len(GENES), tags)
+    for r, block in enumerate(blocks):
+        tally.add(block, r)
+    return tally
+
+
+def test_tally_gives_the_designed_matrices(synth10x, parts):
+    m0, by_tag = _designed_matrices(synth10x)
+    tally = _tally(parts)
+    got = tally.matrix("unfiltered")
+    assert got.format == "csr" and got.dtype == np.int32 and got.has_canonical_format and (got.data > 0).all()
+    assert np.array_equal(got.toarray(), m0) and m0.sum() == 20
+    # the groups with a winner read: the matrix Cell Ranger wrote, two entries away from the rule (the source patterns)
+    xf = tally.matrix("xf").toarray()
+    assert np.array_equal(xf, _dense({(CELLS_10X[c], g): n for (c, g), n in MATRIX.items()}))
+    assert {(CALLED[i], GENES[j]): (int(xf[i, j]), int(m0[i, j])) for i, j in np.argwhere(xf != m0)} == {
+        (CELLS_10X["c4"], "g3"): (0, 1), (CELLS_10X["c5"], "g1"): (2, 1)}
+    for tag, (lost, gained, after) in by_tag.items():
+        l, g = tally.matrix(("lost", tag)), tally.matrix(("gained", tag))
+        assert np.array_equal(l.toarray(), lost) and np.array_equal(g.toarray(), gained), tag
+        assert np.array_equal(matrices.filtered(got, l, g).toarray(), after) and np.array_equal(m0 - lost + gained, after)
+    assert by_tag[TAGS[1]][1].sum() == 4 and by_tag[TAGS[0]][0].sum() == 6          # gains with -i, losses in default mode
+    # each gene sits on one reference; g4 has no read group of a called cell
+    assert tally.gene_ref.tolist() == [0, 0, 1, -1]
+
+
+def test_tally_of_one_reference_counts_a_group_whose_winner_sits_elsewhere(synth10x, parts):
+    """The comparison of check A4 on a subset BAM: on chrB alone the g3 groups of three_vs_one and winner_keeps have no
+    partner, so the rule counts them there."""
+    m0, _ = _designed_matrices(synth10x)
+    alone = _tally(parts, ["chrB"]).matrix("unfiltered").toarray()
+    c2, c4, g3 = CALLED.index(CELLS_10X["c2"]), CALLED.index(CELLS_10X["c4"]), GENES.index("g3")
+    assert (alone[c2, g3], m0[c2, g3], alone[c4, g3], m0[c4, g3]) == (2, 1, 2, 1)
+    assert alone[:, :2].sum() == 0 and alone.sum() == 6            # one UMI per read group of chrB
+
+
+def test_records_of_the_parts_are_summed_per_cell_region_and_gx(synth10x, parts):
+    rec = recount.sum_records(parts, REFS, len(CALLED), TAGS)
+    assert rec.shape == (len(CALLED) + 1, 4, 2, 4 + len(TAGS)) and rec.dtype == np.int64
+    got = {(CELL[CALLED[c]], "ENI"[re_], bool(gx)): tuple(rec[c, re_, gx, [0, 1, 4, 5, 6, 7]].tolist())
+           for c, re_, gx in np.argwhere(rec[:-1, :, :, 0] > 0)}
+    assert got == CELL_RECORDS
+    frames = pd.concat(pd.read_parquet(parts / f"{ref}.cell_records.parquet") for ref in REFS)
+    every = frames[frames.cell < 0].groupby(["re", "gx"])[["total", "with_ub", "units", "units_rg"] + TAGS].sum()
+    for (re_, gx), row in every.iterrows():                           # the rows over all barcodes are the last cell
+        assert rec[-1, "ENI".index(re_), int(gx)].tolist() == row.tolist()
+    assert rec[-1, :, :, 0].sum() == every.total.sum() > rec[:-1, :, :, 0].sum()
+    units = frames[frames.cell >= 0].groupby("cell")[["units", "units_rg"]].sum()
+    assert rec[:-1, :, :, 2].sum(axis=(1, 2)).tolist() == units.units.tolist()
+    assert rec[:-1, :, :, 3].sum(axis=(1, 2)).tolist() == units.units_rg.tolist() and units.units_rg.sum() > 0
+
+
+def _totals(s, part_dir):
+    tally = _tally(part_dir)
+    m0 = tally.matrix("unfiltered")
+    lost, gained = ({t: tally.matrix((kind, t)) for t in TAGS} for kind in ("lost", "gained"))
+    with gzip.open(_matrix(s) / "features.tsv.gz", "rt") as fh:
+        features = [line.split("\t")[:2] for line in fh]
+    rec = recount.sum_records(part_dir, REFS, len(CALLED), TAGS)
+    return recount.totals(tally, m0, lost, gained, rec, CALLED, features, REFS), (m0, lost, gained)
+
+
+def test_totals_equal_sums_over_the_dense_matrices(synth10x, parts):
+    (cell, gene), _ = _totals(synth10x, parts)
+    m0, by_tag = _designed_matrices(synth10x)
+    names = ["unfiltered"] + TAGS
+    assert list(cell.columns) == ["cb", "tag", "umis", "genes", "lost", "gained", "switched", "umis_E", "umis_N", "umis_EN",
+                                  "mol_partial", "rec_E", "rec_N", "rec_I", "rec_none", "rec_EN_gx", "units_E", "units_N",
+                                  "units_I", "units_none", "units_rg_E", "units_rg_N", "rg_E", "rg_N"]
+    assert list(gene.columns) == ["gene_id", "gene_name", "ref", "tag", "umis", "cells", "lost", "gained", "umis_E", "umis_N",
+                                  "umis_EN"]
+    assert cell.tag.tolist() == [t for t in names for _ in CALLED] and cell.cb.tolist() == CALLED * len(names)
+    assert gene.tag.tolist() == [t for t in names for _ in GENES] and gene.gene_id.tolist() == GENES * len(names)
+    assert gene.gene_name.tolist() == ["G1", "G2", "G3", "G4"] * len(names)
+    assert gene.ref.fillna("").tolist() == ["chrA", "chrA", "chrB", ""] * len(names)
+    ev, groups = synth10x.events, synth10x.groups.set_index(["cb", "ub", "gene"])
+    for tag in names:
+        c, g = cell[cell.tag == tag], gene[gene.tag == tag]
+        zero = np.zeros_like(m0)
+        lost, gained, m = (zero, zero, m0) if tag == "unfiltered" else by_tag[tag]
+        assert c.umis.tolist() == m.sum(axis=1).tolist() and c.genes.tolist() == (m > 0).sum(axis=1).tolist(), tag
+        assert g.umis.tolist() == m.sum(axis=0).tolist() and g.cells.tolist() == (m > 0).sum(axis=0).tolist(), tag
+        assert c.lost.tolist() == lost.sum(axis=1).tolist() and c.gained.tolist() == gained.sum(axis=1).tolist()
+        assert g.lost.tolist() == lost.sum(axis=0).tolist() and g.gained.tolist() == gained.sum(axis=0).tolist()
+        # by the region class of the group that holds the UMI at the tag; a switch counts once per cell
+        e = ev[ev.tag == TAGS[0] if tag == "unfiltered" else ev.tag == tag]
+        held = e.before if tag == "unfiltered" else e.after
+        re_class = Counter()
+        partial, switched = Counter(), Counter()
+        for r, gene_held in zip(e.itertuples(), held):
+            if tag != "unfiltered":
+                switched[r.cb] += r.switched
+            if isinstance(gene_held, str):
+                row = groups.loc[(r.cb, r.ub, gene_held)]
+                re_class[(r.cb, gene_held, row.re_class)] += 1
+                if tag != "unfiltered":
+                    partial[r.cb] += int(r.before == r.after and row[f"rm_{tag}"] > 0)
+        for k, name in ((1, "umis_E"), (2, "umis_N"), (3, "umis_EN")):
+            assert c[name].tolist() == [sum(n for (cb, _, rc), n in re_class.items() if cb == x and rc == k) for x in CALLED]
+            assert g[name].tolist() == [sum(n for (_, ge, rc), n in re_class.items() if ge == x and rc == k) for x in GENES]
+        assert (c.umis_E + c.umis_N + c.umis_EN).tolist() == c.umis.tolist()
+        assert c.switched.tolist() == [switched[x] for x in CALLED] and c.mol_partial.tolist() == [partial[x] for x in CALLED]
+        # primary records of the cell kept at the tag, by RE, and those with RE E or N and a GX tag
+        t = names.index(tag) - 1
+        kept = lambda keys: [sum(n[0] - (n[2 + t] if t >= 0 else 0) for k, n in CELL_RECORDS.items() if k[0] == CELL[x] and keys(k))
+                             for x in CALLED]
+        assert c.rec_E.tolist() == kept(lambda k: k[1] == "E") and c.rec_N.tolist() == kept(lambda k: k[1] == "N")
+        assert c.rec_I.tolist() == kept(lambda k: k[1] == "I") and c.rec_none.tolist() == [0] * len(CALLED)
+        assert c.rec_EN_gx.tolist() == kept(lambda k: k[1] in "EN" and k[2])
+    # pa_and_member and winner_keeps lose a read at the last control and keep their UMI
+    assert cell[cell.tag == TAGS[3]].mol_partial.sum() == 2 and cell.switched.sum() == 10 and cell.umis_EN.sum() > 0
+    assert cell[cell.tag == TAGS[1]].rec_EN_gx.sum() < cell[cell.tag == TAGS[1]].rec_E.sum() + cell[cell.tag == TAGS[1]].rec_N.sum()
+    # units and read groups by RE are numbers of the unfiltered library: empty at the settings
+    unit_cols = ["units_E", "units_N", "units_I", "units_none", "units_rg_E", "units_rg_N", "rg_E", "rg_N"]
+    assert cell[cell.tag != "unfiltered"][unit_cols].isna().all().all() and cell[cell.tag == "unfiltered"][unit_cols].notna().all().all()
+    u = cell[cell.tag == "unfiltered"].set_index("cb")
+    frames = pd.concat(pd.read_parquet(parts / f"{ref}.cell_records.parquet") for ref in REFS)
+    by_re = frames[frames.cell >= 0].groupby(["cell", "re"])[["units", "units_rg"]].sum()
+    for name, col, re_ in (("units_E", "units", "E"), ("units_N", "units", "N"), ("units_I", "units", "I"),
+                           ("units_rg_E", "units_rg", "E"), ("units_rg_N", "units_rg", "N")):
+        want = [int(by_re[col].get((i, re_), 0)) for i in range(len(CALLED))]
+        assert u[name].tolist() == want and sum(want) > 0, name
+    assert u.units_none.tolist() == [0] * len(CALLED)
+    rg = synth10x.groups
+    assert u.rg_E.tolist() == [int(((rg.cb == x) & (rg.re_class & 1 > 0)).sum()) for x in CALLED]
+    assert u.rg_N.tolist() == [int(((rg.cb == x) & (rg.re_class & 2 > 0)).sum()) for x in CALLED]
+    assert u.rg_E.sum() + u.rg_N.sum() == len(rg) + (rg.re_class == 3).sum()
