@@ -10,9 +10,10 @@ and feature files, the settings in mask bit order), the rule version and the sha
 differ from this run's, the stage stops and asks for parts/ to be trashed (after an edit of the module, for example).
 
 Measured on 1417 (14 settings, 2026-10-13, /usr/bin/time -v, resident size of the largest process). chr1 alone, one
-worker: 6.96M records, 134 s in the reference (52,000 records per second over the two passes), 150 s wall, 2.61 GiB; the
-peak is set by chromosome length as in stage 13, not by the read-group table (1.98M rows). chr21 and chr22, two workers:
-2.78M records, 44 s wall, 0.93 GiB. On chr22 pass 1 takes 4.9 s, the pieces 4.3 s and pass 2 with the reduction 8.7 s.
+worker, run twice with the same bytes in both parts: 6.96M records and 1.98M read groups, 134 and 128 s in the reference
+(52,000 and 54,000 records per second over the two passes), 150 and 142 s wall, 2.61 GiB (stage 13 on the same reference:
+2.71 GiB, set by chromosome length). chr21 and chr22, two workers: 2.78M records, 44 s wall, 0.93 GiB. On chr22 pass 1
+takes 4.9 s, the pieces 4.3 s and pass 2 with the reduction 8.7 s.
 """
 import argparse
 import json
