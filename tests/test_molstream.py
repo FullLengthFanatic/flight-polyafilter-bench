@@ -390,6 +390,36 @@ def test_unit_that_starts_outside_the_read_group_and_pa_tag_of_zero(synth10x, tm
     assert rec[rec.cell >= 0][["total", "with_ub", "units", "units_rg"]].to_numpy().tolist() == [[2, 2, 1, 1]]
 
 
+def test_end3_of_a_last_read_with_an_intron_or_a_deletion(synth10x, tmp_path):
+    """The 3'-most forward read of a group covers reference bases that its sequence does not hold: 400 skipped (N) in one
+    group, 3 deleted (D) in the other. In the shared fixture the spliced read is not the last of its group and no record
+    of a read group has a deletion."""
+    hdr = pysam.AlignmentHeader.from_dict(HEADER)
+    with pysam.AlignmentFile(str(tmp_path / "end3.bam"), "wb", header=hdr) as out:
+        for pos, cigar, ub in ((2400, "90M", "AACCGGTTAACC"), (2560, "40M400N50M", "AACCGGTTAACC"),
+                               (3300, "90M", "ACACACGTGTGT"), (3400, "40M3D50M", "ACACACGTGTGT")):
+            a = _record(hdr, "r", "chrA", pos, CB=C1, UB=ub, GX="g1", RE="E", xf=17)
+            a.cigarstring = cigar
+            out.write(a)
+    pysam.index(str(tmp_path / "end3.bam"))
+    groups, _, _ = _scan(synth10x, "chrA", bam=tmp_path / "end3.bam")
+    # the last aligned base: 2560 + 40 + 400 + 50 - 1 and 3400 + 40 + 3 + 50 - 1
+    assert {ub: row[4:6] for (_, ub, _), row in _group_rows(groups).items()} == {"AACCGGTTAACC": (3049, 3049),
+                                                                                "ACACACGTGTGT": (3492, 3492)}
+
+
+@pytest.mark.parametrize("chunk", [1, 1000])
+def test_unit_bin_changes_at_a_multiple_of_1000(synth10x, tmp_path, chunk):
+    """Two records of one UMI at 1999 and 2000 are two units, two at 3000 and 3999 one."""
+    hdr = pysam.AlignmentHeader.from_dict(HEADER)
+    with pysam.AlignmentFile(str(tmp_path / "bins.bam"), "wb", header=hdr) as out:
+        for pos, cb in ((1999, C1), (2000, C1), (3000, C2), (3999, C2)):
+            out.write(_record(hdr, "r", "chrA", pos, CB=cb, UB="AGTCAGTCAGTC", GX="g1", RE="E", xf=17))
+    pysam.index(str(tmp_path / "bins.bam"))
+    _, rec, _ = _scan(synth10x, "chrA", bam=tmp_path / "bins.bam", chunk=chunk)
+    assert rec[rec.cell >= 0][["cell", "total", "units", "units_rg"]].to_numpy().tolist() == [[0, 2, 2, 2], [1, 2, 1, 1]]
+
+
 def test_unsorted_bam_stops_the_pass(synth10x, tmp_path):
     """Records out of coordinate order behind an index. Such a file cannot be indexed (our observation, pysam 0.24.1:
     pysam.index stops with "[E::hts_idx_push] Unsorted positions on sequence #1: 2151 followed by 1811"), so the index is
