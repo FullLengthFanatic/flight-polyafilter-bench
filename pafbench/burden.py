@@ -325,10 +325,34 @@ def usage_comparison(rows):
                            "region": {x: _quartiles(r[region == x]) for x in REGION_NAMES}}}
 
 
+def set_shares(c):
+    """Shares of the shared sites among all sites of the three sets ('all'), among the first group's sites ('first') and
+    among the second group's ('second'); c holds shared, first_only and second_only (numbers or columns)."""
+    s, f, o = (np.asarray(c[k], np.float64) for k in SETS)
+    return {"all": s / (s + f + o), "first": s / (s + f), "second": s / (s + o)}
+
+
+def set_counts(rows):
+    """Sites and molecules of each group per set of site_sets rows, and their set_shares."""
+    out = {}
+    for name in SETS:
+        m = rows.set == name
+        out[name] = {"sites": int(m.sum()), "molecules_first": int(rows.n_a[m].sum()), "molecules_second": int(rows.n_b[m].sum())}
+    return out | {"shares": {k: float(v) for k, v in set_shares({k: out[k]["sites"] for k in SETS}).items()}}
+
+
+def downsampling_summary(draws):
+    """Mean and 95% range (evaluate.interval) over the draws of downsample_sets of each set size and of set_shares."""
+    cols = {k: draws[k].to_numpy(np.float64) for k in SETS} | {f"share_{k}": v for k, v in set_shares(draws).items()}
+    return {"draws": len(draws), "molecules": int(draws.molecules.iloc[0]),
+            **{k: {"mean": float(v.mean()), **dict(zip(("lo", "hi"), interval(v)[:2]))} for k, v in cols.items()}}
+
+
 def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0, tol=SITE_TOL):
     """Set sizes of site_sets after drawing, in each gene of genes, as many of the second table's molecules as the first table
     has there (all of them where it has fewer), without replacement; draws draws from numpy.random.default_rng(seed). The
-    second table's sites of a draw are those with a drawn molecule. One row per draw: draw, shared, first_only, second_only."""
+    second table's sites of a draw are those with a drawn molecule. One row per draw: draw, molecules (drawn), shared,
+    first_only, second_only."""
     a = sa[sa.gene.isin(genes)].reset_index(drop=True)
     b = sb[sb.gene.isin(genes)].reset_index(drop=True)
     ca, cb = _coords(a, b)
@@ -345,8 +369,8 @@ def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0, tol=SITE_TOL)
         kept = np.zeros(len(b), bool)
         kept[site[drawn]] = True
         n = len(_mutual(ca, cb[kept], tol)[0])
-        out.append((k, n, len(a) - n, int(kept.sum()) - n))
-    return pd.DataFrame(out, columns=["draw", "shared", "first_only", "second_only"])
+        out.append((k, len(drawn), n, len(a) - n, int(kept.sum()) - n))
+    return pd.DataFrame(out, columns=["draw", "molecules", "shared", "first_only", "second_only"])
 
 
 def same_site_check(sa, sb, expected, tol=SITE_TOL):

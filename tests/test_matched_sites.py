@@ -4,8 +4,9 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
-from pafbench.burden import (END_BINS, SETS, downsample_sets, end_bin, end_distances, gene_ends, match_sites, same_site,
-                             same_site_check, set_summary, shared_genes, site_sets, site_table, usage, usage_comparison)
+from pafbench.burden import (END_BINS, SETS, downsample_sets, downsampling_summary, end_bin, end_distances, gene_ends,
+                             match_sites, same_site, same_site_check, set_counts, set_summary, shared_genes, site_sets,
+                             site_table, usage, usage_comparison)
 from pafbench.config import A_BANDS, DOWNSAMPLE_DRAWS
 from pafbench.exons import load_collapsed_exons
 from pafbench.labels import a_band
@@ -277,7 +278,8 @@ def _depth_tables():
 def test_downsample_sets_keeps_the_first_group_count_per_gene_and_is_seeded():
     a, b = _depth_tables()
     d = downsample_sets(a, b, ["g1", "g2"], draws=40, seed=1)
-    assert list(d.columns) == ["draw", "shared", "first_only", "second_only"] and d.draw.tolist() == list(range(40))
+    assert list(d.columns) == ["draw", "molecules", "shared", "first_only", "second_only"] and d.draw.tolist() == list(range(40))
+    assert (d.molecules == 3 + 3).all()
     # g1: 3 of its 12 cell molecules per draw, each at its own site; g2: both sites kept (3 molecules, fewer than 5)
     assert ((d.shared + d.second_only) == 3 + 2).all()
     assert (d.shared + d.first_only == 2).all()
@@ -290,6 +292,28 @@ def test_downsample_sets_keeps_the_first_group_count_per_gene_and_is_seeded():
     assert d1[["shared", "first_only", "second_only"]].values.tolist() == [[1, 0, 1]] * 3
     assert len(downsample_sets(a, b, ["g1"])) == DOWNSAMPLE_DRAWS
 
+
+def test_set_counts_and_shares(tmp_path):
+    a, b = _pair_tables(tmp_path)
+    c = set_counts(site_sets(a, b, ["gP", "gQ"]))
+    assert c == {"shared": {"sites": 2, "molecules_first": 6, "molecules_second": 8},
+                 "first_only": {"sites": 1, "molecules_first": 1, "molecules_second": 0},
+                 "second_only": {"sites": 1, "molecules_first": 0, "molecules_second": 2},
+                 "shares": {"all": 0.5, "first": 2 / 3, "second": 2 / 3}}
+
+
+def test_downsampling_summary():
+    d = pd.DataFrame({"draw": range(4), "molecules": 9, "shared": [1, 2, 3, 2], "first_only": [3, 2, 1, 2],
+                      "second_only": [0, 2, 1, 6]})
+    s = downsampling_summary(d)
+    assert list(s) == ["draws", "molecules", "shared", "first_only", "second_only", "share_all", "share_first", "share_second"]
+    assert s["draws"] == 4 and s["molecules"] == 9
+    assert s["shared"] == {"mean": 2.0, "lo": pytest.approx(np.percentile([1, 2, 3, 2], 2.5)),
+                           "hi": pytest.approx(np.percentile([1, 2, 3, 2], 97.5))}
+    share_all = np.array([1 / 4, 2 / 6, 3 / 5, 2 / 10])
+    assert s["share_all"]["mean"] == pytest.approx(share_all.mean())
+    assert s["share_first"]["mean"] == pytest.approx(0.5) and s["share_second"]["lo"] == pytest.approx(np.percentile(
+        [1, 0.5, 0.75, 0.25], 2.5))
 
 def test_same_site_check_reproduces_same_site(tmp_path):
     gtf = _gtf(tmp_path)
