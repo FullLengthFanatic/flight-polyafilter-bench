@@ -1020,6 +1020,24 @@ def test_failed_a3_and_a5_stop_before_the_matrices_and_a_passed_of_an_earlier_ru
     assert '"invariant": "removed_exceeds_reads"' in capsys.readouterr().err
 
 
+def test_a_run_that_dies_in_the_rule_pass_leaves_no_passed_of_an_earlier_run(synth10x, stage13, tmp_path, monkeypatch):
+    """A run that ends on an exception in the rule pass (or is killed there) has the molecule tables half written: the
+    recount.json of the run before, with its passed, is rewritten before the pass starts."""
+    bams = _library(synth10x, tmp_path, stage13)
+    assert _run(synth10x, tmp_path, bams)["passed"] is True
+
+    def planted(self, block, r):
+        raise RuntimeError("planted in the rule pass")
+
+    monkeypatch.setattr(recount.Tally, "add", planted)
+    with pytest.raises(RuntimeError, match="planted in the rule pass"):
+        _run(synth10x, tmp_path, bams)
+    res = json.loads((tmp_path / "recount" / "recount.json").read_text())
+    assert "passed" not in res and res["library"] == "X" and not [k for k in res if k[0] == "A"]
+    with pytest.raises(SystemExit, match="has not passed"):
+        recount.require_passed("X", tmp_path / "recount")
+
+
 def test_failed_a2_and_a4_leave_the_matrices_without_passed(synth10x, stage13, tmp_path, capsys):
     lib = _private(synth10x, tmp_path)
     bams = _library(lib, tmp_path, stage13)
