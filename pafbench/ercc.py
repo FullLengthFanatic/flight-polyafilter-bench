@@ -7,12 +7,16 @@ import pandas as pd
 import pysam
 from scipy import stats
 
-from .evaluate import tag_setting
+from .config import ERCC_LENGTH_ALPHA, ERCC_MIX_MIN
+from .evaluate import interval, resample_counts, tag_setting
 from .flags import flag_reference, setting_tag
 from .grid import published
 
 ID_HEADER = "ERCC ID"
 MIX1_HEADER = "concentration in Mix 1 (attomoles/ul)"
+MIX2_HEADER = "concentration in Mix 2 (attomoles/ul)"
+SUBGROUP_HEADER = "subgroup"
+LOG2_RATIO_HEADER = "log2(Mix 1/Mix 2)"
 
 
 def parse_ercc_conc(text):
@@ -84,3 +88,81 @@ def ercc_tables(reads, tags, conc):
         rows.append(pd.DataFrame({"ercc_id": c.index.to_numpy(), "setting": name, "umis": c.to_numpy()}))
         per[name] = {"correlation": ercc_correlation(c, conc), "umis": int(c.sum()), "umis_kept_share": float(c.sum() / base.sum())}
     return pd.concat(rows, ignore_index=True), per
+
+
+def parse_ercc_mixes(text):
+    """(ercc_id, subgroup, mix1_amol_per_ul, mix2_amol_per_ul, log2_mix1_over_mix2) from Thermo Fisher's ERCC table
+    (ERCC_CONC_URL); columns found by header. The ratio is the table's column "log2(Mix 1/Mix 2)", Mix 1 over Mix 2: 2 in
+    subgroup A, whose Mix 1 holds 4 times the Mix 2 amount (30000 against 7500 amol/ul for ERCC-00130)."""
+    t = pd.read_csv(io.StringIO(text), sep="\t", dtype=str)
+    t.columns = [c.strip() for c in t.columns]
+    return pd.DataFrame({"ercc_id": t[ID_HEADER].str.strip().to_numpy(),
+                         "subgroup": t[SUBGROUP_HEADER].str.strip().to_numpy(),
+                         "mix1_amol_per_ul": t[MIX1_HEADER].astype(np.float64).to_numpy(),
+                         "mix2_amol_per_ul": t[MIX2_HEADER].astype(np.float64).to_numpy(),
+                         "log2_mix1_over_mix2": t[LOG2_RATIO_HEADER].astype(np.float64).to_numpy()})
+
+
+def residual_slope(x, r, y, w):
+    """Per row of the weights w ([draws, ERCCs]; bootstrap draw counts, or a row of ones for ordinary least squares): the
+    slope b of y on x, the residuals e of that fit for every ERCC ([draws, ERCCs]) and the slope s of e on r, all fits
+    weighted by the row."""
+    sw = w.sum(axis=1, keepdims=True)
+    dx, dy, dr = (v - (w @ v)[:, None] / sw for v in (x, y, r))
+    b = (w * dx * dy).sum(axis=1) / (w * dx * dx).sum(axis=1)
+    e = dy - b[:, None] * dx
+    return b, e, (w * dr * e).sum(axis=1) / (w * dr * dr).sum(axis=1)
+
+
+def ercc_mix(counts, mixes, lengths, n=1000, seed=0):
+    """Which ERCC mix is in the tube (design 3.10, step 1), over the ERCCs of counts (unfiltered UMIs indexed by ercc_id)
+    with a UMI and a row in mixes (parse_ercc_mixes), as stage 15's ercc_with_concentration: log2 UMIs regressed on log2
+    Mix 1, then the slope of the residuals on the subgroup's log2(Mix 1/Mix 2), with a bootstrap 95% interval over ERCCs
+    (evaluate.resample_counts draws, both fits redone in each). Verdict "Mix 1" when the interval contains 0 and not -1,
+    "Mix 2" when it contains -1 and not 0, else "undecided"; also "undecided", with the reason, when a subgroup has fewer
+    than ERCC_MIX_MIN ERCCs (statistics then None) or when ERCC length (lengths: ercc_id to nt) differs between the
+    subgroups (Kruskal-Wallis p < ERCC_LENGTH_ALPHA), so that a capture that depends on length cannot pass for a mix."""
+    m = mixes.set_index("ercc_id")
+    ids = [i for i in counts.index if counts[i] > 0 and i in m.index]
+    t = m.loc[ids]
+    groups = sorted(m.subgroup.unique())
+    sub = t.subgroup.to_numpy()
+    ratio_of = m.groupby("subgroup").log2_mix1_over_mix2.first()
+    out = {"n": len(ids), "min_per_subgroup": ERCC_MIX_MIN, "pearson_log2_mix1": None, "pearson_log2_mix2": None,
+           "log2_slope_mix1": None, "residual_slope": None,
+           "subgroups": {g: {"log2_ratio": float(ratio_of[g]), "n": int((sub == g).sum()), "mean_residual": None,
+                             "median_length": None} for g in groups},
+           "length_check": None, "verdict": "undecided", "reason": "too few ERCCs"}
+    if min(v["n"] for v in out["subgroups"].values()) < ERCC_MIX_MIN:
+        return out
+    y = np.log2(counts[ids].to_numpy(np.float64))
+    x1, x2 = np.log2(t.mix1_amol_per_ul.to_numpy()), np.log2(t.mix2_amol_per_ul.to_numpy())
+    r = t.log2_mix1_over_mix2.to_numpy()
+    length = np.array([lengths[i] for i in ids], np.float64)
+    # r is log2(Mix 1/Mix 2). Under Mix 2 an ERCC holds its Mix 1 amount divided by 2 ** r, so log2 input = log2 Mix 1 - r:
+    # with UMIs proportional to input the residuals of the Mix 1 fit fall by r, a slope of -1 (about minus the fitted log2
+    # slope on Mix 1 when UMIs grow more slowly than input); under Mix 1 they do not depend on r, a slope of 0
+    b, e, s = residual_slope(x1, r, y, np.ones((1, len(ids))))
+    lo, hi, n_boot = interval(residual_slope(x1, r, y, resample_counts(len(ids), n, seed).astype(np.float64))[2])
+    h, p = stats.kruskal(*[length[sub == g] for g in groups])
+    out |= {"pearson_log2_mix1": float(stats.pearsonr(y, x1)[0]), "pearson_log2_mix2": float(stats.pearsonr(y, x2)[0]),
+            "log2_slope_mix1": float(b[0]),
+            "residual_slope": {"estimate": float(s[0]), "lo": lo, "hi": hi, "n_boot": n_boot, "seed": seed},
+            "length_check": {"test": "kruskal", "h": float(h), "p": float(p), "alpha": ERCC_LENGTH_ALPHA,
+                             "related": bool(p < ERCC_LENGTH_ALPHA)}}
+    for g in groups:
+        sel = sub == g
+        out["subgroups"][g] |= {"mean_residual": float(e[0, sel].mean()), "median_length": float(np.median(length[sel]))}
+    has0, has1 = lo <= 0 <= hi, lo <= -1 <= hi
+    if out["length_check"]["related"]:
+        out["reason"] = "subgroup related to length"
+    elif has0 != has1:
+        out["verdict"], out["reason"] = ("Mix 1" if has0 else "Mix 2"), None
+    else:
+        out["reason"] = "interval contains 0 and -1" if has0 else "interval excludes 0 and -1"
+    return out
+
+
+def mix_acceptance(mix, ercc):
+    """Acceptance of stage 32 (design 3.10): its n equals ercc_with_concentration of stage 15's ercc.json."""
+    return {"ercc_with_concentration": ercc["ercc_with_concentration"], "n_equal": mix["n"] == ercc["ercc_with_concentration"]}
