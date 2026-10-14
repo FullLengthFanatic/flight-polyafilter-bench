@@ -270,7 +270,8 @@ def totals(tally, m0, lost, gained, rec, barcodes, features, refs):
 
 
 def read_cr_matrix(cr_matrix_dir):
-    """Cell Ranger's filtered_feature_bc_matrix/matrix.mtx.gz as cells by genes CSR int32 (the file is genes by cells)."""
+    """Cell Ranger's filtered_feature_bc_matrix/matrix.mtx.gz as cells by genes CSR int32. The file is genes by cells (our
+    observation on the outs of 1417, the layout tests/synth._outs_10x writes)."""
     return sp.csr_matrix(scipy.io.mmread(str(Path(cr_matrix_dir) / "matrix.mtx.gz")).T, dtype=np.int32)
 
 
