@@ -18,6 +18,10 @@ Acceptance of 3.7, per library, in the summary line: the all-regions corrected s
 evaluate.label_purity equals templated_share_corrected of eval/selection.json to 9 decimals, and so does the per-band sum
 unless a templated band estimate is clipped (pafbench.burden.purity_acceptance). After writing its outputs the stage exits
 1 when a library fails.
+
+Measured on 2026-10-14 on the three libraries (90,099, 105,400 and 1,174,777 labeled molecules of called cells): 40 to
+45 s wall, 1.6 to 1.7 GiB peak tree memory (memwatch). The bootstrap multiplies whole-number counts, exact in float64, and
+our observation agrees: the tables were the same with the BLAS thread count left free and set to 4 (OPENBLAS_NUM_THREADS).
 """
 import argparse
 import json
