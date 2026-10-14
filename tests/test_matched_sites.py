@@ -8,9 +8,9 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
-from pafbench.burden import (END_BINS, _exon_coord, SETS, downsample_sets, downsampling_summary, end_bin, end_distances, gene_ends,
-                             match_sites, same_site, same_site_check, set_counts, set_summary, shared_genes, site_sets,
-                             site_table, usage, usage_comparison)
+from pafbench.burden import (END_BINS, SETS, _exon_coord, downsample_sets, downsampling_summary, end_bin, end_distances,
+                             gene_ends, match_sites, same_site, same_site_check, set_counts, set_summary, shared_genes,
+                             site_sets, site_table, usage, usage_comparison)
 from pafbench.config import A_BANDS, DOWNSAMPLE_DRAWS, REPO
 from pafbench.exons import load_collapsed_exons
 from pafbench.labels import a_band
