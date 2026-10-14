@@ -19,10 +19,11 @@ import pytest
 import scipy.sparse as sp
 
 from pafbench import matrices, molstream, recount, stream
-from pafbench.config import IMPACT_SETTINGS, REPO
+from pafbench.config import A4_PARALLEL, IMPACT_SETTINGS, REPO
 from pafbench.flags import setting_tag
 from pafbench.grid import published
 from pafbench.molstream import part_meta, read_groups_to_parts, row_index
+from pafbench.pool import map_forked
 from pafbench.transcripts import load_transcripts
 from tests.synth import CELLS_10X, CHROMS, SETTINGS_10X, run_original
 from tests.test_synth10x import CELL, CELL_RECORDS, MATRIX, _cell_ranger
@@ -1076,6 +1077,21 @@ def test_run_without_a_bam_for_a4_does_not_pass(synth10x, stage13, tmp_path):
     res = _run(synth10x, tmp_path, {})
     assert _stopped(tmp_path, res, "A1", "A1b", "A3", "A5", "A2", "A4", "A6") and res["A4"] == {
         "bams": 0, "refs": "all", "passed": False, "settings": {}}
+
+
+def test_a4_runs_the_first_bam_alone_and_then_a4_parallel_at_once(synth10x, stage13, tmp_path, monkeypatch):
+    """Design 3.2, Run time and memory: the first BAM runs alone. The results keep the order of the BAMs."""
+    bams = _library(synth10x, tmp_path, stage13)
+    calls = []
+
+    def spy(fn, jobs, workers):
+        calls.append(([job[0] for job in jobs], workers))
+        return map_forked(fn, jobs, workers)
+
+    monkeypatch.setattr(recount, "map_forked", spy)
+    res = _run(synth10x, tmp_path, bams)
+    assert calls == [(TAGS[:1], 1), (TAGS[1:], A4_PARALLEL)] and A4_PARALLEL == 4
+    assert res["passed"] is True and list(res["A4"]["settings"]) == TAGS == list(res["A6"]) and res["A4"]["bams"] == 4
 
 
 def test_incomplete_parts_are_refused_with_the_missing_files_named(synth10x, parts, tmp_path):

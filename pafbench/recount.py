@@ -722,7 +722,9 @@ def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4
         expected = {tag: matrices.load(lib, tag, matrix_dir) for tag in a4_bams}
     else:
         expected = rule_matrices(part_dir, list(a4_refs), tags, (len(cells), len(genes)))
-    done = map_forked(check_a4, [(tag, path, cr_dir, expected[tag]) for tag, path in a4_bams.items()], A4_PARALLEL)
+    jobs = [(tag, path, cr_dir, expected[tag]) for tag, path in a4_bams.items()]
+    # the first BAM runs alone, the others A4_PARALLEL at once (design 3.2, Run time and memory)
+    done = map_forked(check_a4, jobs[:1], 1) + map_forked(check_a4, jobs[1:], A4_PARALLEL)
     res["A4"] = {"bams": len(done), "refs": "all" if a4_refs is None else list(a4_refs),
                  "passed": bool(done) and all(a4["passed"] for _, a4, _ in done),
                  "settings": {tag: _jsonable(a4, barcodes, gene_ids) for tag, a4, _ in done}}
