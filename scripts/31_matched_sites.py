@@ -39,6 +39,9 @@ Writes under --out (default OUT/burden):
 Acceptance (burden.same_site_check): on the site tables without the gene filter, the one-way nearest match of
 burden.same_site reproduces every label-pair count of <base>/burden/same_site.parquet. When it does not, the outputs are
 written and the stage exits with an error.
+
+Measured on 2026-10-14 on the full data (/usr/bin/time -v): 49.8 s wall, 1.15 GiB maximum resident size. A prototype run
+of the same steps took 12 s to read genes.gtf twice, 12 s for the four site tables and 1.5 s for 5 draws.
 """
 import argparse
 import json
