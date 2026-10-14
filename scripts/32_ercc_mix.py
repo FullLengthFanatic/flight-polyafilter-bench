@@ -6,13 +6,15 @@ Thermo Fisher table with both mixes and the subgroups, downloaded by stage 15) a
 Writes <out>/ercc_mix.json: the inputs, pafbench.ercc.ercc_mix (n, Pearson r of log2 UMIs against log2 Mix 1 and Mix 2,
 the slope of the residuals of the Mix 1 fit on the subgroup's log2 ratio with its bootstrap interval, mean residual and
 median length per subgroup, the length check, the verdict and its reason) and the acceptance of the design (n equals
-ercc_with_concentration of ercc.json). Stage 15 files are not rewritten.
+ercc_with_concentration of ercc.json). When the acceptance fails, the json and the summary line are written and the stage
+exits non-zero. Stage 15 files are not rewritten.
 
 Measured on 2026-10-14 (/usr/bin/time -v): 1417 and 1419 each 2.1 s wall and 0.24 GiB resident, most of it the imports.
 pafbench.memwatch samples every 2 s, so for a run this short its peak is the first sample, taken before the imports.
 """
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -50,6 +52,9 @@ def main():
                       "residual_slope": [rs.get(k) for k in ("estimate", "lo", "hi")],
                       "length_p": (mix["length_check"] or {}).get("p"), "verdict": mix["verdict"], "reason": mix["reason"],
                       "seconds": round(time.monotonic() - t0, 1)}))
+    if not acceptance["n_equal"]:
+        sys.exit(f"acceptance failed: n is {mix['n']} ERCCs, ercc_with_concentration of ercc.json is "
+                 f"{acceptance['ercc_with_concentration']}")
 
 
 if __name__ == "__main__":

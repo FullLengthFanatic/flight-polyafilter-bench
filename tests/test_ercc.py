@@ -541,11 +541,15 @@ def test_stage32_on_synthetic_stage15_outputs(tmp_path, monkeypatch, capsys):
     assert line["residual_slope"] == [mix["residual_slope"][k] for k in ("estimate", "lo", "hi")]
     assert line["length_p"] == mix["length_check"]["p"] and "seconds" in line
 
-    # default output next to stage 15's files, which stay as they were; an n that differs fails the acceptance
+    # default output next to stage 15's files, which stay as they were; an n that differs fails the acceptance: the json and
+    # the summary line are written, then the stage exits non-zero naming both numbers
     (base / "ercc.json").write_text(json.dumps({"library": "SYN", "ercc_with_concentration": len(unfiltered) + 1}))
     before["ercc.json"] = ((base / "ercc.json").read_bytes(), (base / "ercc.json").stat().st_mtime_ns)
     monkeypatch.setattr(sys, "argv", ["32", "SYN", "--base", str(base), "--ref", str(ref)])
-    stage.main()
+    with pytest.raises(SystemExit) as exc:
+        stage.main()
+    assert exc.value.code == (f"acceptance failed: n is {len(unfiltered)} ERCCs, ercc_with_concentration of ercc.json is "
+                              f"{len(unfiltered) + 1}")
     assert {f.name: (f.read_bytes(), f.stat().st_mtime_ns) for f in base.iterdir() if f.name != "ercc_mix.json"} == before
     js = json.loads((base / "ercc_mix.json").read_text())
     assert js["acceptance"] == {"ercc_with_concentration": len(unfiltered) + 1, "n_equal": False}
