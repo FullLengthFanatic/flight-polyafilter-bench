@@ -203,6 +203,36 @@ def test_blocks_equal_the_rule_on_the_whole_table(synth10x, parts):
             assert ((g[name].to_numpy() >> t) & 1 == 1).tolist() == want.tolist(), (tag, name)
 
 
+def test_rule_takes_the_cell_and_umi_as_the_key_without_its_16_gene_bits(parts, tmp_path):
+    """Hand-built parts. Cell 1, UMI t: gene rows on both sides of 32768 (the top bit of the gene field), 3 reads on chrB
+    against 1 on chrA. Cell 2: UMIs a and c differ only in the last base (A and C, the lowest bit of the UMI field), and
+    each has its own winner. Before filtering and at two settings the rule sees three cells and UMIs."""
+    t, a, c, high = _code("TTTTTTTTTTTT"), _code("ACGTACGTACGA"), _code("ACGTACGTACGC"), 33_000
+    tags = TAGS[:2]
+    rows = {"chrA": [(1, t, 5, 1, 0, 0), (2, a, 1, 3, 2, 3), (2, a, 2, 2, 0, 0), (2, c, 1, 1, 0, 1)],    # cell, UMI, gene,
+            "chrB": [(1, t, high, 3, 2, 3), (2, c, high, 2, 1, 0)]}                                    # reads, rm at tags
+    dtypes = pd.read_parquet(parts / "chrA.read_groups.parquet").dtypes
+    for ref, groups in rows.items():
+        cell, umi, gene, n, rm0, rm1 = map(np.array, zip(*groups))
+        part = pd.DataFrame({"key": (cell << 40) | (umi << 16) | gene, "n_reads": n, "n_winner_reads": 0, "n_pa": 0,
+                             "re_class": 1, "end3": 100, "end3_nonpa": 100, f"rm_{tags[0]}": rm0, f"rm_{tags[1]}": rm1})
+        part.astype(dtypes[part.columns].to_dict()).sort_values("key").to_parquet(tmp_path / f"{ref}.read_groups.parquet",
+                                                                                    index=False)
+    multi_cu, n_units, _ = recount.multi_units(tmp_path, REFS)
+    assert multi_cu.tolist() == [(1 << 24) | t, (2 << 24) | a, (2 << 24) | c] and n_units == 3
+    g = recount.rule_on_multi(tmp_path, REFS, multi_cu, tags)
+    got = [(k >> 40, (k >> 16) & 0xFFFFFF, k & 0xFFFF, r, *x) for k, r, *x in
+           zip(g.key.tolist(), g.ref, g.counted, g.any_removed, g.lost, g.gained, g.switched)]
+    assert got == [
+        # cell, UMI, gene, ref, counted, any_removed, lost, gained, switched: bit 0 the first tag, bit 1 the second
+        (1, t, 5, 0, False, 0b00, 0b00, 0b10, 0b10),        # 1 against 1 at the first tag, the UMI moves here at the second
+        (1, t, high, 1, True, 0b11, 0b11, 0b00, 0b10),
+        (2, a, 1, 0, True, 0b11, 0b11, 0b00, 0b11),         # 1 and 0 left against 2: a switch at both tags
+        (2, a, 2, 0, False, 0b00, 0b00, 0b11, 0b11),
+        (2, c, 1, 0, False, 0b10, 0b00, 0b00, 0b00),
+        (2, c, high, 1, True, 0b01, 0b01, 0b00, 0b00)]      # 1 against 1 at the first tag; at the second g1 has no read
+
+
 def _plant(parts, d, ref, rows):
     """A copy of the parts with rows added to the read groups of one reference."""
     shutil.copytree(parts, d)
