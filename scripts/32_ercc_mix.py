@@ -7,6 +7,9 @@ Writes <out>/ercc_mix.json: the inputs, pafbench.ercc.ercc_mix (n, Pearson r of 
 the slope of the residuals of the Mix 1 fit on the subgroup's log2 ratio with its bootstrap interval, mean residual and
 median length per subgroup, the length check, the verdict and its reason) and the acceptance of the design (n equals
 ercc_with_concentration of ercc.json). Stage 15 files are not rewritten.
+
+Measured on 2026-10-14 (/usr/bin/time -v): 1417 and 1419 each 2.1 s wall and 0.24 GiB resident, most of it the imports.
+pafbench.memwatch samples every 2 s, so for a run this short its peak is the first sample, taken before the imports.
 """
 import argparse
 import json
