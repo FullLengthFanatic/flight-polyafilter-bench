@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pysam
 import pytest
+from scipy import stats
 
 from pafbench.config import REPO
 from pafbench.ercc import (ercc_correlation, ercc_mix, ercc_reads, ercc_settings, ercc_tables, mix_acceptance, parse_ercc_conc,
@@ -394,6 +395,9 @@ def test_ercc_mix_counts_from_mix1():
         assert g["median_length"] == float(np.median([_lengths(mixes)[i] for i in m.index[sel]]))
     lc = got["length_check"]
     assert lc["test"] == "kruskal" and lc["alpha"] == 0.05 and lc["p"] > 0.05 and not lc["related"]
+    # over the lengths of the ERCCs used, not of the whole table
+    kw = stats.kruskal(*[[_lengths(mixes)[i] for i in m.index[(m.subgroup == g).to_numpy()]] for g in "ABCD"])
+    assert [lc["h"], lc["p"]] == pytest.approx([kw.statistic, kw.pvalue])
     assert got["min_per_subgroup"] == 5
 
 
@@ -479,6 +483,14 @@ def test_ercc_mix_bootstrap_is_seeded():
     counts, lengths = _simulate(mixes, "mix1_amol_per_ul", 0), _lengths(mixes)
     a, b = ercc_mix(counts, mixes, lengths), ercc_mix(counts, mixes, lengths)
     assert a == b
+    # the seed reaches the draws: another seed, same n, gives another interval, the percentiles of resample_counts(.., seed)
+    c1 = ercc_mix(counts, mixes, lengths, seed=1)
+    assert c1 == ercc_mix(counts, mixes, lengths, seed=1) and c1["residual_slope"]["seed"] == 1
+    assert (c1["residual_slope"]["lo"], c1["residual_slope"]["hi"]) != (a["residual_slope"]["lo"], a["residual_slope"]["hi"])
+    m = mixes.set_index("ercc_id").loc[[i for i in counts.index if counts[i] > 0]]
+    s = residual_slope(np.log2(m.mix1_amol_per_ul.to_numpy()), m.log2_mix1_over_mix2.to_numpy(),
+                       np.log2(counts[m.index].to_numpy(np.float64)), resample_counts(len(m), 1000, 1).astype(float))[2]
+    assert [c1["residual_slope"]["lo"], c1["residual_slope"]["hi"]] == pytest.approx(np.percentile(s, [2.5, 97.5]))
     c = ercc_mix(counts, mixes, lengths, n=200, seed=1)
     assert c["residual_slope"]["n_boot"] == 200 and c["residual_slope"]["seed"] == 1
     assert c["residual_slope"]["estimate"] == a["residual_slope"]["estimate"]
@@ -508,8 +520,9 @@ def test_stage32_on_synthetic_stage15_outputs(tmp_path, monkeypatch, capsys):
     ref.mkdir()
     (ref / "ercc_conc_raw.txt").write_text(_mix_text())
     k = len(unfiltered)
-    pd.DataFrame({"ercc_id": np.tile(unfiltered.index.to_numpy(), 2), "setting": ["unfiltered"] * k + ["c300_l10_m1_e"] * k,
-                  "umis": np.concatenate([unfiltered.to_numpy(), unfiltered.to_numpy() // 3])}).to_parquet(
+    # another setting's rows first and with more UMIs: only the rows of setting "unfiltered" give the expected json
+    pd.DataFrame({"ercc_id": np.tile(unfiltered.index.to_numpy(), 2), "setting": ["c300_l10_m1_e"] * k + ["unfiltered"] * k,
+                  "umis": np.concatenate([unfiltered.to_numpy() * 3 + 1, unfiltered.to_numpy()])}).to_parquet(
         base / "ercc_counts.parquet", index=False)
     (base / "ercc.json").write_text(json.dumps({"library": "SYN", "ercc_with_concentration": len(unfiltered)}))
     before = {f.name: (f.read_bytes(), f.stat().st_mtime_ns) for f in base.iterdir()}
