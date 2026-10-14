@@ -25,10 +25,6 @@ SIRV_DIR = OUT / "ref" / "sirv"
 SIRV_FASTA = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta_20250402.fasta"
 SIRV_GTF = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta-annotation_20250402.gtf"
 ERCC_CONC_URL = "https://assets.thermofisher.com/TFS-Assets/LSG/manuals/cms_095046.txt"
-# Stage 32 (design 3.10; our proposals, not in the list of 3.0): the mix verdict is "undecided" when a subgroup has fewer
-# ERCCs with a UMI than ERCC_MIX_MIN, or when ERCC length differs between the subgroups at Kruskal-Wallis p < ERCC_LENGTH_ALPHA
-ERCC_MIX_MIN = 5
-ERCC_LENGTH_ALPHA = 0.05
 LABEL_CUTOFFS = {"templated_min": 8, "nontemplated_max": 4}
 A_BANDS = (("0-4", 0, 4), ("5-7", 5, 7), ("8-9", 8, 9), ("10-13", 10, 13), ("14-20", 14, 20))
 MEMBER_CAP = 1000
@@ -80,5 +76,9 @@ FIVE_PRIME_TOL = 50
 NULL_SHIFT = 1000
 DIST_END_BINS = (100, 300, 1000, 5000)
 RERUN_DIFF = 0.001
+# Stage 32 (design 3.10; our proposals, not in the list of 3.0): the mix verdict is "undecided" when a subgroup has fewer
+# ERCCs with a UMI than ERCC_MIX_MIN, or when ERCC length differs between the subgroups at Kruskal-Wallis p < ERCC_LENGTH_ALPHA
+ERCC_MIX_MIN = 5
+ERCC_LENGTH_ALPHA = 0.05
 PIGEON_DIR = Path("/data/long_read_annotation_tool/test_dataset/input_files")
 REPORT_DIR = OUT / "report"
