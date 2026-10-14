@@ -55,8 +55,8 @@ def test_load_models_mirrors_the_minus_strand(models):
     ta, tam = models.tx[0], models.tx[6]
     assert (ta.start, ta.end, ta.cds, ta.start_codon, ta.end_nf) == (1000, 2000, (1050, 1700), 1050, False)
     assert ta.exons == [(1000, 1100), (1200, 1300), (1400, 1500), (1600, 2000)]
-    # in transcript sense the mirrored transcript is the plus transcript shifted by -G; its start codon, 0-based 8947..8949 on the genome,
-    # begins at -8950
+    # in transcript sense the mirrored transcript is the plus transcript shifted by -G; its start codon, 0-based 8947..8949
+    # on the genome, begins at -8950
     assert (tam.start, tam.end, tam.cds, tam.start_codon) == (1000 - G, 2000 - G, (1050 - G, 1700 - G), 1050 - G)
     assert tam.exons == [(s - G, e - G) for s, e in ta.exons]
     assert models.tx[2].cds is None and [t.end_nf for t in models.tx] == [False] * 5 + [True] + [False] * 5 + [True]
