@@ -33,7 +33,7 @@ BD70/pigeon_crosscheck.parquet         structural_category, subcategory, context
 
 The stage stops before writing any table when the sites or their accepted reads differ from stage 16, or when a site of the
 region intron has the top class no_model_antisense or no_model_intergenic; such sites are listed. The tagged BAMs of the
-references (<lib>/tecap/part.<ref>.bam) are written during the scan and are then left behind.
+references (<lib>/tecap/part.<ref>.bam), written during the scan, are then left behind.
 
 The last line printed is JSON: per library the accepted reads and sites; per version the novel-junction reads, the sites with a
 no_model top class, among them those of the region intron, the tied sites and the sites whose top class holds at most half of
