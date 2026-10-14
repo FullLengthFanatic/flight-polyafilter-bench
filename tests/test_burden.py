@@ -580,3 +580,72 @@ def test_purity_acceptance():
     a = purity_acceptance(clip, want)
     assert a["clipped_bands"] == ["8-9"] and a["band_sum"] == pytest.approx(25 / 40)
     assert a["class_level_equal"] and not a["band_sum_equal"] and a["pass"]
+
+
+def _stage29(base, out):
+    env = dict(os.environ, PYTHONPATH=str(REPO))
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "29_purity_by_region.py"), "--base", str(base), "--out", str(out)],
+                          capture_output=True, text=True, env=env, cwd=REPO)
+
+
+def _stage29_base(base, in_cell=True):
+    """Three libraries of _purity_frame molecules, a quarter of them outside called cells, and eval/selection.json with
+    label_purity of the called cells as stage 17 writes it."""
+    libs, purity = {}, {}
+    for seed, lib in enumerate(("1417", "1419", "1179")):
+        mol = _purity_frame(seed=seed).assign(in_cell=np.arange(612) % 4 != 0)
+        libs[lib] = mol if in_cell else mol.drop(columns="in_cell")
+        (base / lib / "truth").mkdir(parents=True)
+        libs[lib].to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
+        purity[lib] = label_purity(mol[mol.in_cell])
+    (base / "eval").mkdir()
+    (base / "eval" / "selection.json").write_text(json.dumps({"label_purity": purity}, indent=1))
+    return libs
+
+
+def test_stage29_end_to_end(tmp_path):
+    base, out = tmp_path / "base", tmp_path / "burden"
+    libs = _stage29_base(base)
+    r = _stage29(base, out)
+    assert r.returncode == 0, r.stderr
+    assert sorted(p.name for p in out.iterdir()) == ["purity_by_region.parquet", "purity_reference_by_region.parquet",
+                                                     "templated_share_corrected.parquet"]
+    tables = [pd.read_parquet(out / f"{name}.parquet") for name in ("purity_reference_by_region", "templated_share_corrected",
+                                                                     "purity_by_region")]
+    for t, cols in zip(tables, (PURITY_REF_COLUMNS, PURITY_SHARE_COLUMNS, PURITY_BAND_COLUMNS)):
+        assert list(t.columns) == ["group"] + cols and list(dict.fromkeys(t.group)) == ["1417", "1419", "1179", "nuclei", "cells"]
+    # called cells only; a group's library-wide rates are those of the group
+    cells = {lib: m[m.in_cell].reset_index(drop=True) for lib, m in libs.items()}
+    cells["nuclei"] = pd.concat([cells["1417"], cells["1419"]], ignore_index=True)
+    cells["cells"] = cells["1179"]
+    for g, mol in cells.items():
+        for t, want in zip(tables, purity_by_region(mol)):
+            pd.testing.assert_frame_equal(t[t.group == g].drop(columns="group").reset_index(drop=True), want)
+    assert tables[1].set_index("group").loc["nuclei"].set_index("region").loc["all", "n_labeled"] == 2 * 459
+    s = json.loads(r.stdout.strip().splitlines()[-1])
+    assert s["groups"] == {"1417": ["1417"], "1419": ["1419"], "1179": ["1179"], "nuclei": ["1417", "1419"], "cells": ["1179"]}
+    assert s["molecules"] == {"1417": 459, "1419": 459, "1179": 459}
+    assert s["regions"]["1417"] == ["3UTR", "5UTR", "CDS", "intron"]
+    head = tables[0][tables[0].group == "nuclei"]
+    assert s["headline_version"]["nuclei"] == dict(zip(head.region, head.headline_version))
+    for lib in ("1417", "1419", "1179"):
+        a = s["acceptance"][lib]
+        assert a["pass"] and a["class_level_equal"] and a["band_sum_equal"] and a["clipped_bands"] == []
+        assert a["expected"] == label_purity(cells[lib])["templated_share_corrected"]
+
+
+def test_stage29_acceptance_failure_and_missing_in_cell(tmp_path):
+    base = tmp_path / "base"
+    _stage29_base(base)
+    sel = json.loads((base / "eval" / "selection.json").read_text())
+    sel["label_purity"]["1419"]["templated_share_corrected"] += 1e-6
+    (base / "eval" / "selection.json").write_text(json.dumps(sel))
+    r = _stage29(base, tmp_path / "out")
+    assert r.returncode == 1 and "acceptance failed: 1419" in r.stderr
+    s = json.loads(r.stdout.strip().splitlines()[-1])
+    assert not s["acceptance"]["1419"]["pass"] and s["acceptance"]["1417"]["pass"]
+    assert (tmp_path / "out" / "templated_share_corrected.parquet").exists()
+    base = tmp_path / "no_in_cell"
+    _stage29_base(base, in_cell=False)
+    r = _stage29(base, tmp_path / "out2")
+    assert r.returncode != 0 and "in_cell" in r.stderr
