@@ -1141,7 +1141,8 @@ def test_run_refuses_incomplete_and_stale_parts_and_writes_nothing(synth10x, sta
     assert files() == before
 
 
-def test_later_stages_start_only_after_a_passed_recount(tmp_path, monkeypatch):
+def test_later_stages_start_only_after_a_passed_recount(synth10x, tmp_path, monkeypatch):
+    monkeypatch.setattr(recount, "LIBRARIES", {"X": synth10x.bam, "Y": synth10x.bam})
     d = tmp_path / "X" / "recount"
     d.mkdir(parents=True)
     with pytest.raises(SystemExit, match=f"{d}/recount.json: stage 24 has not passed its acceptance checks for X"):
@@ -1151,18 +1152,58 @@ def test_later_stages_start_only_after_a_passed_recount(tmp_path, monkeypatch):
         (d / "recount.json").write_text(json.dumps(content))
         with pytest.raises(SystemExit, match="scripts/24_recount.py X"):
             recount.require_passed("X", d)
-    done = {"library": "X", "A1": {"passed": True}, "passed": True}
-    (d / "recount.json").write_text(json.dumps(done))
-    assert recount.require_passed("X", d) == done
+    # passed, and no matrices
+    (d / "recount.json").write_text(json.dumps({"library": "X", "A1": {"passed": True}, "passed": True}))
+    with pytest.raises(SystemExit, match=f"{tmp_path}/X/matrices/manifest.json: .*\\(no manifest\\); run scripts/24_recount.py"):
+        recount.require_passed("X", d, tmp_path / "X" / "matrices")
     monkeypatch.setattr(recount, "OUT", tmp_path)                 # without a directory: OUT/<lib>/recount
-    assert recount.require_passed("X") == done
     with pytest.raises(SystemExit, match="for Y"):
         recount.require_passed("Y")
 
 
-def test_passed_recount_of_the_synthetic_library_lets_a_later_stage_start(stage24):
+def test_passed_recount_of_the_synthetic_library_lets_a_later_stage_start(synth10x, stage24, tmp_path, monkeypatch):
     d, _, res = stage24
-    assert recount.require_passed("X", d / "recount") == res
+    monkeypatch.setattr(recount, "LIBRARIES", {"X": synth10x.bam})
+    assert recount.require_passed("X", d / "recount", d / "matrices") == res
+    (tmp_path / "X").symlink_to(d)
+    monkeypatch.setattr(recount, "OUT", tmp_path)                 # without directories: OUT/<lib>/recount and matrices
+    assert recount.require_passed("X") == res
+
+
+def test_a_passed_recount_is_refused_after_stage_23_or_its_inputs_changed(synth10x, stage24, tmp_path, monkeypatch):
+    """Stage 23 run again does not touch recount.json, and stage 24 writes nothing when it refuses stale parts: the
+    manifest of the matrices is compared with the inputs and the parts there are now."""
+    d, _, res = stage24
+    monkeypatch.setattr(recount, "LIBRARIES", {"X": synth10x.bam})
+    monkeypatch.setattr(recount, "OUT", tmp_path)
+    shutil.copytree(d / "recount", tmp_path / "X" / "recount")
+    (tmp_path / "X" / "matrices").mkdir()
+    manifest = tmp_path / "X" / "matrices" / "manifest.json"
+    shutil.copy(d / "matrices" / "manifest.json", manifest)
+    assert recount.require_passed("X") == res
+    # one part written again with another unit bin
+    done = tmp_path / "X" / "recount" / "parts" / "chrB.json"
+    stored = done.read_text()
+    done.write_text(json.dumps(json.loads(stored) | {"unit_bin": 500}))
+    with pytest.raises(SystemExit, match=f"{manifest}: the outputs of stage 24 for X were not made from the inputs and parts "
+                                         "there are now \\(parts of chrB\\); run scripts/24_recount.py X again"):
+        recount.require_passed("X")
+    done.write_text(stored)
+    # another rule version, unit bin or module of stage 23, before stage 23 is run again
+    for name, value, key in (("RULE_VERSION", molstream.RULE_VERSION + 1, "rule_version"), ("UNIT_BIN", 500, "unit_bin"),
+                             ("__file__", recount.__file__, "module_sha256")):
+        with monkeypatch.context() as m:
+            m.setattr(molstream, name, value)
+            with pytest.raises(SystemExit, match=f"were not made from the inputs and parts there are now \\({key}\\)"):
+                recount.require_passed("X")
+    # another BAM; a manifest of other settings is refused through the parts
+    manifest.write_text(json.dumps(json.loads(manifest.read_text()) | {"bam_size": 1}))
+    with pytest.raises(SystemExit, match="\\(bam_size; parts of chrA, chrB\\)"):
+        recount.require_passed("X")
+    shutil.copy(d / "matrices" / "manifest.json", manifest)
+    manifest.write_text(json.dumps(json.loads(manifest.read_text()) | {"tags": TAGS[:3]}))
+    with pytest.raises(SystemExit, match="\\(parts of chrA, chrB\\)"):
+        recount.require_passed("X")
 
 
 def test_original_bams_are_the_finished_runs_at_the_given_settings(tmp_path):
@@ -1304,7 +1345,7 @@ def script_inputs(synth10x, tmp_path_factory):
     return out
 
 
-def test_stage24_script_runs_the_stage_at_the_impact_settings(synth10x, script_inputs):
+def test_stage24_script_runs_the_stage_at_the_impact_settings(synth10x, script_inputs, monkeypatch):
     out = script_inputs
     r = _stage24(synth10x, out)
     assert r.returncode == 0, r.stderr
@@ -1327,7 +1368,8 @@ def test_stage24_script_runs_the_stage_at_the_impact_settings(synth10x, script_i
     for kind in ("lost", "gained"):
         assert sorted(p.stem for p in (m / kind).iterdir()) == sorted(IMPACT_TAGS)
     assert pd.read_parquet(m / "cell_totals.parquet").tag.unique().tolist() == ["unfiltered", *IMPACT_TAGS]
-    assert recount.require_passed("X", out / "X" / "recount") == res
+    monkeypatch.setattr(recount, "LIBRARIES", {"X": synth10x.bam})
+    assert recount.require_passed("X", out / "X" / "recount", out / "X" / "matrices") == res
     # the controls remove what their settings remove, group by group: the invariant of A5 that needs the real settings
     assert res["A5"]["passed"] and res["A5"]["violations"] == {}
 

@@ -27,7 +27,7 @@ import scipy.io
 import scipy.sparse as sp
 
 from . import matrices, naive
-from .config import A4_PARALLEL, OUT, RULE_AGREEMENT_MAX, XF_RECOUNT_TOLERANCE
+from .config import A4_PARALLEL, LIBRARIES, OUT, RULE_AGREEMENT_MAX, XF_RECOUNT_TOLERANCE
 from .flags import Setting, setting_tag
 from .matrices import filtered
 from .molstream import COUNTS, GROUP_MAX, RULE_VERSION, UMI_LEN, part_meta, row_index
@@ -467,14 +467,31 @@ def require_parts(part_dir, refs, meta):
                          f"`gio trash {part_dir}` and rerun stage 23")
 
 
-def require_passed(lib, recount_dir=None):
+def require_passed(lib, recount_dir=None, matrix_dir=None):
     """The recount.json of lib; stop (SystemExit) unless stage 24 wrote it with passed, that is after every acceptance
-    check ran and passed. Stages 25 to 28 start with this (design 3.2). recount_dir: default OUT/<lib>/recount."""
-    path = Path(recount_dir or OUT / lib / "recount") / "recount.json"
+    check ran and passed, from the inputs and parts there are now. Stages 25 to 28 start with this (design 3.2).
+
+    Stage 23 run again does not touch recount.json, and stage 24 writes nothing when it refuses stale parts, so the
+    entries of matrices/manifest.json are compared with molstream.part_meta of LIBRARIES[lib] and with the json of every
+    part. recount_dir, matrix_dir: default OUT/<lib>/recount and OUT/<lib>/matrices.
+    """
+    recount_dir, matrix_dir = Path(recount_dir or OUT / lib / "recount"), Path(matrix_dir or OUT / lib / "matrices")
+    path = recount_dir / "recount.json"
     res = json.loads(path.read_text()) if path.exists() else {}
     if res.get("passed") is not True:
         raise SystemExit(f"{path}: stage 24 has not passed its acceptance checks for {lib} (no recount.json, or one without "
                          f"passed); run scripts/24_recount.py {lib} and resolve what it reports")
+    manifest, bam = matrix_dir / "manifest.json", LIBRARIES[lib]
+    made = json.loads(manifest.read_text()) if manifest.exists() else {}
+    now = part_meta(bam, bam.parent / "filtered_feature_bc_matrix", [])
+    made_meta = {k: made.get(k) for k in now} | {"settings": made.get("tags")}
+    what = [k for k in now if k != "settings" and made_meta[k] != now[k]] if made else ["no manifest"]
+    part_dir = recount_dir / "parts"
+    stale = stale_parts(part_dir, sorted(p.stem for p in part_dir.glob("*.json")), made_meta) if made else []
+    what += [f"parts of {', '.join(stale)}"] if stale else []
+    if what:
+        raise SystemExit(f"{manifest}: the outputs of stage 24 for {lib} were not made from the inputs and parts there are now "
+                         f"({'; '.join(what)}); run scripts/24_recount.py {lib} again")
     return res
 
 
