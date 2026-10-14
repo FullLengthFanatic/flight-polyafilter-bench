@@ -11,8 +11,9 @@ import pytest
 from scipy.stats import spearmanr
 
 from pafbench.config import A_BANDS, REPO
-from pafbench.burden import (TEMPLATED_BANDS, band_corrected_share, headline_version, near_shares, proximity_table, purity_acceptance,
-                             purity_by_region, same_gene, same_site, selection_bias, share_ci, share_table, site_labels)
+from pafbench.burden import (TEMPLATED_BANDS, band_corrected_share, headline_version, near_shares, proximity_table,
+                             purity_acceptance, purity_by_region, same_gene, same_site, selection_bias, share_ci, share_table,
+                             site_labels)
 from pafbench.evaluate import gene_clusters, interval, label_purity, resample_counts, tail_share
 from pafbench.labels import label_molecules
 from pafbench.polyasite import BINS
@@ -454,8 +455,8 @@ def test_headline_version_rule():
     assert headline_version(ref, 0.6, 0.05, ref_min=199).tolist()[:3] == ["region", "region", "region"]
 
 
-PURITY_REF_COLUMNS = ["region", "n_ref_tail", "n_ref_internal", "h_tail", "h_tail_lo", "h_tail_hi", "h_ref", "h_ref_lo", "h_ref_hi",
-                      "headline_version"]
+PURITY_REF_COLUMNS = ["region", "n_ref_tail", "n_ref_internal", "h_tail", "h_tail_lo", "h_tail_hi", "h_ref", "h_ref_lo",
+                      "h_ref_hi", "headline_version"]
 PURITY_SHARE_COLUMNS = ["region", "n_labeled", "share_label", "share_corrected", "lo", "hi", "share_corrected_regionref",
                         "lo_regionref", "hi_regionref", "headline_version"]
 PURITY_BAND_COLUMNS = ["region", "a_band", "n", "hexamer_rate", "tail_primed_share", "tail_primed_share_regionref", "clipped",
@@ -548,7 +549,8 @@ def test_purity_by_region_headline_boundary_at_200():
     # references at rate 0.05 and 100 templated molecules; the library-wide tail rate 0.55 lies outside both intervals
     def block(region, tail_rate, n_tail):
         a20 = [2] * n_tail + [16] * 200 + [9] * 100
-        hexa = [i < round(tail_rate * n_tail) for i in range(n_tail)] + [i < 10 for i in range(200)] + [i < 20 for i in range(100)]
+        hexa = [i < round(tail_rate * n_tail) for i in range(n_tail)] + [i < 10 for i in range(200)]
+        hexa += [i < 20 for i in range(100)]
         return pd.DataFrame({"a20": a20, "hexamer": hexa, "region": region})
 
     def frame(n_tail_a):
@@ -584,8 +586,8 @@ def test_purity_acceptance():
 
 def _stage29(base, out):
     env = dict(os.environ, PYTHONPATH=str(REPO))
-    return subprocess.run([sys.executable, str(REPO / "scripts" / "29_purity_by_region.py"), "--base", str(base), "--out", str(out)],
-                          capture_output=True, text=True, env=env, cwd=REPO)
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "29_purity_by_region.py"), "--base", str(base), "--out",
+                           str(out)], capture_output=True, text=True, env=env, cwd=REPO)
 
 
 def _stage29_base(base, in_cell=True):

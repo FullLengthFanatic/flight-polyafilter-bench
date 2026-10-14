@@ -76,7 +76,8 @@ def main():
     ref = tables[0]
     print(json.dumps({"groups": members, "molecules": {lib: len(m) for lib, m in mols.items()},
                       "regions": {lib: sorted(m.region.unique()) for lib, m in mols.items()},
-                      "headline_version": {g: dict(zip(d.region, d.headline_version)) for g, d in ref.groupby("group", sort=False)},
+                      "headline_version": {g: dict(zip(d.region, d.headline_version))
+                                           for g, d in ref.groupby("group", sort=False)},
                       "acceptance": acceptance, "seconds": round(time.time() - t0, 1)}))
     failed = [lib for lib, a in acceptance.items() if not a["pass"]]
     if failed:

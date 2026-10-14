@@ -88,7 +88,8 @@ def headline_version(ref, h_tail_lib, h_ref_lib, ref_min=REGION_REF_MIN):
     interval of the region's rate of that class, 'library' elsewhere. ref has the columns n_ref_tail, n_ref_internal,
     h_tail_lo, h_tail_hi, h_ref_lo and h_ref_hi; a missing interval (NaN) leaves nothing outside."""
     enough = (ref.n_ref_tail >= ref_min) & (ref.n_ref_internal >= ref_min)
-    outside = (h_tail_lib < ref.h_tail_lo) | (h_tail_lib > ref.h_tail_hi) | (h_ref_lib < ref.h_ref_lo) | (h_ref_lib > ref.h_ref_hi)
+    outside = ((h_tail_lib < ref.h_tail_lo) | (h_tail_lib > ref.h_tail_hi) | (h_ref_lib < ref.h_ref_lo)
+               | (h_ref_lib > ref.h_ref_hi))
     return np.where(enough & outside, "region", "library").astype(object)
 
 
@@ -150,7 +151,8 @@ def purity_by_region(mol, n=1000, seed=0, ref_min=REGION_REF_MIN):
                           own["bands"][b]["tail_primed_share"], _clipped(rate, h_ref, h_tail), _clipped(rate, own_ref, own_tail)))
     floats = ["h_tail", "h_tail_lo", "h_tail_hi", "h_ref", "h_ref_lo", "h_ref_hi"]
     ref = pd.DataFrame(refs, columns=["region", "n_ref_tail", "n_ref_internal"] + floats).astype(dict.fromkeys(floats, float))
-    ref["headline_version"] = headline_version(ref, np.nan if h_tail is None else h_tail, np.nan if h_ref is None else h_ref, ref_min)
+    ref["headline_version"] = headline_version(ref, np.nan if h_tail is None else h_tail, np.nan if h_ref is None else h_ref,
+                                               ref_min)
     floats = ["share_label", "share_corrected", "lo", "hi", "share_corrected_regionref", "lo_regionref", "hi_regionref"]
     share = pd.DataFrame(shares, columns=["region", "n_labeled"] + floats).astype(dict.fromkeys(floats, float))
     share["headline_version"] = ref.headline_version
