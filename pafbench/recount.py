@@ -481,7 +481,7 @@ def require_passed(lib, recount_dir=None):
 def original_bams(folder, prefix, settings):
     """{tag: BAM the original tool wrote at that setting} for check A4: <folder>/<prefix><tag>.bam, as stages 02 and 20
     name them. Stop (SystemExit) when one is missing or its run did not end with exit status 0 in <prefix><tag>.time.txt
-    (validation.time_exit_status; a killed run leaves a truncated BAM)."""
+    (validation.time_exit_status; our reasoning: a run that did not finish may have left an incomplete BAM)."""
     bams = {setting_tag(s): Path(folder) / f"{prefix}{setting_tag(s)}.bam" for s in settings}
     missing = []
     for path in bams.values():
