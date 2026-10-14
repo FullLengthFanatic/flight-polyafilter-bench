@@ -321,15 +321,19 @@ def test_parse_ercc_mixes():
 SUBGROUPS = (("A", "4", "2"), ("B", "1", "0"), ("C", "0.67", "-0.58"), ("D", "0.5", "-1"))
 
 
-def _mix_table(per=23, drop=()):
-    """A table shaped like cms_095046.txt: per ERCCs in each subgroup (none in the subgroups of drop), Mix 1 from 30,000
-    amol/ul down 21 log2 units in equal steps, offset by a quarter step per subgroup, Mix 2 = Mix 1 / fold."""
+def _mix_text(per=23):
+    """A table shaped like cms_095046.txt: per ERCCs in each subgroup, Mix 1 from 30,000 amol/ul down 21 log2 units in
+    equal steps, offset by a quarter step per subgroup, Mix 2 = Mix 1 / fold."""
     rows = [EXCERPT.split("\r\n")[0]]
     for k, (group, fold, log2r) in enumerate(SUBGROUPS):
-        for j in range(per if group not in drop else 0):
+        for j in range(per):
             mix1 = 30000 * 2.0 ** -((j + k / 4) * 21 / (per - 1))
             rows.append(f"{len(rows)}\tERCC-{len(rows):05d}\t{group}\t{mix1}\t{mix1 / float(fold)}\t{fold}\t{log2r}")
-    return parse_ercc_mixes("\r\n".join(rows) + "\r\n")
+    return "\r\n".join(rows) + "\r\n"
+
+
+def _mix_table(per=23):
+    return parse_ercc_mixes(_mix_text(per))
 
 
 def _simulate(mixes, column, seed, slope=1.0, sd=0.5, length_power=0.0, lengths=None):
@@ -484,3 +488,65 @@ def test_ercc_mix_bootstrap_is_seeded():
 def test_mix_acceptance():
     assert mix_acceptance({"n": 68}, {"ercc_with_concentration": 68}) == {"ercc_with_concentration": 68, "n_equal": True}
     assert mix_acceptance({"n": 67}, {"ercc_with_concentration": 68}) == {"ercc_with_concentration": 68, "n_equal": False}
+
+
+def test_stage32_on_synthetic_stage15_outputs(tmp_path, monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location("stage32", REPO / "scripts" / "32_ercc_mix.py")
+    stage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage)
+    mixes = _mix_table()
+    lengths = _lengths(mixes)
+    rng = np.random.default_rng(2)
+    fasta = tmp_path / "spikes.fa"
+    fasta.write_text("".join(f">{i}\n{''.join(rng.choice(list('ACGT'), n))}\n" for i, n in lengths.items()) + ">SIRV1\nACGT\n")
+    pysam.faidx(str(fasta))
+    monkeypatch.setattr(stage, "SIRV_FASTA", fasta)
+    sim = _simulate(mixes, "mix1_amol_per_ul", 0)
+    unfiltered = sim[sim > 0]   # stage 15 writes the ERCCs with a UMI unfiltered, then each setting over the same ERCCs
+    base, ref = tmp_path / "base", tmp_path / "ref"
+    base.mkdir()
+    ref.mkdir()
+    (ref / "ercc_conc_raw.txt").write_text(_mix_text())
+    k = len(unfiltered)
+    pd.DataFrame({"ercc_id": np.tile(unfiltered.index.to_numpy(), 2), "setting": ["unfiltered"] * k + ["c300_l10_m1_e"] * k,
+                  "umis": np.concatenate([unfiltered.to_numpy(), unfiltered.to_numpy() // 3])}).to_parquet(
+        base / "ercc_counts.parquet", index=False)
+    (base / "ercc.json").write_text(json.dumps({"library": "SYN", "ercc_with_concentration": len(unfiltered)}))
+    before = {f.name: (f.read_bytes(), f.stat().st_mtime_ns) for f in base.iterdir()}
+
+    out = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", ["32", "SYN", "--base", str(base), "--out", str(out), "--ref", str(ref)])
+    stage.main()
+    js = json.loads((out / "ercc_mix.json").read_text())
+    mix = ercc_mix(unfiltered, mixes, lengths)
+    assert js == json.loads(json.dumps({"library": "SYN", "counts": str(base / "ercc_counts.parquet"), "setting": "unfiltered",
+                                        "table": str(ref / "ercc_conc_raw.txt"), "fasta": str(fasta)} | mix
+                                       | {"acceptance": {"ercc_with_concentration": len(unfiltered), "n_equal": True}}))
+    assert js["verdict"] == "Mix 1" and js["n"] == len(unfiltered)
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["library"] == "SYN" and line["n"] == len(unfiltered) and line["verdict"] == "Mix 1" and line["n_equal"]
+    assert line["residual_slope"] == [mix["residual_slope"][k] for k in ("estimate", "lo", "hi")]
+    assert line["length_p"] == mix["length_check"]["p"] and "seconds" in line
+
+    # default output next to stage 15's files, which stay as they were; an n that differs fails the acceptance
+    (base / "ercc.json").write_text(json.dumps({"library": "SYN", "ercc_with_concentration": len(unfiltered) + 1}))
+    before["ercc.json"] = ((base / "ercc.json").read_bytes(), (base / "ercc.json").stat().st_mtime_ns)
+    monkeypatch.setattr(sys, "argv", ["32", "SYN", "--base", str(base), "--ref", str(ref)])
+    stage.main()
+    assert {f.name: (f.read_bytes(), f.stat().st_mtime_ns) for f in base.iterdir() if f.name != "ercc_mix.json"} == before
+    js = json.loads((base / "ercc_mix.json").read_text())
+    assert js["acceptance"] == {"ercc_with_concentration": len(unfiltered) + 1, "n_equal": False}
+    assert not json.loads(capsys.readouterr().out.strip().splitlines()[-1])["n_equal"]
+
+    # too few ERCCs: the verdict is undecided and the summary line carries None for what was not computed
+    few = tmp_path / "few"
+    few.mkdir()
+    pd.DataFrame({"ercc_id": unfiltered.index[:8], "setting": "unfiltered", "umis": unfiltered.to_numpy()[:8]}).to_parquet(
+        few / "ercc_counts.parquet", index=False)
+    (few / "ercc.json").write_text(json.dumps({"ercc_with_concentration": 8}))
+    monkeypatch.setattr(sys, "argv", ["32", "SYN", "--base", str(few), "--ref", str(ref)])
+    stage.main()
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert (line["n"], line["n_equal"], line["verdict"], line["reason"]) == (8, True, "undecided", "too few ERCCs")
+    assert line["residual_slope"] == [None, None, None] and line["length_p"] is None
+    assert json.loads((few / "ercc_mix.json").read_text())["residual_slope"] is None
