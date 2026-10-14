@@ -1,14 +1,18 @@
 """Stage 18: internal-priming burden (templated share of labeled molecules), same-site and same-gene comparisons, selection bias.
+Stage 31: sites matched between two groups within their shared genes (match_sites onwards; design of 2026-10-12, section 3.9).
 
 Descriptive only (spec 8): tissue, maturity, cell-type mix and the cell/nucleus difference are confounded.
 """
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from .config import A_BANDS, LABEL_CUTOFFS
+from .config import A_BANDS, DIST_END_BINS, DOWNSAMPLE_DRAWS, LABEL_CUTOFFS, SITE_TOL
 from .evaluate import gene_clusters, interval, resample_counts
-from .polyasite import BINS, NULL_LABEL, distance_bin
+from .polyasite import BINS, NULL_LABEL, distance_bin, nearest_signed
+from .regions import REGION_NAMES
 
 LABELS = ("templated", "nontemplated", "ambiguous")
 TEMPLATED_BANDS = tuple(name for name, lo, _ in A_BANDS if lo >= LABEL_CUTOFFS["templated_min"])
@@ -122,3 +126,243 @@ def near_shares(table):
 
     return {"label": {lab: share(lab, "all") for lab in LABELS + (NULL_LABEL,)},
             "templated_a_band": {x: share("templated", x) for x in TEMPLATED_BANDS}}
+
+
+SITE_FIELDS = ["label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene"]
+FEATURES = ["label", "a_band", "a20", "down20", "hexamer", "region", "dist_end", "dist_mode"]
+SETS = ("shared", "first_only", "second_only")
+_SIZES = tuple(f"{lo}-{hi}" for lo, hi in zip((0,) + tuple(b + 1 for b in DIST_END_BINS[:-1]), DIST_END_BINS)) + (
+    f">{DIST_END_BINS[-1]}",)
+END_BINS = _SIZES + tuple(f"past {name}" for name in _SIZES) + ("no gene",)
+
+
+def gene_ends(gtf):
+    """{gene_id: sorted unique int64 ndarray} of the 3' ends of the gene's transcripts (GTF transcript lines) in the
+    priming_site convention of spikein.annotated_ends: the GTF end on plus, the GTF start - 1 on minus."""
+    ends = defaultdict(list)
+    with open(gtf) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            f = line.split("\t")
+            if f[2] != "transcript":
+                continue
+            gid = f[8].split('gene_id "', 1)[1].split('"', 1)[0]
+            ends[gid].append(int(f[4]) if f[6] == "+" else int(f[3]) - 1)
+    return {g: np.unique(np.asarray(v, np.int64)) for g, v in ends.items()}
+
+
+def _exon_coord(starts, ends, pos):
+    """Collapsed-exon bases before each genomic boundary in pos (exons sorted and disjoint)."""
+    j = np.searchsorted(starts, pos, side="right") - 1
+    k = np.maximum(j, 0)
+    length = ends - starts
+    before = np.concatenate([[0], np.cumsum(length)])
+    return np.where(j >= 0, before[k] + np.minimum(pos - starts[k], length[k]), 0)
+
+
+def end_distances(sites, exons, ends):
+    """(dist_end, dist_mode) per row of sites (strand '+'/'-', site, gene): the signed distance to the nearest 3' end of the
+    gene (gene_ends), > 0 when that end lies downstream of the site in transcript sense, equal |d| the positive one
+    (polyasite.nearest_signed). Mode 'exon' when the last cDNA base (site - 1 on plus, site on minus) lies in a collapsed exon
+    of the gene (exons.load_collapsed_exons, the union of the exons of all its transcripts): d counts the collapsed-exon bases
+    between the site and the end. Mode 'genome' otherwise: d counts genomic bases. Rows without a gene (''): NaN and ''."""
+    dist = np.full(len(sites), np.nan)
+    mode = np.full(len(sites), "", object)
+    pos = sites.site.to_numpy(np.int64)
+    for (gene, strand), idx in sites.groupby(["gene", "strand"], sort=False).indices.items():
+        if gene == "":
+            continue
+        plus = strand == "+"
+        (s, e), x, g_ends = exons[gene], pos[idx], ends[gene]
+        last = x - plus
+        k = np.searchsorted(s, last, side="right") - 1
+        exonic = (k >= 0) & (last < e[np.maximum(k, 0)])
+        along = nearest_signed(_exon_coord(s, e, x), plus, np.unique(_exon_coord(s, e, g_ends)))
+        dist[idx] = np.where(exonic, along, nearest_signed(x, plus, g_ends))
+        mode[idx] = np.where(exonic, "exon", "genome")
+    return dist, mode
+
+
+def end_bin(d):
+    """END_BINS name of each signed distance to the annotated end: |d| binned at DIST_END_BINS, prefixed 'past ' when d < 0
+    (the site lies downstream of its nearest end); NaN is 'no gene'."""
+    d = np.asarray(d, np.float64)
+    k = np.searchsorted(np.asarray(DIST_END_BINS, np.float64), np.abs(np.nan_to_num(d)), side="left")
+    names = np.asarray(END_BINS, object)
+    out = np.where(d < 0, names[k + len(_SIZES)], names[k])
+    out[np.isnan(d)] = END_BINS[-1]
+    return out
+
+
+def site_table(mol, exons, ends):
+    """One row per site (ref, strand, site) of labeled molecules, sorted: n (molecules) and the SITE_FIELDS of its first
+    molecule (in the labeled molecules of called cells each takes one value per site, our observation in scripts/31), then
+    dist_end and dist_mode (end_distances)."""
+    g = mol.groupby(["ref", "strand", "site"], sort=True)
+    t = g[SITE_FIELDS].first()
+    t.insert(0, "n", g.size())
+    t = t.reset_index()
+    dist, mode = end_distances(t, exons, ends)
+    return t.assign(dist_end=dist, dist_mode=mode)
+
+
+def usage(sites):
+    """Share of each site's molecules (n) among the molecules of its gene in the same site table; NaN without a gene."""
+    u = sites.n.to_numpy(np.float64) / sites.groupby("gene").n.transform("sum").to_numpy(np.float64)
+    u[sites.gene.to_numpy() == ""] = np.nan
+    return u
+
+
+def shared_genes(a, b, min_n=20):
+    """Sorted genes (not '') with at least min_n labeled molecules in both groups: the genes that same_gene correlates."""
+    na, nb = (m.gene[m.gene != ""].value_counts() for m in (a, b))
+    return sorted(na[na >= min_n].index.intersection(nb[nb >= min_n].index))
+
+
+def _coords(a, b):
+    """One int64 per site of a and of b: the (ref, strand) key of their union times 2**40, plus site (same_site's layout)."""
+    keys = {k: i for i, k in enumerate(sorted(set(zip(a.ref, a.strand)) | set(zip(b.ref, b.strand))))}
+
+    def coord(s):
+        return np.fromiter((keys[k] for k in zip(s.ref, s.strand)), np.int64, len(s)) * (1 << 40) + s.site.to_numpy(np.int64)
+
+    return coord(a), coord(b)
+
+
+def _nearest(ca, cb):
+    """Index into cb of the nearest coordinate of each one of ca (equal distance: the lower coordinate, as same_site) and its
+    distance; index -1 when cb is empty."""
+    order = np.argsort(cb, kind="stable")
+    far = np.int64(1) << 62
+    c = np.concatenate([[-far], cb[order], [far]])
+    idx = np.concatenate([[-1], order, [-1]])
+    i = np.searchsorted(c, ca)
+    dl, dr = ca - c[i - 1], c[i] - ca
+    return idx[np.where(dl <= dr, i - 1, i)], np.minimum(dl, dr)
+
+
+def _mutual(ca, cb, tol):
+    jb, d = _nearest(ca, cb)
+    ja, _ = _nearest(cb, ca)
+    ia = np.flatnonzero((d <= tol) & (jb >= 0))
+    ia = ia[ja[jb[ia]] == ia]
+    return ia.astype(np.int64), jb[ia]
+
+
+def match_sites(a, b, tol=SITE_TOL):
+    """Sites of a and b (ref, strand, site) that are each other's nearest on the same ref and strand (equal distance: the
+    lower coordinate) and at most tol nt apart, as positional indices (ia ascending, ib). match_sites(b, a) gives the same
+    pairs; a site that is the nearest of two sites of the other table pairs with one of them at most."""
+    return _mutual(*_coords(a, b), tol)
+
+
+def site_sets(sa, sb, genes, tol=SITE_TOL):
+    """The sites of genes in two site tables (site_table) in three sets: shared (the match_sites pairs), first_only and
+    second_only. One row per pair or unmatched site, sorted by ref, strand and position: gene and FEATURES of the first
+    table's site on shared rows, of the site itself on the others; n and usage (usage within the gene in each table) of each
+    side, 0 on the side without a site, where site_a or site_b is <NA>."""
+    a = sa[sa.gene.isin(genes)].reset_index(drop=True)
+    b = sb[sb.gene.isin(genes)].reset_index(drop=True)
+    ua, ub = usage(a), usage(b)
+    ia, ib = match_sites(a, b, tol)
+    oa, ob = np.setdiff1d(np.arange(len(a)), ia), np.setdiff1d(np.arange(len(b)), ib)
+
+    def block(name, t, k, own_usage, other_site, other_n, other_usage, first):
+        d = t.iloc[k].reset_index(drop=True)
+        own, other = (d.site.to_numpy(), d.n.to_numpy(), own_usage[k]), (other_site, other_n, other_usage)
+        (site_a, n_a, u_a), (site_b, n_b, u_b) = (own, other) if first else (other, own)
+        return pd.DataFrame({"gene": d.gene, "ref": d.ref, "strand": d.strand, "site_a": pd.array(site_a, "Int64"),
+                             "site_b": pd.array(site_b, "Int64"), "set": name, "n_a": n_a, "n_b": n_b, "usage_a": u_a,
+                             "usage_b": u_b, **{c: d[c] for c in FEATURES}})
+
+    rows = pd.concat([block("shared", a, ia, ua, b.site.to_numpy()[ib], b.n.to_numpy()[ib], ub[ib], True),
+                      block("first_only", a, oa, ua, np.full(len(oa), None), 0, 0.0, True),
+                      block("second_only", b, ob, ub, np.full(len(ob), None), 0, 0.0, False)], ignore_index=True)
+    rows["n_a"], rows["n_b"] = rows.n_a.astype(np.int64), rows.n_b.astype(np.int64)
+    pos = rows.site_a.fillna(rows.site_b)
+    return rows.assign(_pos=pos).sort_values(["ref", "strand", "_pos"]).drop(columns="_pos").reset_index(drop=True)
+
+
+def _onehot(values, bins):
+    return np.asarray(values, object)[:, None] == np.asarray(bins, object)[None, :]
+
+
+def set_summary(rows):
+    """Sites and molecules (n_a + n_b) per set (SETS), feature and bin of site_sets rows, every bin kept: label, a_band,
+    a_pos (bin k: an A at position k of the 20 nt after the site, down20), hexamer, region and dist_bin (end_bin)."""
+    mols = (rows.n_a + rows.n_b).to_numpy(np.int64)
+    a_at = np.frombuffer("".join(rows.down20.str.ljust(20, "N").str[:20]).encode(), np.uint8).reshape(-1, 20) == ord("A")
+    features = {"label": (LABELS, _onehot(rows.label, LABELS)),
+                "a_band": (tuple(name for name, _, _ in A_BANDS), _onehot(rows.a_band, [name for name, _, _ in A_BANDS])),
+                "a_pos": (tuple(str(k) for k in range(1, 21)), a_at),
+                "hexamer": (("True", "False"), _onehot(rows.hexamer.astype(str), ["True", "False"])),
+                "region": (REGION_NAMES, _onehot(rows.region, REGION_NAMES)),
+                "dist_bin": (END_BINS, _onehot(end_bin(rows.dist_end), END_BINS))}
+    out = []
+    for name in SETS:
+        m = (rows.set == name).to_numpy()
+        for feature, (bins, hit) in features.items():
+            h = hit[m]
+            out += [(name, feature, b, int(n), int(w)) for b, n, w in zip(bins, h.sum(axis=0), mols[m] @ h)]
+    return pd.DataFrame(out, columns=["set", "feature", "bin", "sites", "molecules"])
+
+
+def _quartiles(x):
+    q = [float(v) for v in np.quantile(x, [0.25, 0.5, 0.75])] if len(x) else [None] * 3
+    return {"n": len(x), "q25": q[0], "median": q[1], "q75": q[2]}
+
+
+def usage_comparison(rows):
+    """Spearman correlation of usage_a and usage_b over the shared rows of site_sets, and the quartiles of
+    log2(usage_a / usage_b) over all of them, by label and by region (every label and region, n 0 and None without rows)."""
+    s = rows[rows.set == "shared"]
+    r = np.log2(s.usage_a.to_numpy() / s.usage_b.to_numpy())
+    rho, p = spearmanr(s.usage_a, s.usage_b) if len(s) > 1 else (np.nan, np.nan)
+    label, region = s.label.to_numpy(), s.region.to_numpy()
+    return {"n": len(s), "spearman_rho": None if np.isnan(rho) else float(rho), "p_value": None if np.isnan(p) else float(p),
+            "log2_ratio": {"all": _quartiles(r), "label": {x: _quartiles(r[label == x]) for x in LABELS},
+                           "region": {x: _quartiles(r[region == x]) for x in REGION_NAMES}}}
+
+
+def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0, tol=SITE_TOL):
+    """Set sizes of site_sets after drawing, in each gene of genes, as many of the second table's molecules as the first table
+    has there (all of them where it has fewer), without replacement; draws draws from numpy.random.default_rng(seed). The
+    second table's sites of a draw are those with a drawn molecule. One row per draw: draw, shared, first_only, second_only."""
+    a = sa[sa.gene.isin(genes)].reset_index(drop=True)
+    b = sb[sb.gene.isin(genes)].reset_index(drop=True)
+    ca, cb = _coords(a, b)
+    names, code = np.unique(b.gene.to_numpy(object), return_inverse=True)
+    target = a.groupby("gene").n.sum().reindex(names, fill_value=0).to_numpy(np.int64)
+    site = np.repeat(np.arange(len(b)), b.n.to_numpy(np.int64))
+    gene = code[site]
+    rng = np.random.default_rng(seed)
+    out = []
+    for k in range(draws):
+        order = np.lexsort((rng.random(len(site)), gene))
+        g = gene[order]
+        drawn = order[np.arange(len(g)) - np.searchsorted(g, g) < target[g]]
+        kept = np.zeros(len(b), bool)
+        kept[site[drawn]] = True
+        n = len(_mutual(ca, cb[kept], tol)[0])
+        out.append((k, n, len(a) - n, int(kept.sum()) - n))
+    return pd.DataFrame(out, columns=["draw", "shared", "first_only", "second_only"])
+
+
+def same_site_check(sa, sb, expected, tol=SITE_TOL):
+    """Acceptance of stage 31: the one-way nearest match of same_site redone on two site tables (site_table, no gene filter)
+    against expected, the rows of one pair of burden/same_site.parquet (label_a, label_b, n). It passes when the label-pair
+    counts are equal, and with them the number of sites of the first table and of matched ones."""
+    jb, d = _nearest(*_coords(sa, sb))
+    label_b = np.where((d <= tol) & (jb >= 0), sb.label.to_numpy(object)[np.maximum(jb, 0)], "none")
+    got = pd.DataFrame({"label_a": sa.label.to_numpy(object), "label_b": label_b}).groupby(["label_a", "label_b"]).size()
+    want = expected.groupby(["label_a", "label_b"]).n.sum()
+    want = want[want > 0]
+
+    def counts(c):
+        return int(c.sum()), int(c[c.index.get_level_values("label_b") != "none"].sum())
+
+    (sites, matched), (e_sites, e_matched) = counts(got), counts(want)
+    equal = {k: int(v) for k, v in got.items()} == {k: int(v) for k, v in want.items()}
+    return {"sites_a": sites, "matched": matched, "expected_sites_a": e_sites, "expected_matched": e_matched,
+            "label_pairs_equal": equal, "pass": equal and (sites, matched) == (e_sites, e_matched)}
