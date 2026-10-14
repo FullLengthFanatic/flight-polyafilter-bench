@@ -11,7 +11,7 @@ import pytest
 from pafbench.config import REPO
 from pafbench.evaluate import (METRIC_COLUMNS, STRATA, ambiguous_tail_share, bootstrap, confusion, evaluate, expr_tertiles,
                                gene_clusters, hexamer_check, label_purity, rates, relabel, resample_counts, select_setting, spikein_metrics,
-                               units)
+                               tail_share, units)
 from pafbench.flags import Setting, setting_tag
 from pafbench.grid import published
 
@@ -637,7 +637,33 @@ def test_label_purity_clips_and_undefined_cases():
     assert e["classes"]["templated"] == {"n": 0, "hexamer_rate": None, "tail_primed_share": None}
 
 
-E1, E2, E3, CE, I1, I2 = "c300_l10_m1_e", "c450_l9_m1_e", "c150_l20_m0_e", "c450_lnone_m0_e", "c300_l10_m1_i", "c375_l3_m2_i"
+def test_tail_share_with_the_frames_own_rates_is_label_purity():
+    for spec in (PURITY, [(2, "nontemplated", 10, 5), (6, "ambiguous", 4, 4), (8, "templated", 10, 0), (16, "templated", 10, 2)]):
+        mol = _purity_mol(spec)
+        p = label_purity(mol)
+        own = tail_share(mol, p["reference"]["hexamer_rate"], p["bands"]["0-4"]["hexamer_rate"])
+        assert own == {k: v for k, v in p.items() if k != "reference"}
+
+
+def test_tail_share_takes_the_reference_rates_as_given():
+    mol = _purity_mol(PURITY)
+    # band rates 0.6, 0.5, 0.2, 0.1, 0.05; given rates 0.1 (reference) and 0.6 (0-4): (rate - 0.1) / 0.5, clipped to [0, 1]
+    t = tail_share(mol, 0.1, 0.6)
+    assert {b: v["n"] for b, v in t["bands"].items()} == {"0-4": 10, "5-7": 4, "8-9": 10, "10-13": 10, "14-20": 20}
+    assert [v["tail_primed_share"] for v in t["bands"].values()] == pytest.approx([1, 0.8, 0.2, 0, 0])
+    # the templated class (rate 0.1) equals the given reference: nothing to remove
+    assert t["classes"]["templated"]["tail_primed_share"] == 0.0 and t["templated_share_corrected"] == pytest.approx(40 / 54)
+    # a rate missing, or the two rates equal: no estimates, the templated share stays
+    for ref, tail in ((None, 0.6), (0.1, None), (0.3, 0.3)):
+        t = tail_share(mol, ref, tail)
+        assert all(v["tail_primed_share"] is None for v in t["bands"].values())
+        assert t["templated_share_corrected"] is None and t["templated_share"] == pytest.approx(40 / 54)
+    e = tail_share(_purity_mol([]), 0.1, 0.6)
+    assert e["n_labeled"] == 0 and e["templated_share"] is None and e["templated_share_corrected"] is None
+    assert e["bands"]["0-4"] == {"n": 0, "hexamer_rate": None, "tail_primed_share": None}
+
+
+E1, E2, E3, CE, I1, I2 ="c300_l10_m1_e", "c450_l9_m1_e", "c150_l20_m0_e", "c450_lnone_m0_e", "c300_l10_m1_i", "c375_l3_m2_i"
 SEL_TAGS = [E1, E2, E3, CE, I1, I2]
 # id, label, a20, gene, member dist5_exon (None: no member), hexamer; Tm's member is absent from truth_flags
 SEL_MOLS = [(0, "templated", 15, "gA", 100, False), (1, "templated", 15, "gB", 100, False), (2, "templated", 15, "gC", 700, False),
