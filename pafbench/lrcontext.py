@@ -25,7 +25,8 @@ NOVEL_JUNCTION, ANTISENSE, INTERGENIC = CLASSES[8:]
 # sub-cause of a site.
 SUB_CAUSES = ("near_annotated_intron", "short_intron", "opposite_strand_intron", "sites_not_joined", "donor_only",
               "acceptor_only", "neither_site")
-Transcript = namedtuple("Transcript", "tid start end exons cds end_nf")   # cds: (first base, end) of the CDS or None
+# cds: (first base, end) of the CDS or None; start_codon: its first base or None
+Transcript = namedtuple("Transcript", "tid start end exons cds start_codon end_nf")
 # matched: introns of the read that the transcript has as a run; chain_novel: 0, or that number for a read placed by its
 # 3' part. sub_cause is set for no_model_novel_junction only.
 ReadContext = namedtuple("ReadContext", "klass transcript matched chain_novel starts_outside retained_after_junction end_nf "
@@ -54,20 +55,20 @@ _FAR = 1 << 62
 
 class Models:
     """Transcripts of one reference with the lookups of the class rule. rows: (transcript id, minus strand, (start, end),
-    exons, CDS intervals, tagged mRNA_end_NF), intervals in transcript sense.
+    exons, CDS intervals, first base of the start codon or None, tagged mRNA_end_NF), in transcript sense.
 
     tx[k] is a Transcript; introns[minus][(donor, acceptor)] lists (k, i) for every transcript k of the strand whose
     i-th intron it is; donors[minus] and acceptors[minus] are the splice sites of the strand."""
 
     def __init__(self, rows):
-        self.tx, self._strand, self._chains = [], [], []
+        self.tx, self._chains = [], []
         self.introns = {False: defaultdict(list), True: defaultdict(list)}
         self._bins = {False: defaultdict(list), True: defaultdict(list)}
-        for tid, minus, (start, end), exons, cds, end_nf in rows:
+        for tid, minus, (start, end), exons, cds, start_codon, end_nf in rows:
             exons = sorted(exons)
             k = len(self.tx)
             self.tx.append(Transcript(tid, start, end, exons, (min(s for s, _ in cds), max(e for _, e in cds)) if cds else None,
-                                      end_nf))
+                                      start_codon, end_nf))
             chain = [(exons[i][1], exons[i + 1][0]) for i in range(len(exons) - 1)]
             self._chains.append(chain)
             for i, intron in enumerate(chain):
@@ -124,18 +125,20 @@ class Models:
 
 
 def load_models(gtf, refs=None):
-    """{ref: Models} from the transcript, exon and CDS lines of a GTF, transcripts in file order. With refs, those
-    references in that order, each with a Models even when the GTF has no transcript on it.
+    """{ref: Models} from the transcript, exon, CDS and start_codon lines of a GTF, transcripts in file order. With refs,
+    those references in that order, each with a Models even when the GTF has no transcript on it.
 
     end_nf is the GENCODE tag mRNA_end_NF on the transcript line ("the mRNA end could not be confirmed",
-    https://www.gencodegenes.org/pages/tags.html)."""
-    tx, exons, cds = {}, defaultdict(list), defaultdict(list)
+    https://www.gencodegenes.org/pages/tags.html). The start codon is taken from the start_codon lines, not from the CDS.
+    Our observation on the 2024-A genes.gtf (2026-10-14): 13,019 of the 109,751 transcripts with a CDS have no
+    start_codon line, 12,958 of them tagged cds_start_NF; in the other 96,732 the start codon begins at the first CDS base."""
+    tx, exons, cds, start = {}, defaultdict(list), defaultdict(list), defaultdict(list)
     with open(gtf) as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
             f = line.rstrip("\n").split("\t")
-            if f[2] not in ("transcript", "exon", "CDS") or (refs is not None and f[0] not in refs):
+            if f[2] not in ("transcript", "exon", "CDS", "start_codon") or (refs is not None and f[0] not in refs):
                 continue
             tid = f[8].split('transcript_id "', 1)[1].split('"', 1)[0]
             minus = f[6] == "-"
@@ -144,11 +147,13 @@ def load_models(gtf, refs=None):
                 tx[tid] = (f[0], minus, iv, 'tag "mRNA_end_NF"' in f[8])
             elif f[2] == "exon":
                 exons[tid].append(iv)
-            else:
+            elif f[2] == "CDS":
                 cds[tid].append(iv)
+            else:
+                start[tid].append(iv[0])
     rows = {ref: [] for ref in refs} if refs is not None else defaultdict(list)
     for tid, (ref, minus, span, end_nf) in tx.items():
-        rows[ref].append((tid, minus, span, exons[tid], cds.get(tid, []), end_nf))
+        rows[ref].append((tid, minus, span, exons[tid], cds.get(tid, []), min(start[tid]) if tid in start else None, end_nf))
     return {ref: Models(r) for ref, r in rows.items()}
 
 
@@ -211,7 +216,7 @@ def classify(models, minus, body):
     then the nearest 3' end, then the transcript id. other_class says that another compatible transcript gives another
     class. retained_after_junction: the block after the last junction covers a whole intron of the chosen transcript.
     complete_5p (the 5' end within FIVE_PRIME_TOL of the transcript's) is never set for a chain_novel read, whose 5' part
-    follows no transcript. covers_start: an aligned block holds the first base of the transcript's CDS."""
+    follows no transcript. covers_start: an aligned block holds the first base of the transcript's start codon."""
     tx = models.tx
     p, a0, b0 = body[-1][1] - 1, body[0][0], body[-1][1]
     introns = [(body[i][1], body[i + 1][0]) for i in range(len(body) - 1)]
@@ -243,7 +248,7 @@ def classify(models, minus, body):
     return ReadContext(klass, t.tid, chain_novel or len(introns), chain_novel, starts_outside, retained,
                        klass == "annotated_end" and t.end_nf,
                        not chain_novel and abs(a0 - t.start) <= FIVE_PRIME_TOL,
-                       t.cds is not None and any(s <= t.cds[0] < e for s, e in body),
+                       t.start_codon is not None and any(s <= t.start_codon < e for s, e in body),
                        len(cands) > 1 and any(_klass(tx[k], p, bool(introns)) != klass for k in cands))
 
 

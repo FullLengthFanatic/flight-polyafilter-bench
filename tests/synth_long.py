@@ -15,16 +15,16 @@ HDR = pysam.AlignmentHeader.from_dict({"HD": {"VN": "1.6", "SO": "coordinate"},
 NJ, AS, IG = CLASSES[8:]
 NEAR, SHORT, OPPOSITE, NOT_JOINED, DONOR, ACCEPTOR, NEITHER = SUB_CAUSES
 
-# transcript: (exons, CDS span or None, tagged mRNA_end_NF); 0-based half-open, as on the plus strand. TC is the decoy that
+# transcript: (exons, CDS span or None, GENCODE tags); 0-based half-open, as on the plus strand. TC is the decoy that
 # holds the last intron of TB and ends where two of the designed reads end. TS, TL and TN share one intron and differ in
-# their 3' end; TN is tagged mRNA_end_NF.
+# their 3' end; TN is tagged mRNA_end_NF, and TL cds_start_NF, so that it has no start_codon line (write_gtf).
 LOCUS = {
-    "TA": ([(1000, 1100), (1200, 1300), (1400, 1500), (1600, 2000)], (1050, 1700), False),
-    "TB": ([(900, 950), (1200, 1300), (1400, 1500), (1700, 2100)], (1220, 1750), False),
-    "TC": ([(1350, 1500), (1700, 1900)], None, False),
-    "TS": ([(3000, 3200), (3400, 3600)], (3050, 3450), False),
-    "TL": ([(3000, 3200), (3400, 3900)], (3050, 3450), False),
-    "TN": ([(3000, 3200), (3400, 3500)], (3050, 3450), True),
+    "TA": ([(1000, 1100), (1200, 1300), (1400, 1500), (1600, 2000)], (1050, 1700), ()),
+    "TB": ([(900, 950), (1200, 1300), (1400, 1500), (1700, 2100)], (1220, 1750), ()),
+    "TC": ([(1350, 1500), (1700, 1900)], None, ()),
+    "TS": ([(3000, 3200), (3400, 3600)], (3050, 3450), ()),
+    "TL": ([(3000, 3200), (3400, 3900)], (3050, 3450), ("cds_start_NF",)),
+    "TN": ([(3000, 3200), (3400, 3500)], (3050, 3450), ("mRNA_end_NF",)),
 }
 
 
@@ -94,15 +94,17 @@ DESIGNED = {
     # ends 3 nt before the last base of TN (3499), which is tagged mRNA_end_NF
     "end_of_NF_transcript": ([(3010, 3200), (3400, 3509)], 3497,
                              ctx("annotated_end", "TN", 1, end_nf=True, complete_5p=True, covers_start=True, other_class=True)),
+    # in the 3' UTR of TL (TS and TN give downstream): it holds the first CDS base of TL, which has no start codon
+    "no_start_codon": ([(3010, 3200), (3400, 3812)], 3800, ctx("3UTR", "TL", 1, complete_5p=True, other_class=True)),
 }
 
 
 def write_gtf(path):
     lines = ["#synthetic\n"]
     for minus in (False, True):
-        for tid, (exons, cds, nf) in LOCUS.items():
+        for tid, (exons, cds, tags) in LOCUS.items():
             name = tid + ("m" if minus else "")
-            attrs = f'gene_id "g{name}"; transcript_id "{name}"; tag "basic";' + (' tag "mRNA_end_NF";' if nf else "")
+            attrs = f'gene_id "g{name}"; transcript_id "{name}"; tag "basic";' + "".join(f' tag "{t}";' for t in tags)
 
             def row(feature, s, e, attrs=attrs):
                 s, e = (G - e, G - s) if minus else (s, e)
@@ -113,6 +115,8 @@ def write_gtf(path):
             lines += [row("exon", s, e) for s, e in exons]
             if cds:
                 lines += [row("CDS", max(s, cds[0]), min(e, cds[1])) for s, e in exons if s < cds[1] and e > cds[0]]
+                if "cds_start_NF" not in tags:
+                    lines.append(row("start_codon", cds[0], cds[0] + 3))
     path.write_text("".join(lines))
     return path
 

@@ -53,12 +53,16 @@ def test_read_body_cuts_at_the_site_and_keeps_deletions_inside_a_block():
 def test_load_models_mirrors_the_minus_strand(models):
     assert [t.tid for t in models.tx] == list(LOCUS) + [t + "m" for t in LOCUS]
     ta, tam = models.tx[0], models.tx[6]
-    assert (ta.start, ta.end, ta.cds, ta.end_nf) == (1000, 2000, (1050, 1700), False)
+    assert (ta.start, ta.end, ta.cds, ta.start_codon, ta.end_nf) == (1000, 2000, (1050, 1700), 1050, False)
     assert ta.exons == [(1000, 1100), (1200, 1300), (1400, 1500), (1600, 2000)]
-    # in transcript sense the mirrored transcript is the plus transcript shifted by -G
-    assert (tam.start, tam.end, tam.cds) == (1000 - G, 2000 - G, (1050 - G, 1700 - G))
+    # in transcript sense the mirrored transcript is the plus transcript shifted by -G; its start codon, 0-based 8947..8949 on the genome,
+    # begins at -8950
+    assert (tam.start, tam.end, tam.cds, tam.start_codon) == (1000 - G, 2000 - G, (1050 - G, 1700 - G), 1050 - G)
     assert tam.exons == [(s - G, e - G) for s, e in ta.exons]
     assert models.tx[2].cds is None and [t.end_nf for t in models.tx] == [False] * 5 + [True] + [False] * 5 + [True]
+    # TC has no CDS, TL a CDS without a start codon (tagged cds_start_NF)
+    assert [t.start_codon for t in models.tx[:6]] == [1050, 1220, None, 3050, None, 3050]
+    assert models.tx[4].cds == (3050, 3450) and models.tx[10].start_codon is None
     for minus, shift in ((False, 0), (True, -G)):
         assert sorted(models.introns[minus]) == sorted({(d + shift, a + shift) for d, a in (
             (1100, 1200), (1300, 1400), (1500, 1600), (950, 1200), (1500, 1700), (3200, 3400))})
@@ -138,45 +142,45 @@ def test_sub_causes_in_their_order(models, minus):
 
 def test_sub_cause_precedence():
     # plus: intron 100..140 (40 nt). minus: intron at genomic 300..330 (30 nt), in transcript sense -330..-300
-    m = Models([("P", False, (0, 200), [(0, 100), (140, 200)], [], False),
-                ("M", True, (-400, -250), [(-400, -330), (-300, -250)], [], False)])
+    m = Models([("P", False, (0, 200), [(0, 100), (140, 200)], [], None, False),
+                ("M", True, (-400, -250), [(-400, -330), (-300, -250)], [], None, False)])
     assert m.sub_cause(False, (102, 141)) == NEAR         # also shorter than 50 nt
     assert m.sub_cause(False, (300, 330)) == SHORT        # also the intron of M on the other strand
     assert m.sub_cause(False, (100, 149)) == SHORT        # 49 nt; 9 nt off at the acceptor, so not near
     assert m.sub_cause(False, (100, 150)) == DONOR        # 50 nt is not short
     # the intron of P seen from the minus strand, made long enough: 100..160 on plus is -160..-100 on minus
-    m = Models([("P", False, (0, 200), [(0, 100), (160, 200)], [], False),
-                ("M", True, (-200, 0), [(-200, -160), (-100, 0)], [], False)])
+    m = Models([("P", False, (0, 200), [(0, 100), (160, 200)], [], None, False),
+                ("M", True, (-200, 0), [(-200, -160), (-100, 0)], [], None, False)])
     assert m.sub_cause(False, (100, 160)) == NEAR and m.sub_cause(True, (-160, -100)) == NEAR   # annotated on its own strand
-    m = Models([("P", False, (0, 200), [(0, 100), (160, 200)], [], False)])
+    m = Models([("P", False, (0, 200), [(0, 100), (160, 200)], [], None, False)])
     assert m.sub_cause(True, (-160, -100)) == OPPOSITE
 
 
 def test_choice_falls_back_to_the_transcript_id():
-    rows = [(tid, False, (0, 1000), [(0, 400), (600, 1000)], [], False) for tid in ("T2", "T1", "T3")]
+    rows = [(tid, False, (0, 1000), [(0, 400), (600, 1000)], [], None, False) for tid in ("T2", "T1", "T3")]
     assert classify(Models(rows), False, [(100, 200)]) == ctx("ncexon", "T1")
     assert classify(Models(rows[::-1]), False, [(100, 400), (600, 700)]) == ctx("ncexon", "T1", 1)
 
 
 def test_choice_order_end_then_overlap_then_nearest_end():
     # one exon each; body 100..300, p = 299
-    rows = [("far", False, (0, 1000), [(0, 1000)], [], False),          # all 200 nt exonic, end 700 nt away
-            ("near", False, (0, 305), [(0, 150), (250, 305)], [], False)]   # 100 nt exonic, ends within the tolerance
+    rows = [("far", False, (0, 1000), [(0, 1000)], [], None, False),          # all 200 nt exonic, end 700 nt away
+            ("near", False, (0, 305), [(0, 150), (250, 305)], [], None, False)]   # 100 nt exonic, ends within the tolerance
     assert classify(Models(rows), False, [(100, 300)]) == ctx("annotated_end", "near", other_class=True)
     # no end within the tolerance: the larger exonic overlap wins against the nearer end
-    rows[1] = ("near", False, (0, 400), [(0, 150), (250, 400)], [], False)
+    rows[1] = ("near", False, (0, 400), [(0, 150), (250, 400)], [], None, False)
     assert classify(Models(rows), False, [(100, 300)]) == ctx("ncexon", "far")
     # equal overlap: the nearer annotated 3' end
-    rows[1] = ("near", False, (0, 400), [(0, 400)], [], False)
+    rows[1] = ("near", False, (0, 400), [(0, 400)], [], None, False)
     assert classify(Models(rows), False, [(100, 300)]) == ctx("ncexon", "near")
     # the overlap is counted over every exon a block touches: 50 + 200 nt of "two" against 70 + 50 nt of "wide"
-    rows = [("wide", False, (0, 400), [(0, 120), (300, 400)], [], False),
-            ("two", False, (0, 400), [(0, 100), (150, 400)], [], False)]
+    rows = [("wide", False, (0, 400), [(0, 120), (300, 400)], [], None, False),
+            ("two", False, (0, 400), [(0, 100), (150, 400)], [], None, False)]
     assert classify(Models(rows), False, [(50, 350)]) == ctx("ncexon", "two", complete_5p=True)
 
 
 def test_unspliced_read_longer_than_the_transcript_is_placed_by_its_end_with_the_tolerance():
-    m = Models([("T", False, (100, 200), [(100, 200)], [], False)])
+    m = Models([("T", False, (100, 200), [(100, 200)], [], None, False)])
     # no span contains the read; its last base lies 10 nt past the last base of T, then 11 nt
     assert classify(m, False, [(50, 210)]) == ctx("annotated_end", "T", starts_outside=True, complete_5p=True)
     assert classify(m, False, [(50, 211)]) == ctx("downstream")
