@@ -13,11 +13,13 @@ its field passed last, after every check has run and passed; the later stages re
 (recount.require_passed). A failed check is printed with its offending entries and the exit status is 1.
 
 Measured on 1417 on 2026-10-14 (116 references, 14 settings, A4 and A6 on the 8 published original-tool BAMs, 4 at once,
-under /usr/bin/time -v and memwatch): 43 min 25 s wall. The rule over all parts with the two molecule tables took 56 s,
-A1, A1b, A3 and A5 16 s, matrices and totals 45 s, A2 12 s, A4 with A6 2,476 s (502 to 1,357 s per BAM). Up to A2 one
-process, at most 4.05 GiB resident (VmRSS sampled every 5 s). During A4 the largest process peaked at 7.38 GiB
-(/usr/bin/time), the tree at 26.4 GiB as a memwatch sum and at 17.0 GiB as a sum of Pss (/proc/<pid>/smaps_rollup sampled
-every 10 s): the four workers are forked from the parent and count its resident pages in their RSS.
+under /usr/bin/time -v and memwatch), two runs with the same outputs: 43 min 25 s and 43 min 48 s wall. The rule over all
+parts with the two molecule tables took 56 and 70 s, A1, A1b, A3 and A5 16 and 17 s, matrices and totals 45 and 44 s, A2
+12 and 14 s, A4 with A6 2,476 and 2,482 s (491 to 1,357 s per BAM). Up to A2 one process, at most 4.04 and 3.83 GiB
+resident (VmRSS sampled every 5 s). During A4 the largest process peaked at 7.38 and 7.43 GiB (/usr/bin/time), the tree
+at 26.4 and 26.7 GiB as a memwatch sum; in the second run the sum of Pss (/proc/<pid>/smaps_rollup sampled every 10 s)
+peaked at 17.0 GiB. Our reading of the gap: the four workers are forked from the parent and count its resident pages in
+their RSS.
 The A4 path of 1179 on chr21 and chr22 alone (the rule on those parts, the 8 subset BAMs two at once): 8 s for the rule
 and 665 s for A4 with A6, 5.36 GiB memwatch peak. Not measured: 1419 and 1179 in full.
 """
