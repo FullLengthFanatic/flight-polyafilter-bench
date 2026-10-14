@@ -1,13 +1,17 @@
+import json
+import os
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
-from pafbench.burden import (END_BINS, SETS, downsample_sets, downsampling_summary, end_bin, end_distances, gene_ends,
+from pafbench.burden import (END_BINS, _exon_coord, SETS, downsample_sets, downsampling_summary, end_bin, end_distances, gene_ends,
                              match_sites, same_site, same_site_check, set_counts, set_summary, shared_genes, site_sets,
                              site_table, usage, usage_comparison)
-from pafbench.config import A_BANDS, DOWNSAMPLE_DRAWS
+from pafbench.config import A_BANDS, DOWNSAMPLE_DRAWS, REPO
 from pafbench.exons import load_collapsed_exons
 from pafbench.labels import a_band
 from pafbench.regions import REGION_NAMES
@@ -152,6 +156,12 @@ def test_end_distances_mixed_rows_and_no_gene(tmp_path):
     assert np.isnan(d[1]) and m[1] == ""
     assert d[[0, 2, 3]].tolist() == [100, 100, -100] and m.tolist() == ["exon", "", "exon", "genome"]
 
+
+def test_exon_coord_counts_collapsed_exon_bases_before_a_boundary():
+    s, e = np.array([1000, 1200]), np.array([1100, 1300])
+    # before the first exon, inside it, at its end, in the intron, at the second start, inside it, past the last exon
+    pos = np.array([900, 1050, 1100, 1150, 1200, 1250, 1400])
+    assert _exon_coord(s, e, pos).tolist() == [0, 50, 100, 100, 100, 150, 200]
 
 def test_end_bin():
     d = np.array([0, 100, 101, -1, -100, -101, 300, 301, 1000, 1001, 5000, 5001, -5001, np.nan])
@@ -334,3 +344,87 @@ def test_same_site_check_reproduces_same_site(tmp_path):
     swapped = expected.assign(label_b=expected.label_b.replace({"templated": "ambiguous"}))
     assert same_site_check(sa, sb, swapped)["label_pairs_equal"] is False
 
+
+def _stage_libs(base):
+    # gP: nuclei sites at 1050 and 1150, cells at 1052 and 1280; gM: all at 2250 with 1417 and 1419 apart by 3 nt; gQ has
+    # 19 nuclei molecules; molecules outside called cells are left out
+    spec = {
+        "1417": [("chr1", "+", 1050, "gP", 15, 12, "CDS"), ("chr1", "+", 1150, "gP", 5, 2, "intron"),
+                 ("chr1", "-", 2250, "gM", 20, 14, "3UTR"), ("chr2", "+", 300, "gQ", 10, 9, "ncexon"),
+                 ("chr2", "+", 900, "", 4, 9, "intergenic")],
+        "1419": [("chr1", "+", 1050, "gP", 20, 12, "CDS"), ("chr1", "-", 2253, "gM", 20, 14, "3UTR"),
+                 ("chr2", "+", 300, "gQ", 9, 9, "ncexon")],
+        "1179": [("chr1", "+", 1052, "gP", 60, 13, "CDS"), ("chr1", "+", 1280, "gP", 30, 6, "3UTR"),
+                 ("chr1", "-", 2250, "gM", 20, 14, "3UTR"), ("chr2", "+", 300, "gQ", 40, 9, "ncexon"),
+                 ("chr2", "+", 904, "", 2, 2, "intergenic")],
+    }
+    mols = {}
+    for lib, rows in spec.items():
+        m = pd.concat([_mols(rows), _mols([("chr1", "+", 1600, "gP", 7, 3, "intron")], in_cell=False)], ignore_index=True)
+        (base / lib / "truth").mkdir(parents=True)
+        m.assign(mol=np.arange(len(m))).to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
+        mols[lib] = m[m.in_cell].reset_index(drop=True)
+    nuclei = pd.concat([mols["1417"], mols["1419"]], ignore_index=True)
+    rows = [same_site(mols["1417"], mols["1419"]).assign(pair="1417_vs_1419"),
+            same_site(nuclei, mols["1179"]).assign(pair="nuclei_vs_cells")]
+    (base / "burden").mkdir()
+    pd.concat(rows, ignore_index=True)[["pair", "label_a", "label_b", "n"]].to_parquet(base / "burden" / "same_site.parquet")
+    return mols
+
+
+def _stage31(base, out, gtf):
+    env = dict(os.environ, PYTHONPATH=str(REPO))
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "31_matched_sites.py"), "--base", str(base), "--out", str(out),
+                           "--gtf", str(gtf)], capture_output=True, text=True, env=env, cwd=REPO)
+
+
+def test_stage31_end_to_end(tmp_path):
+    base, out = tmp_path / "base", tmp_path / "burden31"
+    _stage_libs(base)
+    r = _stage31(base, out, _gtf(tmp_path))
+    assert r.returncode == 0, r.stderr
+    line = json.loads(r.stdout.strip().splitlines()[-1])
+    assert line["acceptance"] is True and line["shared_genes"] == {"1417_vs_1419": 2, "nuclei_vs_cells": 2}
+    m = pd.read_parquet(out / "matched_sites.parquet")
+    assert list(m.columns) == ["pair", "gene", "ref", "strand", "site_a", "site_b", "set", "n_a", "n_b", "usage_a", "usage_b",
+                               "label", "a20", "hexamer", "region", "dist_end", "dist_mode"]
+    nc = m[m.pair == "nuclei_vs_cells"]
+    assert nc[["gene", "site_a", "site_b", "set", "n_a", "n_b"]].astype(object).values.tolist() == [
+        ["gP", 1050, 1052, "shared", 35, 60], ["gP", 1150, pd.NA, "first_only", 5, 0], ["gP", pd.NA, 1280, "second_only", 0, 30],
+        ["gM", 2250, 2250, "shared", 20, 20], ["gM", 2253, pd.NA, "first_only", 20, 0]]
+    assert nc.usage_a.tolist() == [35 / 40, 5 / 40, 0.0, 0.5, 0.5] and nc.usage_b.tolist() == [60 / 90, 0.0, 30 / 90, 1.0, 0.0]
+    # 1417 against 1419: gP (20 and 20) and gM (20 and 20), not gQ (10 and 9); 2250 and 2253 are 3 nt apart
+    same = m[m.pair == "1417_vs_1419"]
+    assert same[["gene", "set"]].values.tolist() == [["gP", "shared"], ["gP", "first_only"], ["gM", "shared"]]
+    s = pd.read_parquet(out / "matched_sites_summary.parquet")
+    assert list(s.columns) == ["pair", "set", "feature", "bin", "sites", "molecules"]
+    assert set(s.pair) == {"1417_vs_1419", "nuclei_vs_cells"}
+    j = json.loads((out / "matched_sites.json").read_text())
+    p = j["pairs"]["nuclei_vs_cells"]
+    assert (p["first"], p["second"], p["shared_genes"]) == ("nuclei", "cells", 2)
+    assert p["sets"] == {"shared": {"sites": 2, "molecules_first": 55, "molecules_second": 80},
+                         "first_only": {"sites": 2, "molecules_first": 25, "molecules_second": 0},
+                         "second_only": {"sites": 1, "molecules_first": 0, "molecules_second": 30},
+                         "shares": {"all": 0.4, "first": 0.5, "second": 2 / 3}}
+    assert p["usage"]["n"] == 2 and p["usage"]["spearman_rho"] == pytest.approx(-1.0)
+    # cells of gP drawn to the 40 of the nuclei, gM kept whole (20 against 40); 2250 with 2250 in every draw
+    ds = p["downsampling"]
+    assert ds["draws"] == DOWNSAMPLE_DRAWS and ds["seed"] == 0 and ds["molecules"] == 60
+    assert ds["shared"]["lo"] >= 1 and ds["second_only"]["hi"] <= 1 and ds["first_only"]["lo"] >= 2
+    assert j["acceptance"]["pass"] is True
+    # one way, without the gene filter: 2253 matches 2250 and the intergenic 900 matches 904
+    assert j["acceptance"]["nuclei_vs_cells"]["sites_a"] == 6 and j["acceptance"]["nuclei_vs_cells"]["matched"] == 5
+    assert "downsampling" not in j["pairs"]["1417_vs_1419"]
+    assert j["sites"] == {"1417": 5, "1419": 3, "nuclei": 6, "cells": 5}
+
+
+def test_stage31_fails_when_the_acceptance_fails(tmp_path):
+    base, out = tmp_path / "base", tmp_path / "burden31"
+    _stage_libs(base)
+    p = base / "burden" / "same_site.parquet"
+    pd.read_parquet(p).assign(n=lambda d: d.n + (d.label_b == "none")).to_parquet(p)
+    r = _stage31(base, out, _gtf(tmp_path))
+    assert r.returncode != 0 and "acceptance failed" in r.stderr
+    j = json.loads((out / "matched_sites.json").read_text())
+    assert j["acceptance"]["pass"] is False and j["acceptance"]["1417_vs_1419"]["pass"] is False
+    assert (out / "matched_sites.parquet").exists() and (out / "matched_sites_summary.parquet").exists()
