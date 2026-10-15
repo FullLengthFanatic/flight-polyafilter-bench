@@ -12,16 +12,18 @@ gained/<tag>.npz, barcodes.tsv, features.tsv, manifest.json, cell_totals.parquet
 its field passed last, after every check has run and passed; the later stages refuse to start without it
 (recount.require_passed). A failed check is printed with its offending entries and the exit status is 1.
 
-Measured on 1417 on 2026-10-14 (116 references, 14 settings, A4 and A6 on the 8 published original-tool BAMs, 4 at once,
-under /usr/bin/time -v and memwatch), two runs with the same outputs: 43 min 25 s and 43 min 48 s wall. The rule over all
-parts with the two molecule tables took 56 and 70 s, A1, A1b, A3 and A5 16 and 17 s, matrices and totals 45 and 44 s, A2
-12 and 14 s, A4 with A6 2,476 and 2,482 s (491 to 1,357 s per BAM). Up to A2 one process, at most 4.04 and 3.83 GiB
-resident (VmRSS sampled every 5 s). During A4 the largest process peaked at 7.38 and 7.43 GiB (/usr/bin/time), the tree
-at 26.4 and 26.7 GiB as a memwatch sum; in the second run the sum of Pss (/proc/<pid>/smaps_rollup sampled every 10 s)
-peaked at 17.0 GiB. Our reading of the gap: the four workers are forked from the parent and count its resident pages in
-their RSS.
-The A4 path of 1179 on chr21 and chr22 alone (the rule on those parts, the 8 subset BAMs two at once): 8 s for the rule
-and 665 s for A4 with A6, 5.36 GiB memwatch peak. Not measured: 1419 and 1179 in full.
+Measured on 1417 on 2026-10-15 (116 references, 14 settings, A4 and A6 on the 8 published original-tool BAMs, the first
+alone and the other seven 4 at once, under /usr/bin/time -v and memwatch): 67 min 29 s wall. The rule over all parts with
+the two molecule tables took 77 s, A1, A1b, A3 and A5 23 s, matrices and totals 48 s, A2 16 s, A4 with A6 3,884 s: the
+first BAM 1,466 s alone, the others 536 to 1,411 s each. Up to A2 one process, at most 4.07 GiB resident (VmRSS sampled
+every 5 s). With the first BAM alone the largest process reached 6.93 GiB and the tree 10.2 GiB (VmRSS sums). Over the
+run the largest process peaked at 7.50 GiB (/usr/bin/time) and the tree at 26.5 GiB as a memwatch sum, while the sum of
+Pss (/proc/<pid>/smaps_rollup sampled every 10 s) peaked at 16.8 GiB. Our reading of the gap: the four workers are forked
+from the parent and count its resident pages in their RSS. Two earlier runs with all eight BAMs 4 at once (2026-10-14)
+gave the same outputs in 43 min 25 s and 43 min 48 s.
+The A4 path of 1179 on chr21 and chr22 alone (the rule on those parts, the 8 subset BAMs scheduled as above): 13 s for
+the rule and 697 s for A4 with A6 (the first BAM 249 s alone), largest process 2.02 GiB, 9.06 GiB memwatch peak. Not
+measured: 1419 and 1179 in full.
 """
 import argparse
 import json
