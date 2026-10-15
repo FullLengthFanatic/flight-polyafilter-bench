@@ -509,6 +509,21 @@ def test_purity_by_region_region_without_reference_molecules():
     assert ref.loc["5UTR", "headline_version"] == share.loc["5UTR", "headline_version"] == "library"
 
 
+def test_purity_by_region_region_with_equal_reference_rates():
+    # ncexon has molecules in both reference classes and no hexamer (h_tail = h_ref = 0, in every resample too): the
+    # formula is undefined, so no estimate or interval of its own, as tail_share gives none for equal rates
+    rng = np.random.default_rng(5)
+    extra = label_molecules(pd.DataFrame({"a20": np.arange(60) % 21, "hexamer": False, "region": "ncexon",
+                                          "gene": np.char.add("g", rng.integers(0, 20, 60).astype(str)).astype(object),
+                                          "ref": "chr1", "strand": "+", "site": rng.integers(0, 50_000, 60)}))
+    mol = pd.concat([_purity_frame(), extra], ignore_index=True)
+    ref, share, bands = (t.set_index("region") for t in purity_by_region(mol, n=50, seed=1))
+    assert ref.loc["ncexon", ["n_ref_tail", "n_ref_internal", "h_tail", "h_ref"]].tolist() == [15, 18, 0, 0]
+    assert share.loc["ncexon", ["share_corrected_regionref", "lo_regionref", "hi_regionref"]].isna().all()
+    assert bands.loc["ncexon", "tail_primed_share_regionref"].isna().all()
+    assert np.isfinite(share.loc["ncexon", ["share_corrected", "lo", "hi"]].to_numpy(float)).all()
+
+
 def test_purity_by_region_intervals_match_brute_force():
     mol = _purity_frame(seed=3)
     n, seed = 40, 6
