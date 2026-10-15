@@ -126,8 +126,8 @@ def main():
         barcodes = (matrix_dir / "barcodes.tsv").read_text().split()
         features = [line.split("\t") for line in (matrix_dir / "features.tsv").read_text().splitlines()]
         gene_ids, gene_names = [f[0] for f in features], [f[1] for f in features]
-        cls = cell_classes(np.array(barcodes, object), pd.read_parquet(inputs["cells"], columns=["cb", "class"]))
-        classes, class_code = np.unique(cls, return_inverse=True)
+        of_barcode = cell_classes(np.array(barcodes, object), pd.read_parquet(inputs["cells"], columns=["cb", "class"]))
+        classes, class_code = np.unique(of_barcode, return_inverse=True)
         gt = pd.read_parquet(matrix_dir / "gene_totals.parquet", columns=["gene_id", "tag", "umis"])
         umis = gt[gt.tag == "unfiltered"].set_index("gene_id").umis.reindex(gene_ids, fill_value=0).to_numpy(np.int64)
         expr_code, bounds = expr_bins_counted(umis)
