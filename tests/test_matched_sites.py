@@ -324,7 +324,8 @@ def _depth_tables():
 def test_downsample_sets_keeps_the_first_group_count_per_gene_and_is_seeded():
     a, b = _depth_tables()
     d = downsample_sets(a, b, ["g1", "g2"], draws=40, seed=1)
-    assert list(d.columns)[:7] == ["draw", "molecules", "shared", "first_only", "second_only", "first_only_near", "second_only_near"]
+    assert list(d.columns)[:7] == ["draw", "molecules", "shared", "first_only", "second_only", "first_only_near",
+                                   "second_only_near"]
     assert d.draw.tolist() == list(range(40)) and (d.molecules == 3 + 3).all()
     # no unpaired site lies within 5 nt of a site of the other group: 1050 is the nearest second-group site to 1000 after 1002
     assert (d.first_only_near == 0).all() and (d.second_only_near == 0).all()

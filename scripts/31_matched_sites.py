@@ -15,8 +15,9 @@ overlapping or abutting exons merged (exons.load_collapsed_exons). For each gene
 the site and the end. Otherwise the mode is "genome" and the distance counts genomic bases. A site covered by several genes
 takes the gene with the smallest |d| (equal |d|: the positive one, then the first gene), in either mode. exons.member_distance
 also looks over all the site's genes but takes any exon distance before a genomic one. With gene alone, a site at the end
-of a gene nested in a longer one was measured to the longer gene's ends (review S31-3). Sites without a gene: NaN and "". region is the strand-wide annotation of milestone 2 (any
-transcript on the strand), so a site can be in a CDS of another gene and intronic for its own.
+of a gene nested in a longer one was measured to the longer gene's ends (review S31-3). Sites without a gene: NaN and "".
+region is the strand-wide annotation of milestone 2 (any transcript on the strand), so a site can be in a CDS of another
+gene and intronic for its own.
 
 Shared genes: at least MIN_GENE labeled molecules in both groups (the threshold of burden.same_gene). Within them each pair
 of sites that are each other's nearest on the same ref and strand within SITE_TOL nt is shared (burden.match_sites); the
