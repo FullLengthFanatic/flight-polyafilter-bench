@@ -65,7 +65,8 @@ from .markers import AMBIENT_ROD_TRANSCRIPTS, PANEL, ROD_TF
 
 UNASSIGNED = "unassigned"
 SEED = 0              # random_state of PCA, neighbour graph, UMAP, score_genes and scrublet; the Leiden seeds are CLUSTER's
-FEW_GENES = 2         # a class whose score rests on this many detected panel genes or fewer is marked (3.3, check 1)
+FEW_GENES = 2         # a class whose score rests on this many detected panel genes or fewer is marked (3.3, check 1); a
+                      # gene counts as detected with a UMI in MIN_CELLS_GENE cells or more, as 3.3 step 1 detects a gene
 WEAK = "two of its genes also mark mature classes (VSX2 bipolar, PAX6 amacrine)"
 # "Immune, vascular-associated, and choroidal cell types were not observed" in organoids (Cowan 2020,
 # https://pmc.ncbi.nlm.nih.gov/articles/PMC7505495/, design 3.3): a cluster of a library of CELLS named so is flagged
@@ -212,9 +213,10 @@ def marker_table(counts, norm, symbols, cell_class, scores, lib):
     expression inside and outside the class; ROC AUC of the class score for the class's cells against the rest
     ("Compute Area Under the Receiver Operating Characteristic Curve (ROC AUC) from prediction scores.",
     https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html); n_genes_detected, the panel genes
-    of the class with a UMI in the library. Inside numbers and AUC are NaN for a class without cells."""
+    of the class with a UMI in MIN_CELLS_GENE cells or more of the library. Inside numbers and AUC are NaN for a class
+    without cells."""
     column = {s: i for i, s in enumerate(symbols)}
-    detected = np.asarray((counts > 0).sum(axis=0)).ravel() > 0
+    detected = np.asarray((counts > 0).sum(axis=0)).ravel() >= MIN_CELLS_GENE
     rows = []
     for c in scored_classes(lib):
         inside = cell_class == c.name
@@ -339,7 +341,8 @@ def flags(lib, clusters, markers):
     weak = {c.name: [WEAK] for c in PANEL if c.weak and c.name in set(markers["class"])}
     for c, n in markers.groupby("class", sort=False).n_genes_detected.first().items():
         if n <= FEW_GENES:
-            weak.setdefault(c, []).append(f"rests on {n} detected panel gene{'' if n == 1 else 's'}")
+            weak.setdefault(c, []).append(
+                f"rests on {n} panel gene{'' if n == 1 else 's'} detected in {MIN_CELLS_GENE} cells or more")
     renamed = clusters[clusters["class"] != clusters.class_with_rod_tf]
     organoid = clusters[clusters["class"].isin(ORGANOID_ABSENT)] if lib in CELLS else clusters[:0]
     return {"weak_classes": weak,
@@ -418,8 +421,9 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
         "library": lib, "cells": int(counts.shape[0]), "genes": int(counts.shape[1]),
         "genes_clustered": int((np.asarray((counts > 0).sum(axis=0)).ravel() >= MIN_CELLS_GENE).sum()),
         "parameters": {"cluster": cluster, "class_margin": CLASS_MARGIN, "min_cells_gene": MIN_CELLS_GENE,
-                       "rare_pctl": RARE_PCTL, "random_state": SEED, "few_genes": FEW_GENES, "scanpy": SCANPY,
-                       "scrublet": SCRUBLET, "scanpy_n_jobs": sc.settings.n_jobs,
+                       "rare_pctl": RARE_PCTL, "random_state": SEED, "few_genes": FEW_GENES,
+                       "detected_min_cells": MIN_CELLS_GENE, "scanpy": SCANPY, "scrublet": SCRUBLET,
+                       "scanpy_n_jobs": sc.settings.n_jobs,
                        "split_thresholds": {"min_in_group_fraction": MIN_IN_FRACTION,
                                             "max_out_group_fraction": MAX_OUT_FRACTION, "min_fold_change": MIN_FOLD_CHANGE},
                        "ambient_rod_transcripts": list(AMBIENT_ROD_TRANSCRIPTS), "rod_tf": list(ROD_TF)},

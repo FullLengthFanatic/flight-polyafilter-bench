@@ -244,11 +244,12 @@ def test_genes_in_fewer_than_min_cells_are_left_out_of_the_clustering_only(toy, 
     model = res.embedding.model
     assert in_cells[model["genes"]].min() >= MIN_CELLS_GENE and col["VAT1L"] not in model["genes"]
     assert res.summary["genes_clustered"] == int((in_cells >= MIN_CELLS_GENE).sum())
-    # VAT1L is still scored: it is the one horizontal gene detected, and the class is marked as resting on it
+    # VAT1L is still scored, but in 2 cells it does not count as detected: the horizontal class rests on no detected gene
     markers = res.markers.set_index(["class", "gene"])
-    assert markers.loc[("horizontal", "VAT1L"), "n_genes_detected"] == 1
+    assert markers.loc[("horizontal", "VAT1L"), "n_genes_detected"] == 0
     assert markers.loc[("horizontal", "VAT1L"), "frac_out"] == 2 / len(toy.group)
-    assert res.summary["weak_classes"]["horizontal"] == ["rests on 1 detected panel gene"]
+    assert res.summary["weak_classes"]["horizontal"] == [f"rests on 0 panel genes detected in {MIN_CELLS_GENE} cells or more"]
+    assert res.summary["parameters"]["detected_min_cells"] == MIN_CELLS_GENE
     assert len(res.cells) == len(toy.group)
 
 
@@ -390,6 +391,21 @@ def test_marker_table(toy, trial):
     assert t[t["class"] == "rod"].n_genes_detected.eq(8).all()
 
 
+def test_a_panel_gene_counts_as_detected_with_a_umi_in_min_cells_cells_or_more():
+    # check 1 counts the panel genes behind a class score as 3.3 step 1 detects a gene: ONECUT1 has a UMI in 3 cells,
+    # ONECUT2 in 2, LHX1 in none and VAT1L in 4 (LNP1 is not in the matrix)
+    symbols = np.array(["ONECUT1", "ONECUT2", "LHX1", "VAT1L", "HK"])
+    counts = sp.csr_matrix(np.array([[1, 1, 0, 1, 5], [1, 1, 0, 1, 5], [1, 0, 0, 1, 5], [0, 0, 0, 1, 5], [0, 0, 0, 0, 5],
+                                     [0, 0, 0, 0, 5]], np.int32))
+    norm = classes.normalise(counts, np.array([f"G{i}" for i in range(len(symbols))]))
+    cell_class = np.array(["horizontal"] * 3 + [UNASSIGNED] * 3)
+    scores = pd.DataFrame({c.name: np.zeros(6) for c in scored_classes("1417")})
+    t = classes.marker_table(counts, norm, symbols, cell_class, scores, "1417")
+    assert MIN_CELLS_GENE == 3
+    assert t[t["class"] == "horizontal"].n_genes_detected.eq(2).all()
+    assert t[t["class"] != "horizontal"].n_genes_detected.eq(0).all()
+
+
 def test_cell_ranger_consistency(toy, trial):
     res = trial[3]
     cr = res.summary["cell_ranger"]
@@ -437,8 +453,8 @@ def test_flags_of_the_class_table():
     assert f["organoid_named"] == [{"cluster": 1, "class": "microglia"}, {"cluster": 2, "class": "vascular"}]
     assert f["rod_tf_renamed"] == [{"cluster": 3, "class": "rod", "class_with_rod_tf": UNASSIGNED}]
     assert f["weak_classes"] == {"progenitor": ["two of its genes also mark mature classes (VSX2 bipolar, PAX6 amacrine)"],
-                                 "proliferating": ["rests on 1 detected panel gene"],
-                                 "microglia": ["rests on 2 detected panel genes"]}
+                                 "proliferating": [f"rests on 1 panel gene detected in {MIN_CELLS_GENE} cells or more"],
+                                 "microglia": [f"rests on 2 panel genes detected in {MIN_CELLS_GENE} cells or more"]}
     for lib in NUCLEI:
         assert flags(lib, clusters, markers)["organoid_named"] == []
 
