@@ -12,16 +12,18 @@ import sys
 from collections import namedtuple
 from itertools import combinations
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+import scanpy as sc
 import scipy.sparse as sp
 from sklearn.metrics import adjusted_rand_score
 from threadpoolctl import threadpool_limits
 
 from pafbench import classes
-from pafbench.classes import UNASSIGNED, assign, class_scores, donor_replicate, flags, name_clusters, pipeline, scored_classes
-from pafbench.classes import seed_stability
+from pafbench.classes import UNASSIGNED, assign, class_scores, donor_replicate, doublet_scores, flags, name_clusters, pipeline
+from pafbench.classes import scored_classes, seed_stability
 from pafbench.config import CELLS, CLASS_MARGIN, CLUSTER, MIN_CELLS_GENE, NUCLEI, REPO
 from pafbench.markers import AMBIENT_ROD_TRANSCRIPTS, PANEL, ROD_TF
 
@@ -276,6 +278,51 @@ def test_pipeline_returns_every_seed_and_resolution_asked_for(toy):
     assert adjusted_rand_score(emb.labels[(0, 4.0)], emb.labels[(1, 4.0)]) < 1.0
 
 
+def test_pipeline_and_class_scores_are_the_scanpy_chain_with_every_value_written_out(toy):
+    # 3.3 steps 2 and 3 with the values of CLUSTER and the scanpy defaults written out, against classes.pipeline at
+    # resolution 4.0, where the toy's groups split and the Leiden flavour or k would change the labels, and class_scores
+    emb = pipeline(toy.counts, toy.gene_ids, (0,), (4.0,))
+    with threadpool_limits(limits=CLUSTER["blas_threads"]):
+        a = ad.AnnData(toy.counts.copy(), obs=pd.DataFrame(index=np.arange(len(toy.group)).astype(str)),
+                       var=pd.DataFrame(index=toy.gene_ids))
+        sc.pp.normalize_total(a, target_sum=CLUSTER["target_sum"])
+        sc.pp.log1p(a)
+        kept = np.flatnonzero((toy.counts > 0).sum(axis=0).A1 >= MIN_CELLS_GENE)
+        b = a[:, kept].copy()
+        sc.pp.highly_variable_genes(b, n_top_genes=CLUSTER["n_hvg"], flavor="seurat")
+        hv = kept[b.var.highly_variable.to_numpy()]
+        b = b[:, b.var.highly_variable].copy()
+        sc.pp.scale(b, zero_center=True, max_value=None)
+        sc.pp.pca(b, n_comps=CLUSTER["n_pcs"], svd_solver="arpack", random_state=0)
+        sc.pp.neighbors(b, n_neighbors=CLUSTER["k"], n_pcs=CLUSTER["n_pcs"], method="umap", metric="euclidean", random_state=0)
+        sc.tl.leiden(b, resolution=4.0, random_state=0, flavor="igraph", n_iterations=2, directed=False)
+        column = dict(zip(toy.symbols, toy.gene_ids))
+        sc.tl.score_genes(a, [column[g] for g in BY_NAME["cone"].genes], ctrl_as_ref=True, ctrl_size=50, gene_pool=None,
+                          n_bins=25, score_name="cone", random_state=0)
+    labels = b.obs["leiden"].to_numpy().astype(np.int32)
+    assert np.array_equal(class_scores(emb.norm, toy.symbols, "1417")[0]["cone"].to_numpy(), a.obs["cone"].to_numpy())
+    assert len(set(labels)) > len(GROUPS) and np.array_equal(emb.labels[(0, 4.0)], labels)
+    assert np.array_equal(emb.pca, b.obsm["X_pca"])
+    m = emb.model
+    assert np.array_equal(m["genes"], hv) and np.array_equal(m["gene_ids"], toy.gene_ids[hv])
+    assert np.array_equal(m["mean"], b.var["mean"]) and np.array_equal(m["sd"], b.var["std"])
+    assert np.array_equal(m["loadings"], b.varm["PCs"])
+
+
+def test_doublet_scores_are_seeded_and_on_the_raw_counts(toy, trial):
+    # D9: scrublet "Works best if the input is a raw (unnormalized) counts matrix" (scanpy.pp.scrublet documentation); its own
+    # seed, not the global numpy state (score_genes seeds that one: np.random.seed(random_state), scanpy/tools/_score_genes.py)
+    np.random.seed(1)
+    first = doublet_scores(toy.counts)
+    np.random.seed(2)
+    assert np.array_equal(first, doublet_scores(toy.counts))
+    a = ad.AnnData(toy.counts.copy(), obs=pd.DataFrame(index=np.arange(len(toy.group)).astype(str)))
+    with threadpool_limits(limits=CLUSTER["blas_threads"]):
+        sc.pp.scrublet(a, sim_doublet_ratio=2.0, expected_doublet_rate=0.05, n_prin_comps=30, random_state=0)
+    assert np.array_equal(trial[3].cells.doublet_score.to_numpy(), a.obs["doublet_score"].to_numpy())
+    assert np.array_equal(first, a.obs["doublet_score"].to_numpy())
+
+
 def test_seed_stability_on_the_toy(trial):
     s = trial[3].summary["seed_stability"]
     assert s["seeds"] == list(CLUSTER["seeds"]) and s["resolution"] == CLUSTER["resolution"]
@@ -476,6 +523,11 @@ def test_stage25_script_writes_the_outputs_and_the_same_seed_gives_the_same_file
                 "panel_genes_missing", "weak_classes", "classes", "split_classes", "rod_tf_renamed", "organoid_named"):
         assert key in js, key
     assert js["parameters"]["cluster"] == json.loads(json.dumps(CLUSTER)) and js["parameters"]["class_margin"] == CLASS_MARGIN
+    assert js["parameters"]["scanpy"] == {"hvg_flavor": "seurat", "svd_solver": "arpack", "zero_center": True, "max_value": None,
+                                          "neighbors_method": "umap", "metric": "euclidean", "ctrl_as_ref": True,
+                                          "ctrl_size": 50, "n_bins": 25, "gene_pool": None}
+    assert js["parameters"]["scrublet"] == {"sim_doublet_ratio": 2.0, "expected_doublet_rate": 0.05, "n_prin_comps": 30}
+    assert js["parameters"]["scanpy_n_jobs"] == sc.settings.n_jobs
     assert js["seeds"] == list(CLUSTER["seeds"])
     assert js["inputs"] == {"matrices": str(m), "clusters": str(a / "clustering" / "gene_expression_graphclust" / "clusters.csv"),
                             "differential_expression": str(a / "diffexp" / "gene_expression_graphclust" /

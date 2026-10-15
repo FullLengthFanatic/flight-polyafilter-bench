@@ -73,6 +73,20 @@ MT_PREFIX = "MT-"
 # max_out_group_fraction) & (fold_change_matrix > min_fold_change)" (lines 920 to 922). split_classes applies them to two
 # clusters of one class.
 MIN_IN_FRACTION, MAX_OUT_FRACTION, MIN_FOLD_CHANGE = 0.25, 0.5, 1
+# The scanpy defaults the stage relies on, passed explicitly and recorded in classes.json with scanpy.settings.n_jobs, so that
+# a scanpy with other defaults cannot change the result unnoticed (scanpy 1.11.5 sources): highly_variable_genes
+# 'flavor: HVGFlavor = "seurat"' (scanpy/preprocessing/_highly_variable_genes.py line 570); pca of an ndarray with
+# zero_center=True is "sklearn PCA ('arpack')" (scanpy/preprocessing/_pca/__init__.py lines 90 and 91), and "Default value
+# changed from `'arpack'` to None." in 1.9.3 (line 148); scale "zero_center: bool = True, max_value: float | None = None"
+# (scanpy/preprocessing/_scale.py lines 84 and 85); neighbors 'method: _Method = "umap"' and 'metric: _Metric | _MetricFn =
+# "euclidean"' (scanpy/neighbors/__init__.py lines 79 and 81); score_genes "ctrl_as_ref: bool = True", "ctrl_size: int = 50",
+# "n_bins: int = 25" (scanpy/tools/_score_genes.py lines 62, 63 and 65), ctrl_as_ref "Will be changed to `False` in scanpy
+# 2.0." (line 89) and gene_pool "Default is all genes." (line 94); scrublet "sim_doublet_ratio: float = 2.0",
+# "expected_doublet_rate: float = 0.05", "n_prin_comps: int = 30" (scanpy/preprocessing/_scrublet/__init__.py lines 47, 48
+# and 55).
+SCANPY = {"hvg_flavor": "seurat", "svd_solver": "arpack", "zero_center": True, "max_value": None, "neighbors_method": "umap",
+          "metric": "euclidean", "ctrl_as_ref": True, "ctrl_size": 50, "n_bins": 25, "gene_pool": None}
+SCRUBLET = {"sim_doublet_ratio": 2.0, "expected_doublet_rate": 0.05, "n_prin_comps": 30}
 
 Embedding = namedtuple("Embedding", "norm labels pca umap model")
 Classes = namedtuple("Classes", "cells clusters markers table summary embedding")
@@ -109,12 +123,13 @@ def pipeline(counts, gene_ids, seeds=CLUSTER["seeds"][:1], resolutions=(CLUSTER[
         norm = normalise(counts, gene_ids, cluster)
         kept = np.flatnonzero(np.asarray((counts > 0).sum(axis=0)).ravel() >= MIN_CELLS_GENE)
         b = norm[:, kept].copy()
-        sc.pp.highly_variable_genes(b, n_top_genes=cluster["n_hvg"])
+        sc.pp.highly_variable_genes(b, n_top_genes=cluster["n_hvg"], flavor=SCANPY["hvg_flavor"])
         hv = kept[b.var.highly_variable.to_numpy()]
         b = b[:, b.var.highly_variable].copy()
-        sc.pp.scale(b)
-        sc.pp.pca(b, n_comps=cluster["n_pcs"], random_state=SEED)
-        sc.pp.neighbors(b, n_neighbors=cluster["k"], n_pcs=cluster["n_pcs"], random_state=SEED)
+        sc.pp.scale(b, zero_center=SCANPY["zero_center"], max_value=SCANPY["max_value"])
+        sc.pp.pca(b, n_comps=cluster["n_pcs"], svd_solver=SCANPY["svd_solver"], random_state=SEED)
+        sc.pp.neighbors(b, n_neighbors=cluster["k"], n_pcs=cluster["n_pcs"], method=SCANPY["neighbors_method"],
+                        metric=SCANPY["metric"], random_state=SEED)
         labels = {(s, r): leiden(b, s, r, cluster) for r in resolutions for s in seeds}
         if umap:
             sc.tl.umap(b, random_state=SEED)
@@ -140,7 +155,8 @@ def class_scores(norm, symbols, lib, cluster=CLUSTER):
             if not present:
                 out[name] = np.full(norm.n_obs, np.nan)
                 continue
-            sc.tl.score_genes(norm, present, score_name="_score", random_state=SEED)
+            sc.tl.score_genes(norm, present, ctrl_as_ref=SCANPY["ctrl_as_ref"], ctrl_size=SCANPY["ctrl_size"],
+                              gene_pool=SCANPY["gene_pool"], n_bins=SCANPY["n_bins"], score_name="_score", random_state=SEED)
             out[name] = norm.obs.pop("_score").to_numpy()
     rod_tf = out.pop("rod_tf")
     return pd.DataFrame(out), rod_tf
@@ -172,7 +188,7 @@ def doublet_scores(counts, cluster=CLUSTER):
     """scanpy.pp.scrublet doublet score of each cell, on the raw counts, seeded (D9, flag b)."""
     with threadpool_limits(limits=cluster["blas_threads"]):
         a = ad.AnnData(counts.copy(), obs=pd.DataFrame(index=np.arange(counts.shape[0]).astype(str)))
-        sc.pp.scrublet(a, random_state=SEED)
+        sc.pp.scrublet(a, random_state=SEED, **SCRUBLET)
     return a.obs["doublet_score"].to_numpy()
 
 
@@ -394,7 +410,8 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
         "library": lib, "cells": int(counts.shape[0]), "genes": int(counts.shape[1]),
         "genes_clustered": int((np.asarray((counts > 0).sum(axis=0)).ravel() >= MIN_CELLS_GENE).sum()),
         "parameters": {"cluster": cluster, "class_margin": CLASS_MARGIN, "min_cells_gene": MIN_CELLS_GENE,
-                       "rare_pctl": RARE_PCTL, "random_state": SEED, "few_genes": FEW_GENES,
+                       "rare_pctl": RARE_PCTL, "random_state": SEED, "few_genes": FEW_GENES, "scanpy": SCANPY,
+                       "scrublet": SCRUBLET, "scanpy_n_jobs": sc.settings.n_jobs,
                        "split_thresholds": {"min_in_group_fraction": MIN_IN_FRACTION,
                                             "max_out_group_fraction": MAX_OUT_FRACTION, "min_fold_change": MIN_FOLD_CHANGE},
                        "ambient_rod_transcripts": list(AMBIENT_ROD_TRANSCRIPTS), "rod_tf": list(ROD_TF)},
