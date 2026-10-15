@@ -449,7 +449,11 @@ def test_headline_version_rule():
             (500, 500, 0.5, 0.7, 0.01, 0.04, "region"),  # h_ref outside (above the interval)
             (500, 500, 0.6, 0.7, 0.03, 0.05, "library"),  # both on a bound: inside
             (500, 500, 0.5, 0.7, 0.04, 0.06, "library"),  # both inside
-            (500, 0, 0.5, 0.7, np.nan, np.nan, "library")]  # no internal reference: no interval
+            (500, 0, 0.5, 0.7, np.nan, np.nan, "library"),  # no internal reference: no interval
+            (500, 500, 0.0, 0.04, 0.02, 0.05, "library"),  # tail rate below the internal one: the formula is undefined
+            (500, 500, 0.03, 0.07, 0.02, 0.05, "library"),  # the two intervals overlap: the rates are not separable
+            (500, 500, 0.05, 0.07, 0.02, 0.05, "library"),  # tail interval starts at the internal one's end: not above it
+            (500, 500, 0.051, 0.07, 0.02, 0.05, "region")]  # tail interval above the internal one
     ref = pd.DataFrame(rows, columns=["n_ref_tail", "n_ref_internal", "h_tail_lo", "h_tail_hi", "h_ref_lo", "h_ref_hi", "want"])
     assert headline_version(ref, 0.6, 0.05).tolist() == ref.want.tolist()
     assert headline_version(ref, 0.6, 0.05, ref_min=199).tolist()[:3] == ["region", "region", "region"]

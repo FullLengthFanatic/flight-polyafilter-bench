@@ -89,12 +89,15 @@ def _clipped(rate, ref, tail):
 def headline_version(ref, h_tail_lib, h_ref_lib, ref_min=REGION_REF_MIN):
     """Headline version of each region, by the rule design 3.7 fixed before any number: 'region' (the region's own rates)
     where the region has at least ref_min molecules in each reference class and a library-wide rate lies outside the 95%
-    interval of the region's rate of that class, 'library' elsewhere. ref has the columns n_ref_tail, n_ref_internal,
-    h_tail_lo, h_tail_hi, h_ref_lo and h_ref_hi; a missing interval (NaN) leaves nothing outside."""
+    interval of the region's rate of that class, 'library' elsewhere. Added by the user on 2026-10-15 (design 3.7, dated
+    note): the region's own rates also have to be separable, its tail-rate interval wholly above its internal-rate interval.
+    ref has the columns n_ref_tail, n_ref_internal, h_tail_lo, h_tail_hi, h_ref_lo and h_ref_hi; a missing interval (NaN)
+    leaves nothing outside and nothing separable."""
     enough = (ref.n_ref_tail >= ref_min) & (ref.n_ref_internal >= ref_min)
     outside = ((h_tail_lib < ref.h_tail_lo) | (h_tail_lib > ref.h_tail_hi) | (h_ref_lib < ref.h_ref_lo)
                | (h_ref_lib > ref.h_ref_hi))
-    return np.where(enough & outside, "region", "library").astype(object)
+    separable = ref.h_tail_lo > ref.h_ref_hi
+    return np.where(enough & outside & separable, "region", "library").astype(object)
 
 
 # columns of the counts behind the bootstrap of purity_by_region: all molecules, the A bands, the two reference classes
