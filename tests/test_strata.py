@@ -1,6 +1,9 @@
 """Stage 27 (pafbench.strata): truth-set strata by cell class and expression level, the join of truth molecules to the
 molecules counted before filtering, accuracy as the matrix sees it and the acceptance, on synthetic truth sets and on the
 synthetic 10x library of tests/synth.build_10x."""
+import importlib.util
+import json
+import sys
 from dataclasses import replace
 
 import numpy as np
@@ -9,8 +12,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from pafbench.config import A_BANDS, MIN_STRATUM
-from pafbench.evaluate import COUNT_COLUMNS, bootstrap, evaluate, subset_units, units
+from pafbench import recount
+from pafbench.config import A_BANDS, MIN_STRATUM, REPO
+from pafbench.evaluate import COUNT_COLUMNS, METRIC_COLUMNS, bootstrap, evaluate, subset_units, units
 from pafbench.flags import setting_tag
 from pafbench.regions import REGION_NAMES
 from pafbench.strata import (JOIN_COLUMNS, KINDS, LEVELS, NO_UMI, OUTCOME_COLUMNS, UNASSIGNED, acceptance, cell_classes,
@@ -361,3 +365,118 @@ def test_matrix_outcome_counts_the_lost_bit_against_the_unit_rule_on_joined_mole
     assert got[t0, "all_labeled", "nontemplated", "0-4"] == (1, 1, 0, 0, 0)
     assert got[t1, "all_labeled", "templated", "14-20"] == (2, 0, 0, 0, 0)
     assert o.dtypes[["joined", "not_joined", "lost_in_matrix", "removed_as_unit", "both"]].astype(str).tolist() == ["int64"] * 5
+
+
+def _stage27():
+    spec = importlib.util.spec_from_file_location("stage27", REPO / "scripts" / "27_truth_strata.py")
+    stage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage)
+    return stage
+
+
+# label and a20 of the molecules of _synthetic_truth
+LABELS_10X = {"A": ("templated", 15, "14-20"), "B": ("nontemplated", 2, "0-4"), "C": ("templated", 9, "8-9"),
+              "D": ("templated", 12, "10-13"), "E": ("nontemplated", 0, "0-4"), "F": ("ambiguous", 6, "5-7")}
+
+
+def _stage27_tree(s, d, root):
+    """What stage 27 reads for the synthetic library X, next to the outputs of stage 24 in d: the truth tables of
+    _synthetic_truth with member reads (the other records of each cell and UMI) and a molecule of an uncalled barcode,
+    truth_flags at SETTINGS_10X, pa_sites, the classes of stage 25 (c5 without a row) and eval/metrics.parquet as stage 17
+    writes it. Returns (base, cells template, molecules of called cells, truth reads, truth flags)."""
+    mol, tr, sites = _synthetic_truth(s)
+    rec = s.reads.assign(qname=s.reads.qname.astype(str))
+    tags = [setting_tag(x) for x in SETTINGS_10X]
+    unc = rec[rec.case == "uncalled"].iloc[0]
+    mol = pd.concat([mol, pd.DataFrame([(len(mol), "U", unc.cb, unc.ub, "g1", "3UTR")], columns=mol.columns[:6])
+                     .assign(label="templated")], ignore_index=True)
+    tr = pd.concat([tr, pd.DataFrame({"qname": [unc.qname], "mol": [len(mol) - 1], "role": "pa", "dist5_exon": np.nan,
+                                      "dist_mode": "", "spliced": False})], ignore_index=True)
+    lab = [LABELS_10X.get(n, ("templated", 15, "14-20")) for n in mol.name]
+    mol = mol.assign(label=[x[0] for x in lab], a20=[x[1] for x in lab], a_band=[x[2] for x in lab], has_ts=False,
+                     hexamer=False, ref="chrA", strand="+", site=np.arange(len(mol)) * 100_000, in_cell=mol.name != "U")
+    members = [(q, m.mol, "member", 100.0, "exon", False) for m in mol.itertuples()
+               for q in rec[(rec.cb == m.cb) & (rec.ub == m.ub) & ~rec.qname.isin(tr.qname)].qname]
+    tr = pd.concat([tr, pd.DataFrame(members, columns=tr.columns)], ignore_index=True)
+    fl = rec[rec.qname.isin(tr.qname)][["qname", "ref", "pos"] + tags].assign(flag=0)[["qname", "ref", "pos", "flag"] + tags]
+    base = root / "base"
+    (base / "X" / "truth").mkdir(parents=True)
+    (base / "X" / "grid").mkdir()
+    mol.drop(columns="name").to_parquet(base / "X" / "truth" / "molecules_labeled.parquet")
+    tr.to_parquet(base / "X" / "truth" / "truth_reads.parquet")
+    fl.to_parquet(base / "X" / "grid" / "truth_flags.parquet")
+    pd.concat([sites, rec[rec.case == "uncalled"][sites.columns]]).to_parquet(base / "X" / "pa_sites.parquet")
+    (root / "cells" / "X").mkdir(parents=True)
+    pd.DataFrame({"cb": [CELLS_10X[c] for c in ("c1", "c2", "c3", "c4")], "class": ["rod", "cone", "cone", "rod"],
+                  "umis": 1}).to_parquet(root / "cells" / "X" / "cells.parquet")
+    called = mol[mol.in_cell].drop(columns="name").reset_index(drop=True)
+    (base / "eval").mkdir()
+    evaluate(units(called, tr, fl, tags, 1000), "X", 1000, "8/4").to_parquet(base / "eval" / "metrics.parquet")
+    return base, str(root / "cells" / "{lib}"), called, tr, fl
+
+
+def test_stage27_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monkeypatch, capsys):
+    d, _, _ = stage24
+    stage = _stage27()
+    tags = [setting_tag(x) for x in SETTINGS_10X]
+    monkeypatch.setattr(recount, "LIBRARIES", {"X": synth10x.bam})
+    monkeypatch.setattr(stage, "TAGS", tags)
+    monkeypatch.setattr(stage, "BOOT_TAGS", tags[:2])
+    base, cells, mol, tr, fl = _stage27_tree(synth10x, d, tmp_path)
+    out = tmp_path / "eval27"
+    argv = ["27", "X", "--base", str(base), "--cells", cells, "--matrices", str(d / "matrices"), "--recount", str(d / "recount"),
+            "--out", str(out)]
+    monkeypatch.setattr(sys, "argv", argv)
+    stage.main()
+    gt = pd.read_parquet(d / "matrices" / "gene_totals.parquet")
+    gene_umis = gt[gt.tag == "unfiltered"].set_index("gene_id").umis
+    u, bounds = with_strata(units(mol, tr, fl, tags, 1000), pd.read_parquet(tmp_path / "cells" / "X" / "cells.parquet"),
+                            gene_umis)
+    strata = pd.read_parquet(out / "strata_m3.parquet")
+    pd.testing.assert_frame_equal(strata, evaluate(u, "X", 1000, "8/4", levels=LEVELS, kinds=KINDS))
+    assert list(strata.columns) == METRIC_COLUMNS and set(strata.stratum_kind) == set(KINDS)
+    assert set(strata[strata.stratum_kind == "cell_class"].stratum) == {"rod", "cone", UNASSIGNED}   # C: cell c5
+    boot = pd.read_parquet(out / "strata_m3_bootstrap.parquet")
+    pd.testing.assert_frame_equal(boot, strata_bootstrap(u, tags[:2], "X"))
+    join = pd.read_parquet(out / "truth_to_counted.parquet")
+    ref = join_counted(mol, tr, pd.read_parquet(base / "X" / "pa_sites.parquet"), sorted(CELLS_10X.values()),
+                       np.array(["g1", "g2", "g3", "g4"], object), d / "recount" / "counted_molecules.parquet", "X")
+    pd.testing.assert_frame_equal(join, ref[JOIN_COLUMNS])
+    assert join.joined.tolist() == [True, True, True, True, False, False]          # the uncalled molecule is left out
+    outcome = pd.read_parquet(out / "matrix_outcome.parquet")
+    sets = {"with_member": u, "all_labeled": units(mol, tr, fl, tags, 1000, all_labeled=True)}
+    bits = {t: i for i, t in enumerate(tags)}
+    pd.testing.assert_frame_equal(outcome, matrix_outcome(ref, sets, tags, bits, "X"))
+    assert set(outcome.units) == {"with_member", "all_labeled"} and set(outcome.tag) == set(tags)
+    # A (pa read alone) and F (no member read) are units only among all labeled molecules
+    assert outcome[outcome.units == "all_labeled"].groupby("tag")[["joined", "not_joined"]].sum().sum(axis=1).tolist() == [6] * 4
+    assert outcome[outcome.units == "with_member"].groupby("tag")[["joined", "not_joined"]].sum().sum(axis=1).tolist() == [4] * 4
+    js = json.loads((out / "strata_m3.json").read_text())
+    x = js["libraries"]["X"]
+    assert x["expr_bins"]["boundaries"] == bounds.tolist() and x["join"] == join_summary(ref, mol, ["g1", "g2", "g3", "g4"])
+    assert x["few_molecules"] == few_molecules(u) and x["acceptance"]["passed"] is True and js["acceptance_passed"] is True
+    assert x["units"] == {"with_member": {"templated": 2, "nontemplated": 2, "ambiguous": 0},
+                          "all_labeled": {"templated": 3, "nontemplated": 2, "ambiguous": 1}}
+    assert x["cell_class"] == {"cone": 2, "rod": 1, "unassigned": 1}
+    assert x["expr_bins"]["molecules"] == u.mols.expr_bin.value_counts().sort_index().to_dict()
+    assert js["bootstrap"] == {"tags": tags[:2], "n": 1000, "seed": 0, "levels": list(LEVELS)}
+    assert (js["cap"], js["cutoffs"], js["min_stratum"], js["expr_bins"]) == (1000, "8/4", MIN_STRATUM, 4)
+    assert x["inputs"]["counted_molecules"] == str(d / "recount" / "counted_molecules.parquet")
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["libraries"] == ["X"] and line["acceptance_passed"] is True and line["joined"] == {"X": 4}
+    assert line["boundaries"] == {"X": bounds.tolist()} and "seconds" in line
+
+    # the whole of milestone 2 with one non-templated unit more: the outputs are written and the stage exits non-zero
+    m = pd.read_parquet(base / "eval" / "metrics.parquet")
+    m.loc[(m.stratum_kind == "all") & (m.level == "molecule") & (m.tag == tags[0]), "tn"] += 1
+    m.to_parquet(base / "eval" / "metrics.parquet")
+    (out / "strata_m3.json").unlink()
+    with pytest.raises(SystemExit, match="acceptance failed for X"):
+        stage.main()
+    js = json.loads((out / "strata_m3.json").read_text())
+    assert js["acceptance_passed"] is False and js["libraries"]["X"]["acceptance"]["differing"][0]["tag"] == tags[0]
+
+    # stage 24 not passed: the stage refuses to start
+    monkeypatch.setattr(sys, "argv", argv[:8] + ["--recount", str(tmp_path / "none"), "--out", str(out)])
+    with pytest.raises(SystemExit, match="has not passed its acceptance checks for X"):
+        stage.main()
