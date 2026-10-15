@@ -38,7 +38,8 @@ MARKERS = {"rod": BY_NAME["rod"].genes, "cone": BY_NAME["cone"].genes, "bipolar"
 NAMED = {"rod": "rod", "cone": "cone", "bipolar": "bipolar", "muller": "macroglia", "astro": "macroglia",
          "nosignal": UNASSIGNED, "rod_no_tf": "rod"}
 N_HOUSE, N_BACKGROUND, N_OWN, N_RARE = 300, 2000, 20, 4
-Toy = namedtuple("Toy", "counts group gene_ids symbols barcodes rare cr diffexp")
+N_LOW = 100
+Toy = namedtuple("Toy", "counts group gene_ids symbols barcodes rare cr diffexp lam")
 
 
 def _toy(seed=0):
@@ -75,7 +76,7 @@ def _toy(seed=0):
         diffexp[f"Cluster {k} Log2 fold change"] = v
         diffexp[f"Cluster {k} Adjusted p value"] = 1.0
     barcodes = np.array([f"AAAC{i:012d}-1" for i in range(len(group))])
-    return Toy(sp.csr_matrix(counts), group, gene_ids, np.array(symbols), barcodes, rare, cr, diffexp[detected])
+    return Toy(sp.csr_matrix(counts), group, gene_ids, np.array(symbols), barcodes, rare, cr, diffexp[detected], lam)
 
 
 def _inputs(toy, d):
@@ -106,6 +107,24 @@ def trial(toy, tmp_path_factory):
     with threadpool_limits(limits=8):
         res = classes.run("1417", m, d / "first" / "cells", a)
     return d, m, a, res
+
+
+@pytest.fixture(scope="module")
+def low_depth(toy):
+    """classify on the toy with N_LOW more cells at 1/100 of the depth of the no-signal group, GNAT1 and RHO at their ambient
+    level and 20 background genes of their own (about 130 UMIs per cell, against about 5,700 in the toy): score_genes names
+    their cluster rod on GNAT1 alone, since the control genes of GNAT1's expression bin are near 0 in these cells, although
+    no rod gene has a UMI in a larger fraction of them than of the other cells. Seeds 0 and 1."""
+    col = {s: i for i, s in enumerate(toy.symbols)}
+    lam = toy.lam[toy.group == "nosignal"][:N_LOW] * 0.01
+    lam[:, [col["GNAT1"], col["RHO"]]] = 15
+    lam[:, col["BG0"]:col["BG0"] + N_OWN] += 2
+    counts = sp.vstack([toy.counts, sp.csr_matrix(np.random.default_rng(1).poisson(lam).astype(np.int32))]).tocsr()
+    barcodes = np.r_[toy.barcodes, [f"TTTC{i:012d}-1" for i in range(N_LOW)]]
+    cr = np.r_[toy.cr, np.full(N_LOW, toy.cr.max() + 1, np.int32)]
+    lfc = pd.DataFrame(0.0, index=toy.gene_ids, columns=np.unique(cr))
+    group = np.r_[toy.group, ["low_depth"] * N_LOW]
+    return group, classes.classify("1417", counts, barcodes, toy.gene_ids, toy.symbols, cr, lfc, CLUSTER | {"seeds": (0, 1)})
 
 
 def _cluster_of(res, toy):
@@ -176,6 +195,24 @@ def test_rod_score_with_the_transcription_factors_only_marks_the_cluster_whose_n
     assert table.loc[k["rod_no_tf"][0], "rod_tf_score"] < 0 < table.loc[k["rod_no_tf"][0], "score_rod"]
 
 
+def test_planted_clusters_lead_the_rest_of_the_library_with_their_markers(toy, trial):
+    res = trial[3]
+    cl = res.clusters.set_index("cluster")
+    k = _cluster_of(res, toy)
+    # the planted genes are up (GNAT1 is in every cell, so of the rod genes 7 are up in the rod cluster and 5 without NRL and
+    # NR2E3); panel genes at the background rate of every cell count when chance puts them more often inside
+    m = toy.counts.toarray() > 0
+    col = {s: i for i, s in enumerate(toy.symbols)}
+    for g, planted in {"rod": 7, "cone": 10, "bipolar": 11, "muller": 4, "astro": 4, "rod_no_tf": 5}.items():
+        inside = toy.group == g
+        c = cl.loc[k[g][0], "class"]
+        up = sum(m[inside, col[x]].mean() > m[~inside, col[x]].mean() for x in BY_NAME[c].genes if x in col)
+        assert planted <= cl.loc[k[g][0], "genes_up"] == up, g
+    # the other cluster of the same class is part of the rest: 0.94 for each macroglia cluster, 0.75 for rod without NRL and
+    # NR2E3 against the rod cluster
+    assert (cl.drop(index=k["nosignal"]).auc_cluster > classes.CHANCE_AUC).all() and res.summary["markers_below_rest"] == []
+
+
 def test_margin_rule_at_its_boundary():
     names = ["rod", "cone", "bipolar"]
     s = pd.DataFrame([[0.1, 0.0, -1.0],                                  # best minus second equals the margin: assigned
@@ -208,6 +245,34 @@ def test_cells_inherit_the_class_of_their_cluster_and_the_cluster_score_is_the_m
     assert np.array_equal(cl.margin.to_numpy(), cl.score_best.to_numpy() - cl.score_second.to_numpy())
     assert (c["class"].to_numpy() == cl["class"].loc[c.cluster].to_numpy()).all()
     assert (c.margin.to_numpy() == cl.margin.loc[c.cluster].to_numpy()).all()
+
+
+def test_cluster_support_is_the_auc_of_the_named_class_score_and_its_genes_detected_more_often_inside():
+    # cluster 0 is named rod: its rod scores 0.1, 0.2 and 0.9 against 0.5, 0.6 and 0.0 outside win 5 of 9 pairs; NRL has a
+    # UMI in 1 of 3 cells inside and 2 of 3 outside, GNAT1 in all cells, PDE6A in 2 of 3 inside and 1 of 3 outside
+    symbols = np.array(["NRL", "GNAT1", "PDE6A", "ARR3", "HK"])
+    counts = sp.csr_matrix(np.array([[1, 1, 1, 0, 5], [0, 1, 1, 0, 5], [0, 1, 0, 0, 5], [1, 1, 1, 2, 5], [1, 1, 0, 2, 5],
+                                     [0, 1, 0, 2, 5]], np.int32))
+    scores = pd.DataFrame({"rod": [0.1, 0.2, 0.9, 0.5, 0.6, 0.0], "cone": [0, 0, 0, 1, 1, 1.0]})
+    named = pd.DataFrame({"class": ["rod", UNASSIGNED], "class_best": ["rod", "cone"]}, index=[0, 1])
+    s = classes.cluster_support(counts, symbols, np.array([0, 0, 0, 1, 1, 1]), scores, named)
+    assert list(s) == ["auc_cluster", "genes_up"] and list(s.index) == [0, 1]
+    assert s.auc_cluster.tolist() == [5 / 9, 1.0] and s.genes_up.tolist() == [1, 1]
+
+
+def test_a_named_cluster_whose_markers_are_below_the_rest_of_the_library_is_flagged(toy, low_depth):
+    group, res = low_depth
+    (k,) = set(res.cells.cluster[group == "low_depth"])
+    assert (res.cells.cluster[group != "low_depth"] != k).all()
+    cl = res.clusters.set_index("cluster")
+    # named rod with a clear lead, its rod score above most other cells (the AUC alone would not show it), no rod gene up
+    assert cl.loc[k, "class"] == "rod" and cl.loc[k, "margin"] > 0.3 and cl.loc[k, "auc_cluster"] > 0.5
+    assert cl.loc[k, "genes_up"] == 0 and np.median(res.cells.umis[group == "low_depth"]) < 200
+    assert res.summary["markers_below_rest"] == [{"cluster": k, "class": "rod", "auc_cluster": cl.loc[k, "auc_cluster"],
+                                                  "genes_up": 0}]
+    note = res.table.set_index("cluster")["flags"]
+    assert "named although its markers are below the rest of the library" in note[k]
+    assert not note.drop(index=k).str.contains("below the rest").any()
 
 
 def test_1179_only_classes_are_scored_for_1179_only(trial):
@@ -449,7 +514,8 @@ def test_d9_flags_and_qc_columns(toy, trial):
 
 def test_flags_of_the_class_table():
     clusters = pd.DataFrame({"cluster": [0, 1, 2, 3], "class": ["rod", "microglia", "vascular", "rod"],
-                             "class_with_rod_tf": ["rod", "microglia", "vascular", UNASSIGNED]})
+                             "class_with_rod_tf": ["rod", "microglia", "vascular", UNASSIGNED],
+                             "auc_cluster": [0.9, 0.9, 0.9, 0.9], "genes_up": [3, 3, 3, 3]})
     markers = pd.DataFrame({"class": ["rod", "rod", "progenitor", "proliferating", "microglia", "vascular"],
                             "n_genes_detected": [9, 9, 3, 1, 2, 3]})
     f = flags(CELLS[0], clusters, markers, {})
@@ -466,6 +532,15 @@ def test_flags_of_the_class_table():
                                                                                         "above_pctl": 9},
             "RPE": {"cells": 4, "threshold": 0.4, "above_pctl": 9}}
     assert flags("1417", clusters[clusters.cluster.isin([0, 3])], markers, rare)["collapse_not_askable"] == ["vascular"]
+    # a named cluster whose class score is below chance against the other cells, or with no panel gene of its class detected
+    # more often inside than outside; an AUC of exactly 0.5 is not below, and an unassigned cluster is never flagged
+    support = pd.DataFrame({"cluster": [0, 1, 2, 3, 4], "class": ["rod", "cone", "bipolar", "rod", UNASSIGNED],
+                            "class_with_rod_tf": ["rod", "cone", "bipolar", "rod", UNASSIGNED],
+                            "auc_cluster": [0.5, np.nextafter(0.5, 0), 0.9, 0.9, 0.1], "genes_up": [1, 4, 0, 1, 0]})
+    assert f["markers_below_rest"] == []
+    assert flags("1417", support, markers, {})["markers_below_rest"] == [
+        {"cluster": 1, "class": "cone", "auc_cluster": np.nextafter(0.5, 0), "genes_up": 4},
+        {"cluster": 2, "class": "bipolar", "auc_cluster": 0.9, "genes_up": 0}]
 
 
 def test_donor_replicate(toy, trial):
@@ -510,7 +585,7 @@ COLUMNS = {
     "cells.parquet": ["cb", "umis", "genes", "pct_mt", "cluster", "class", "margin", *[f"score_{c.name}" for c in PANEL[:10]],
                       "rod_tf_score", "rod_share", "doublet_score", "cr_cluster", "umap1", "umap2"],
     "clusters.parquet": ["cluster", "n_cells", "class", "score_best", "class_second", "score_second", "margin",
-                         "class_with_rod_tf", "rod_share_median", "doublet_score_median"],
+                         "class_with_rod_tf", "rod_share_median", "doublet_score_median", "auc_cluster", "genes_up"],
     "marker_table.parquet": ["class", "gene", "in_matrix", "frac_in", "frac_out", "mean_in", "mean_out", "auc_class",
                              "n_genes_detected"],
 }

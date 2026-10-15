@@ -74,6 +74,9 @@ ORGANOID_ABSENT = ("microglia", "vascular")
 # "If vascular or microglia cells exist but form no cluster, the report says that the collapse question cannot be asked for
 # that class in that library." (3.3, check 6): these classes are listed when they have no cluster and rare candidates exist
 COLLAPSE_CLASSES = ("microglia", "vascular")
+# A named cluster whose class score does not tell its cells from the other cells better than chance (ROC AUC below this), or
+# with no panel gene of its class detected more often inside than outside, is flagged (cluster_support)
+CHANCE_AUC = 0.5
 # The 13 genes of features.tsv whose names start with "MT-" (MT-ND1 to MT-CYB) are the mitochondrial genes of the
 # reference, the same 13 in all three libraries (our observation, 2026-10-15)
 MT_PREFIX = "MT-"
@@ -310,6 +313,25 @@ def rare_candidates(scores, named, pctl=RARE_PCTL):
     return out
 
 
+def cluster_support(counts, symbols, labels, scores, named):
+    """How the class_best of each cluster of named (name_clusters) stands against the rest of the library: auc_cluster, the
+    ROC AUC of that class's cell score for the cluster's cells against all other cells, and genes_up, its panel genes with a
+    UMI in a larger fraction of the cluster's cells than of the other cells. score_genes scores a cell against control genes
+    of the same expression bins, not against other cells (module docstring), so a cluster can lead with a positive score
+    while the markers of its class are below the rest of the library."""
+    column = {s: i for i, s in enumerate(symbols)}
+    panel = {c.name: [g for g in c.genes if g in column] for c in PANEL}
+    genes = list(dict.fromkeys(g for v in panel.values() for g in v))
+    j = {g: i for i, g in enumerate(genes)}
+    x = counts[:, [column[g] for g in genes]].toarray() > 0
+    rows = []
+    for k, c in named.class_best.items():
+        inside = labels == k
+        rows.append({"auc_cluster": roc_auc_score(inside, scores[c]),
+                     "genes_up": sum(x[inside, j[g]].mean() > x[~inside, j[g]].mean() for g in panel[c])})
+    return pd.DataFrame(rows, index=named.index).astype({"genes_up": np.int64})
+
+
 def split_classes(norm, symbols, labels, named, lib):
     """Classes named on two clusters or more: for each pair of their clusters, the panel genes of the class higher in one
     than in the other by the defaults of scanpy.tl.filter_rank_genes_groups (fraction with a UMI above MIN_IN_FRACTION in
@@ -339,8 +361,9 @@ def split_classes(norm, symbols, labels, named, lib):
 def flags(lib, clusters, markers, rare):
     """The flags of 3.3: weak classes (the weak mark of the panel, or a score that rests on FEW_GENES detected panel genes or
     fewer), clusters whose name changes with the rod score of ROD_TF, in a library of CELLS the clusters named microglia or
-    vascular, and the classes of COLLAPSE_CLASSES whose cells exist (rare candidates, rare_candidates) but form no
-    cluster."""
+    vascular, the classes of COLLAPSE_CLASSES whose cells exist (rare candidates, rare_candidates) but form no cluster, and
+    the named clusters whose markers are below the rest of the library (auc_cluster below CHANCE_AUC or no genes_up,
+    cluster_support)."""
     weak = {c.name: [WEAK] for c in PANEL if c.weak and c.name in set(markers["class"])}
     for c, n in markers.groupby("class", sort=False).n_genes_detected.first().items():
         if n <= FEW_GENES:
@@ -348,11 +371,14 @@ def flags(lib, clusters, markers, rare):
                 f"rests on {n} panel gene{'' if n == 1 else 's'} detected in {MIN_CELLS_GENE} cells or more")
     renamed = clusters[clusters["class"] != clusters.class_with_rod_tf]
     organoid = clusters[clusters["class"].isin(ORGANOID_ABSENT)] if lib in CELLS else clusters[:0]
+    below = clusters[(clusters["class"] != UNASSIGNED) & ((clusters.auc_cluster < CHANCE_AUC) | (clusters.genes_up == 0))]
     return {"weak_classes": weak,
             "rod_tf_renamed": [{"cluster": int(r.cluster), "class": r["class"], "class_with_rod_tf": r.class_with_rod_tf}
                                for _, r in renamed.iterrows()],
             "organoid_named": [{"cluster": int(r.cluster), "class": r["class"]} for _, r in organoid.iterrows()],
-            "collapse_not_askable": [c for c in COLLAPSE_CLASSES if c in rare and rare[c]["cells"] > 0]}
+            "collapse_not_askable": [c for c in COLLAPSE_CLASSES if c in rare and rare[c]["cells"] > 0],
+            "markers_below_rest": [{"cluster": int(r.cluster), "class": r["class"], "auc_cluster": float(r.auc_cluster),
+                                    "genes_up": int(r.genes_up)} for _, r in below.iterrows()]}
 
 
 def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER):
@@ -389,6 +415,8 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
     clusters["class_with_rod_tf"] = with_tf["class"].to_numpy()
     clusters["rod_share_median"] = by.rod_share.median().to_numpy()
     clusters["doublet_score_median"] = by.doublet_score.median().to_numpy()
+    support = cluster_support(counts, symbols, labels, scores, named)
+    clusters["auc_cluster"], clusters["genes_up"] = support.auc_cluster.to_numpy(), support.genes_up.to_numpy()
     markers = marker_table(counts, emb.norm, symbols, cell_class, scores, lib)
     rare = rare_candidates(scores, named["class"])
     f = flags(lib, clusters, markers, rare)
@@ -397,10 +425,13 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
     split_of = {k: s["class"] for s in splits for k in s["clusters"]}
     renamed = {r["cluster"] for r in f["rod_tf_renamed"]}
     organoid = {r["cluster"] for r in f["organoid_named"]}
+    below = {r["cluster"] for r in f["markers_below_rest"]}
     main_cr = pd.crosstab(labels, cr)
     note = {k: "; ".join([*([f"weak class: {'; '.join(f['weak_classes'][c])}"] if c in f["weak_classes"] else []),
                           *(["named with the full rod score only"] if k in renamed else []),
                           *([f"{c} is not expected in organoids (Cowan 2020)"] if k in organoid else []),
+                          *(["named although its markers are below the rest of the library (auc_cluster below "
+                             f"{CHANCE_AUC} or no genes_up)"] if k in below else []),
                           *([f"one of several {split_of[k]} clusters (classes.json, split_classes)"] if k in split_of else [])])
             for k, c in zip(clusters.cluster, clusters["class"])}
     table = clusters.drop(columns=["class_with_rod_tf", "rod_share_median", "doublet_score_median"]).assign(
@@ -465,7 +496,8 @@ def write(cells_dir, res, lib):
     cells_dir.mkdir(parents=True, exist_ok=True)
     res.cells.to_parquet(cells_dir / "cells.parquet", index=False)
     res.clusters[["cluster", "n_cells", "class", "score_best", "class_second", "score_second", "margin", "class_with_rod_tf",
-                  "rod_share_median", "doublet_score_median"]].to_parquet(cells_dir / "clusters.parquet", index=False)
+                  "rod_share_median", "doublet_score_median", "auc_cluster", "genes_up"]].to_parquet(
+        cells_dir / "clusters.parquet", index=False)
     res.markers.to_parquet(cells_dir / "marker_table.parquet", index=False)
     np.savez(cells_dir / "model.npz", **res.embedding.model)
     (cells_dir / "classes.json").write_text(json.dumps(res.summary, indent=1))
