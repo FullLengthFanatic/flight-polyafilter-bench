@@ -5,13 +5,18 @@ from dataclasses import replace
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from pafbench.config import A_BANDS, MIN_STRATUM
 from pafbench.evaluate import COUNT_COLUMNS, bootstrap, evaluate, subset_units, units
+from pafbench.flags import setting_tag
 from pafbench.regions import REGION_NAMES
-from pafbench.strata import (KINDS, LEVELS, NO_UMI, UNASSIGNED, acceptance, cell_classes, expr_bins, few_molecules,
-                             strata_bootstrap, with_strata)
+from pafbench.strata import (JOIN_COLUMNS, KINDS, LEVELS, NO_UMI, OUTCOME_COLUMNS, UNASSIGNED, acceptance, cell_classes,
+                             expr_bins, few_molecules, join_counted, join_summary, matrix_outcome, strata_bootstrap, with_strata)
+from tests.synth import CELLS_10X, SETTINGS_10X
+from tests.test_recount import stage13, stage24  # noqa: F401  (fixtures: stage 24 on the synthetic 10x library)
 
 TAGS = ["c300_l10_m1_i", "c375_l3_m2_i", "c300_lnone_m0_i"]
 BARCODES = ["AAACGG-1", "AAAGTT-1", "AACATG-1", "AACCGA-1", "AACGTC-1"]
@@ -184,3 +189,175 @@ def test_acceptance_compares_the_sums_over_strata_with_the_whole_of_milestone_2(
     # a setting or level missing from milestone 2 fails
     a = acceptance(strata, metrics[~((metrics.tag == TAGS[2]) & (metrics.level == "read"))], "L")
     assert a["passed"] is False and {(d["tag"], d["level"]) for d in a["differing"]} == {(TAGS[2], "read")}
+
+
+UMIS = ["ACGTACGTACGT", "CCCCAAAAGGGG", "TTTTGGGGCCCA", "GATTACAGATTA", "AAAACCCCGGGG", "ACACACACACAC"]
+GENE_IDS = np.array(["gA", "gB", "gC"], object)
+
+
+def _code(umi):
+    return int(umi.translate(str.maketrans("ACGT", "0123")), 4)
+
+
+def _counted(path, rows):
+    """counted_molecules.parquet with the columns the join reads, in the dtypes of stage 24."""
+    pq.write_table(pa.table({"cell": pa.array([r[0] for r in rows], pa.int32()),
+                             "gene": pa.array([r[1] for r in rows], pa.int32()),
+                             "umi": pa.array([_code(r[2]) for r in rows], pa.uint32()),
+                             "lost": pa.array([r[3] for r in rows], pa.uint32())}), path)
+    return path
+
+
+def _join_tables():
+    """Labeled molecules of called cells and their pa reads (with a member read and the pa read of a molecule that is not
+    among them), pa_sites rows and the counted molecules of the two cells."""
+    mol = pd.DataFrame([(10, 0, 0, "gA", "3UTR", "templated"), (11, 0, 1, "gC", "CDS", "templated"),
+                        (12, 1, 0, "gB", "intron", "nontemplated"), (13, 1, 2, "", "intergenic", "templated"),
+                        (14, 1, 3, "gC", "3UTR", "ambiguous"), (15, 0, 4, "gB", "3UTR", "templated")],
+                       columns=["mol", "cell", "u", "gene", "region", "label"])
+    mol = mol.assign(cb=[BARCODES[c] for c in mol.cell], ub=[UMIS[u] for u in mol.u]).drop(columns=["cell", "u"])
+    pa_reads = [("p10", 10, "gB", 25),                        # our gene gA, GX gB: the group of gB is counted
+                ("p11a", 11, "gA", 19), ("p11b", 11, "gC", 17),  # one of two pa reads in the counted group
+                ("p12", 12, "gB", 19),                        # the cell and UMI counts gA, the pa read is in the group of gB
+                ("p13", 13, None, 0),                         # no GX
+                ("p14a", 14, "gA;gC", 0), ("p14b", 14, "gC", 0),  # xf bit 1 unset, although the group of gC is counted
+                ("p15a", 15, "gB", 19), ("p15b", 15, "gA", 19),  # two groups, neither counted
+                ("p99", 99, "gA", 25)]                         # a molecule that is not among the called-cell molecules
+    tr = pd.DataFrame({"qname": [r[0] for r in pa_reads] + ["m10"], "mol": [r[1] for r in pa_reads] + [10],
+                       "role": ["pa"] * len(pa_reads) + ["member"], "dist5_exon": [np.nan] * len(pa_reads) + [80.0],
+                       "dist_mode": [""] * len(pa_reads) + ["exon"], "spliced": False})
+    sites = pd.DataFrame({"qname": [r[0] for r in pa_reads][::-1], "gx": [r[2] for r in pa_reads][::-1],
+                          "xf": [r[3] for r in pa_reads][::-1], "cb": "x", "ub": "x"})
+    # cell, gene row, UMI, lost bits
+    counted = [(0, 1, UMIS[0], 2), (0, 2, UMIS[1], 1), (1, 0, UMIS[0], 4), (1, 2, UMIS[3], 0), (0, 0, UMIS[5], 7),
+               (1, 1, UMIS[5], 0), (1, 0, UMIS[4], 0)]
+    return mol, tr, sites, counted
+
+
+@pytest.mark.parametrize("batch_rows", [2, 1000])
+def test_join_takes_gx_of_the_pa_read_when_our_gene_differs(tmp_path, batch_rows):
+    mol, tr, sites, counted = _join_tables()
+    path = _counted(tmp_path / "counted_molecules.parquet", counted)
+    j = join_counted(mol, tr, sites, BARCODES, GENE_IDS, path, "L", batch_rows=batch_rows)
+    assert JOIN_COLUMNS == ["lib", "mol", "cell", "gene", "umi", "joined", "region"]
+    assert list(j.columns) == JOIN_COLUMNS + ["lost"]
+    assert j.dtypes.astype(str).tolist() == ["str", "int64", "int32", "int32", "uint32", "bool", "str", "uint32"]
+    assert j.mol.tolist() == [10, 11, 12, 13, 14, 15] and set(j.lib) == {"L"}
+    assert j.cell.tolist() == [0, 0, 1, 1, 1, 0] and j.umi.tolist() == [_code(UMIS[u]) for u in (0, 1, 0, 2, 3, 4)]
+    # m10 takes gB (GX of its pa read), m11 the counted group of its second pa read; m12 and m15 lie in groups that are
+    # not counted (m15: the smaller gene row of its two); m13 and m14 have no pa read with xf bit 1 and a GX
+    assert j.gene.tolist() == [1, 2, 1, -1, -1, 0]
+    assert j.joined.tolist() == [True, True, False, False, False, False]
+    assert j.lost.tolist() == [2, 1, 0, 0, 0, 0] and j.region.tolist() == mol.region.tolist()
+    s = join_summary(j, mol, GENE_IDS)
+    assert s == {"molecules": 6, "joined": 2, "group_not_counted": 2, "no_group": 2, "counted_molecules_joined": 2,
+                 "joined_gene_differs": 1, "joined_gene_differs_by_label": {"templated": 1},
+                 "by_region": {"3UTR": {"joined": 1, "group_not_counted": 1, "no_group": 1},
+                               "CDS": {"joined": 1, "group_not_counted": 0, "no_group": 0},
+                               "intergenic": {"joined": 0, "group_not_counted": 0, "no_group": 1},
+                               "intron": {"joined": 0, "group_not_counted": 1, "no_group": 0}}}
+    with pytest.raises(ValueError, match="1 molecules have a barcode that is not a row of barcodes.tsv"):
+        join_counted(mol.assign(cb=lambda d: d.cb.where(d.mol != 12, "TTTTTT-1")), tr, sites, BARCODES, GENE_IDS, path, "L")
+
+
+def test_two_truth_molecules_can_join_one_counted_molecule(tmp_path):
+    mol, tr, sites, counted = _join_tables()
+    # a second molecule of the cell and UMI of m10 (another strand at its site, say) with a pa read in the group of gB
+    mol = pd.concat([mol, mol[mol.mol == 10].assign(mol=16, region="antisense")], ignore_index=True)
+    tr = pd.concat([tr, pd.DataFrame({"qname": ["p16"], "mol": [16], "role": ["pa"], "dist5_exon": [np.nan], "dist_mode": [""],
+                                      "spliced": [False]})], ignore_index=True)
+    sites = pd.concat([sites, pd.DataFrame({"qname": ["p16"], "gx": ["gB"], "xf": [17], "cb": "x", "ub": "x"})],
+                      ignore_index=True)
+    j = join_counted(mol, tr, sites, BARCODES, GENE_IDS, _counted(tmp_path / "c.parquet", counted), "L")
+    s = join_summary(j, mol, GENE_IDS)
+    assert j.joined.sum() == 3 and s["joined"] == 3 and s["counted_molecules_joined"] == 2
+
+
+def _synthetic_truth(s):
+    """Truth molecules of the synthetic 10x library: their pa reads are records of it, chosen per case, and pa_sites holds
+    every record of a called cell with its GX and xf."""
+    rec = s.reads.assign(qname=s.reads.qname.astype(str))
+    pick = {"A": rec[rec.case == "pa_only"], "B": rec[(rec.case == "pa_and_member") & (rec.pa > 0)],
+            "C": rec[(rec.case == "minus_pa") & (rec.pa > 0)], "D": rec[(rec.case == "three_vs_one") & rec.xf.isin([19, 25])],
+            "E": rec[(rec.case == "leads_by_one") & (rec.xf == 19)], "F": rec[(rec.case == "antisense") & (rec.re == "E")]}
+    rows, reads = [], []
+    for k, (name, r) in enumerate(pick.items()):
+        gene = "g2" if name == "B" else r.gx.dropna().iloc[0] if r.gx.notna().any() else "g1"
+        rows.append((k, name, r.cb.iloc[0], r.ub.iloc[0], gene, "3UTR" if name in "ABC" else "CDS"))
+        reads += [(q, k) for q in r.qname]
+    mol = pd.DataFrame(rows, columns=["mol", "name", "cb", "ub", "gene", "region"]).assign(label="templated")
+    tr = pd.DataFrame(reads, columns=["qname", "mol"]).assign(role="pa", dist5_exon=np.nan, dist_mode="", spliced=False)
+    sites = rec[rec.cb.isin(list(CELLS_10X.values()))][["qname", "cb", "ub", "gx", "xf"]]
+    return mol, tr, sites
+
+
+def test_join_on_the_synthetic_10x_library(synth10x, stage24):
+    d, _, _ = stage24
+    mol, tr, sites = _synthetic_truth(synth10x)
+    called = sorted(CELLS_10X.values())
+    genes = np.array(["g1", "g2", "g3", "g4"], object)
+    j = join_counted(mol, tr, sites, called, genes, d / "recount" / "counted_molecules.parquet", "X", batch_rows=3)
+    assert dict(zip(mol.name, j.joined)) == {"A": True, "B": True, "C": True, "D": True, "E": False, "F": False}
+    # B: our gene g2, GX g1
+    assert dict(zip(mol.name, [genes[g] if g >= 0 else "" for g in j.gene])) == {
+        "A": "g1", "B": "g1", "C": "g2", "D": "g1", "E": "g2", "F": ""}
+    # lost bits: the designed events of the cell and UMI at each setting (bit t: SETTINGS_10X[t]); pa_only keeps g1 in both
+    # modes and loses it at the controls, three_vs_one loses g1 at every setting (a tie, then a switch to g3)
+    ev = synth10x.events
+    for r, lost in zip(mol[mol.name != "F"].itertuples(), j.lost):  # F: its cell and UMI has no read group
+        e = ev[(ev.cb == r.cb) & (ev.ub == r.ub)].set_index("tag").loc[[setting_tag(x) for x in SETTINGS_10X]]
+        assert lost == sum(int(b) << t for t, b in enumerate(e.lost & j.joined[r.mol]))
+    assert dict(zip(mol.name, j.lost)) == {"A": 12, "B": 0, "C": 0, "D": 15, "E": 0, "F": 0}
+    # the joined keys are rows of counted_molecules, the group of E one of other_read_groups
+    cm = pd.read_parquet(d / "recount" / "counted_molecules.parquet")
+    key = ["cell", "gene", "umi"]
+    assert len(j[j.joined].merge(cm[key], on=key)) == 4
+    other = pd.read_parquet(d / "recount" / "other_read_groups.parquet")
+    assert j[mol.name == "E"].merge(other[key], on=key).mol.tolist() == [4]
+    assert j.umi.tolist() == [_code(u) for u in mol.ub] and j.cell.tolist() == [called.index(c) for c in mol.cb]
+
+
+def _outcome_units():
+    """Five labeled molecules of called cells: m1 to m3 with a member read within the cap, m4 with its pa read alone and m5
+    with a member read beyond it. Removal at T0 and T1 per read."""
+    mol = pd.DataFrame([(1, "templated", 15, "14-20"), (2, "templated", 11, "10-13"), (3, "nontemplated", 2, "0-4"),
+                        (4, "templated", 18, "14-20"), (5, "nontemplated", 0, "0-4")], columns=["mol", "label", "a20", "a_band"])
+    mol = mol.assign(cb=BARCODES[0], region="3UTR", gene="gA", has_ts=False, hexamer=False, ref="chrA", strand="+", site=100)
+    reads = [("p1", 1, "pa", np.nan), ("r1", 1, "member", 100.0), ("p2", 2, "pa", np.nan), ("r2", 2, "member", 200.0),
+             ("p3", 3, "pa", np.nan), ("r3", 3, "member", 50.0), ("p4", 4, "pa", np.nan), ("p5", 5, "pa", np.nan),
+             ("r5", 5, "member", 1500.0)]
+    tr = pd.DataFrame(reads, columns=["qname", "mol", "role", "dist5_exon"]).assign(dist_mode="exon", spliced=False)
+    removed = {"p1": (1, 0), "r1": (1, 1), "p2": (0, 1), "r2": (1, 1), "p3": (1, 0), "r3": (1, 0), "p4": (1, 0), "p5": (0, 0),
+               "r5": (1, 1)}
+    fl = pd.DataFrame([(q, "chrA", 0, 0, bool(a), bool(b)) for q, (a, b) in removed.items()],
+                      columns=["qname", "ref", "pos", "flag", "T0x", "T1x"])
+    return mol, tr, fl
+
+
+def test_matrix_outcome_counts_the_lost_bit_against_the_unit_rule_on_joined_molecules():
+    mol, tr, fl = _outcome_units()
+    tags = ["c300_l10_m1_i", "c375_l3_m2_i"]
+    fl = fl.rename(columns={"T0x": tags[0], "T1x": tags[1]})
+    sets = {"with_member": units(mol, tr, fl, tags, cap=1000),
+            "all_labeled": units(mol, tr, fl, tags, cap=1000, all_labeled=True)}
+    # m3 does not join; lost bits: the first tag is bit 1, the second bit 0
+    join = pd.DataFrame({"mol": [1, 2, 3, 4, 5], "joined": [True, True, False, True, True],
+                         "lost": np.array([2, 1, 0, 2, 0], np.uint32)})
+    o = matrix_outcome(join, sets, tags, {tags[0]: 1, tags[1]: 0}, "L")
+    assert list(o.columns) == OUTCOME_COLUMNS == ["lib", "tag", "units", "label", "a_band", "joined", "not_joined",
+                                                  "lost_in_matrix", "removed_as_unit", "both"]
+    got = {(r.tag, r.units, r.label, r.a_band): (r.joined, r.not_joined, r.lost_in_matrix, r.removed_as_unit, r.both)
+           for r in o.itertuples()}
+    assert set(o.lib) == {"L"} and len(o) == len(got) == 2 * (3 + 3)
+    t0, t1 = tags
+    # m1: lost at t0 and removed (pa and member read); m2: removed at t1 only, lost at t1; m3 is removed at t0 but not joined
+    assert got[t0, "with_member", "templated", "14-20"] == (1, 0, 1, 1, 1)
+    assert got[t0, "with_member", "templated", "10-13"] == (1, 0, 0, 0, 0)
+    assert got[t0, "with_member", "nontemplated", "0-4"] == (0, 1, 0, 0, 0)
+    assert got[t1, "with_member", "templated", "14-20"] == (1, 0, 0, 0, 0)
+    assert got[t1, "with_member", "templated", "10-13"] == (1, 0, 1, 1, 1)
+    # all labeled: m4 (its pa read removed at t0, lost at t0) and m5 (pa read kept, nothing lost) join as well
+    assert got[t0, "all_labeled", "templated", "14-20"] == (2, 0, 2, 2, 2)
+    assert got[t0, "all_labeled", "nontemplated", "0-4"] == (1, 1, 0, 0, 0)
+    assert got[t1, "all_labeled", "templated", "14-20"] == (2, 0, 0, 0, 0)
+    assert o.dtypes[["joined", "not_joined", "lost_in_matrix", "removed_as_unit", "both"]].astype(str).tolist() == ["int64"] * 5
