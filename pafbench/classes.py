@@ -72,7 +72,7 @@ WEAK = "two of its genes also mark mature classes (VSX2 bipolar, PAX6 amacrine)"
 # https://pmc.ncbi.nlm.nih.gov/articles/PMC7505495/, design 3.3): a cluster of a library of CELLS named so is flagged
 ORGANOID_ABSENT = ("microglia", "vascular")
 # "If vascular or microglia cells exist but form no cluster, the report says that the collapse question cannot be asked for
-# that class in that library." (3.3, check 6): these classes without a cluster are listed, with their rare candidates
+# that class in that library." (3.3, check 6): these classes are listed when they have no cluster and rare candidates exist
 COLLAPSE_CLASSES = ("microglia", "vascular")
 # The 13 genes of features.tsv whose names start with "MT-" (MT-ND1 to MT-CYB) are the mitochondrial genes of the
 # reference, the same 13 in all three libraries (our observation, 2026-10-15)
@@ -297,14 +297,16 @@ def seed_stability(labels, scores, resolution):
 
 def rare_candidates(scores, named, pctl=RARE_PCTL):
     """Check 6 of 3.3, for every class without a cluster: the cells whose highest score is that class's and above its
-    pctl percentile over all cells, with the threshold."""
+    pctl percentile over all cells, with the threshold and the cells above it whatever their highest score (about 1 - pctl /
+    100 of the cells by construction)."""
     top = np.asarray(scores.columns)[np.nanargmax(scores.to_numpy(), axis=1)]
     out = {}
     for c in scores.columns:
         if c in set(named) or not np.isfinite(scores[c]).all():
             continue
         threshold = float(np.percentile(scores[c], pctl))
-        out[c] = {"cells": int(((top == c) & (scores[c].to_numpy() > threshold)).sum()), "threshold": threshold}
+        above = scores[c].to_numpy() > threshold
+        out[c] = {"cells": int((above & (top == c)).sum()), "threshold": threshold, "above_pctl": int(above.sum())}
     return out
 
 
@@ -334,10 +336,11 @@ def split_classes(norm, symbols, labels, named, lib):
     return out
 
 
-def flags(lib, clusters, markers):
+def flags(lib, clusters, markers, rare):
     """The flags of 3.3: weak classes (the weak mark of the panel, or a score that rests on FEW_GENES detected panel genes or
-    fewer), clusters whose name changes with the rod score of ROD_TF, and in a library of CELLS the clusters named
-    microglia or vascular."""
+    fewer), clusters whose name changes with the rod score of ROD_TF, in a library of CELLS the clusters named microglia or
+    vascular, and the classes of COLLAPSE_CLASSES whose cells exist (rare candidates, rare_candidates) but form no
+    cluster."""
     weak = {c.name: [WEAK] for c in PANEL if c.weak and c.name in set(markers["class"])}
     for c, n in markers.groupby("class", sort=False).n_genes_detected.first().items():
         if n <= FEW_GENES:
@@ -348,7 +351,8 @@ def flags(lib, clusters, markers):
     return {"weak_classes": weak,
             "rod_tf_renamed": [{"cluster": int(r.cluster), "class": r["class"], "class_with_rod_tf": r.class_with_rod_tf}
                                for _, r in renamed.iterrows()],
-            "organoid_named": [{"cluster": int(r.cluster), "class": r["class"]} for _, r in organoid.iterrows()]}
+            "organoid_named": [{"cluster": int(r.cluster), "class": r["class"]} for _, r in organoid.iterrows()],
+            "collapse_not_askable": [c for c in COLLAPSE_CLASSES if c in rare and rare[c]["cells"] > 0]}
 
 
 def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER):
@@ -386,7 +390,8 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
     clusters["rod_share_median"] = by.rod_share.median().to_numpy()
     clusters["doublet_score_median"] = by.doublet_score.median().to_numpy()
     markers = marker_table(counts, emb.norm, symbols, cell_class, scores, lib)
-    f = flags(lib, clusters, markers)
+    rare = rare_candidates(scores, named["class"])
+    f = flags(lib, clusters, markers, rare)
     splits = split_classes(emb.norm, symbols, labels, named, lib)
 
     split_of = {k: s["class"] for s in splits for k in s["clusters"]}
@@ -416,7 +421,6 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
                             "rod_share_median": float(cells.rod_share[sel].median()),
                             "doublet_score_median": float(cells.doublet_score[sel].median()),
                             "pct_mt_median": float(cells.pct_mt[sel].median())}
-    rare = rare_candidates(scores, [c for c in per_class if c != UNASSIGNED])
     summary = {
         "library": lib, "cells": int(counts.shape[0]), "genes": int(counts.shape[1]),
         "genes_clustered": int((np.asarray((counts > 0).sum(axis=0)).ravel() >= MIN_CELLS_GENE).sum()),
@@ -433,7 +437,6 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
         "cell_ranger": cell_ranger_check(labels, cell_class, cr, lfc, gene_ids, symbols, lib),
         "seed_stability": seed_stability({s: emb.labels[(s, resolution)] for s in seeds}, scores, resolution),
         "rare_candidates": rare,
-        "collapse_not_askable": [c for c in COLLAPSE_CLASSES if c in rare],
         "panel_genes_missing": list(dict.fromkeys(markers.gene[~markers.in_matrix])),
         **f, "split_classes": splits}
     return Classes(cells, clusters, markers, table, summary, emb)

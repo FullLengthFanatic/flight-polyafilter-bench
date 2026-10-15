@@ -367,7 +367,10 @@ def test_rare_class_candidates_are_the_planted_microglia_cells(toy, trial):
     planted = np.zeros(len(toy.group), bool)
     planted[toy.rare] = True
     assert np.array_equal((top == 7) & (s.to_numpy() > rare["microglia"]["threshold"]), planted)
-    assert res.summary["collapse_not_askable"] == ["microglia", "vascular"]
+    # next to each count the cells above the class's percentile, about 1 percent of the cells by construction
+    assert rare["microglia"]["above_pctl"] == 9
+    assert all(v["above_pctl"] == int((res.cells[f"score_{c}"] > v["threshold"]).sum()) for c, v in rare.items())
+    assert rare["vascular"]["cells"] > 0 and res.summary["collapse_not_askable"] == ["microglia", "vascular"]
 
 
 def test_marker_table(toy, trial):
@@ -449,14 +452,20 @@ def test_flags_of_the_class_table():
                              "class_with_rod_tf": ["rod", "microglia", "vascular", UNASSIGNED]})
     markers = pd.DataFrame({"class": ["rod", "rod", "progenitor", "proliferating", "microglia", "vascular"],
                             "n_genes_detected": [9, 9, 3, 1, 2, 3]})
-    f = flags(CELLS[0], clusters, markers)
+    f = flags(CELLS[0], clusters, markers, {})
     assert f["organoid_named"] == [{"cluster": 1, "class": "microglia"}, {"cluster": 2, "class": "vascular"}]
     assert f["rod_tf_renamed"] == [{"cluster": 3, "class": "rod", "class_with_rod_tf": UNASSIGNED}]
     assert f["weak_classes"] == {"progenitor": ["two of its genes also mark mature classes (VSX2 bipolar, PAX6 amacrine)"],
                                  "proliferating": [f"rests on 1 panel gene detected in {MIN_CELLS_GENE} cells or more"],
                                  "microglia": [f"rests on 2 panel genes detected in {MIN_CELLS_GENE} cells or more"]}
     for lib in NUCLEI:
-        assert flags(lib, clusters, markers)["organoid_named"] == []
+        assert flags(lib, clusters, markers, {})["organoid_named"] == []
+    assert f["collapse_not_askable"] == []
+    # check 6: microglia or vascular cells that exist (rare candidates above 0) but form no cluster
+    rare = {"microglia": {"cells": 0, "threshold": 0.3, "above_pctl": 9}, "vascular": {"cells": 2, "threshold": 0.2,
+                                                                                        "above_pctl": 9},
+            "RPE": {"cells": 4, "threshold": 0.4, "above_pctl": 9}}
+    assert flags("1417", clusters[clusters.cluster.isin([0, 3])], markers, rare)["collapse_not_askable"] == ["vascular"]
 
 
 def test_donor_replicate(toy, trial):
