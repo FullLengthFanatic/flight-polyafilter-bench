@@ -111,6 +111,16 @@ def relabel(u, cutoffs):
     return replace(u, mols=u.mols.assign(label=lab), reads=u.reads.assign(label=lab[u.reads.mi.to_numpy()]))
 
 
+def subset_units(u, mask):
+    """The units of the molecules where mask (one bool per row of u.mols) is True and of their reads, molecule rows
+    renumbered (stage 27, design of 2026-10-12, section 3.5). missing_reads and dropped_mols stay those of u."""
+    mask = np.asarray(mask, bool)
+    mi = u.reads.mi.to_numpy()
+    keep = mask[mi]
+    reads = u.reads[keep].reset_index(drop=True).assign(mi=(np.cumsum(mask) - 1)[mi[keep]])
+    return replace(u, reads=reads, R=u.R[keep], mols=u.mols[mask].reset_index(drop=True), K=u.K[mask])
+
+
 def _colsum(M, w):
     return np.count_nonzero(M, axis=0) if w is None else np.einsum("i,ij->j", w, M)
 
