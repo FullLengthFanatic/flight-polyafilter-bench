@@ -22,6 +22,14 @@ directory it runs in (our observation, a --dry run on synthetic FASTQs). bamtofa
 command whose <folder>/<name>.json exists (written after exit status 0) is not run again. The FASTQs stay until someone
 trashes them (gio trash <folder>/fastq).
 
+Telemetry, to settle with the user before run --execute. `cellranger telemetry --help` (cellranger-9.0.1): "collect: Collect
+telemetry data, if enabled.", "disable: Disable telemetry collection for this user." and "For more information about what
+data is collected and how it's used, visit https://10xgen.com/pipeline-telemetry". Our observation, 2026-10-15: `cellranger
+telemetry check` says "Collected telemetry data is being saved to" ~/.cache/tenx/telemetry/cellranger/cellranger-9.0.1, and
+a cellranger count --dry on synthetic FASTQs wrote a count_success record to extras/telemetry of its output folder. Whether
+Cell Ranger sends such records to 10x is not verified. The user decides whether to run `cellranger telemetry disable` first;
+this script leaves the setting as it is.
+
 Disk, 2026-10-15: /data has 6.1 TB free (df -h /data), the BAM is 6.1 GB; FASTQs and working files are estimated at a few
 times that while it runs, with about 12 GB kept, the size of the original outs (design 3.11). Time and memory are not
 measured: hours of wall time, memory within Cell Ranger's 64 GB limit (estimates of the design). Not to be started while
