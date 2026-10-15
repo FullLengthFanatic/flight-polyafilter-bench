@@ -542,6 +542,8 @@ Two versions are computed and both are printed in any case: reference rates from
 5. At shared sites: the site's share of its gene's labeled molecules in nuclei against cells (Spearman, and the log2 ratio by label and region).
 6. Depth: 1179 has 11.1 and 13.0 times the labeled molecules of 1419 and 1417 in called cells (1,174,777 against 105,400 and 90,099, [M2] section 4), so "cells only" sites may be a depth effect; this step measures it. The share of sites found in both is recomputed with the cell molecules of each gene downsampled to the nuclei count (seeded, 100 draws, `DOWNSAMPLE_DRAWS`).
 
+**Note of 2026-10-15 (stage 31 as built).** Step 6 also redoes the usage comparison of step 5 in every draw, with the cell usage taken over the drawn molecules, and `matched_sites.json` reports its mean and 95% range over the draws (Spearman rho, and the median log2 ratio over all shared sites, by label and by region). A gene with more molecules shows more sites, each with a smaller share, so the full-depth values mostly measure depth: nuclei against cells give rho 0.661 and a median log2 ratio of 0.670 at full depth, and rho 0.849 (0.846 to 0.852 over 100 draws) with a median of 0 in every draw at the nuclei depth, against 0.885 and 0.163 for 1417 against 1419 at its own depth (review of stage 31, finding S31-1).
+
 **Inputs.** `truth/molecules_labeled.parquet` of the three libraries, `genes.gtf`.
 
 **Outputs.** `burden/matched_sites.parquet` (pair, gene, ref, strand, site_a, site_b, set, n_a, n_b, usage_a, usage_b, label, a20, hexamer, region, dist_end, dist_mode); `burden/matched_sites_summary.parquet` (pair, set, feature, bin, sites, molecules); `burden/matched_sites.json` (shared genes, Spearman, downsampling result).
