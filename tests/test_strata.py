@@ -13,9 +13,10 @@ import pyarrow.parquet as pq
 import pytest
 
 from pafbench import recount
-from pafbench.config import A_BANDS, MIN_STRATUM, REPO
+from pafbench.config import A_BANDS, CHOSEN_SETTINGS, MIN_STRATUM, REPO
 from pafbench.evaluate import COUNT_COLUMNS, METRIC_COLUMNS, bootstrap, evaluate, subset_units, units
 from pafbench.flags import setting_tag
+from pafbench.grid import published
 from pafbench.regions import REGION_NAMES
 from pafbench.strata import (JOIN_COLUMNS, KINDS, LEVELS, NO_UMI, OUTCOME_COLUMNS, UNASSIGNED, acceptance, cell_classes,
                              expr_bins, few_molecules, join_counted, join_summary, matrix_outcome, strata_bootstrap, with_strata)
@@ -424,7 +425,14 @@ def _stage27_tree(s, d, root):
 def test_stage27_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monkeypatch, capsys):
     d, _, _ = stage24
     stage = _stage27()
-    tags = [setting_tag(x) for x in SETTINGS_10X]
+    # the bootstrap runs at the chosen and the published settings, all of them impact settings; the synthetic library has
+    # flags at SETTINGS_10X only, so both lists are replaced below
+    assert stage.BOOT_TAGS == [setting_tag(s) for s in (*CHOSEN_SETTINGS, *published())]
+    assert set(stage.BOOT_TAGS) <= set(stage.TAGS)
+    # the lost bit of a setting is its place in recount.json, not in TAGS: the stage gets the settings in reverse order
+    bits = {t: i for i, t in enumerate(json.loads((d / "recount" / "recount.json").read_text())["settings"])}
+    tags = [setting_tag(x) for x in SETTINGS_10X][::-1]
+    assert list(bits) == tags[::-1]
     monkeypatch.setattr(recount, "LIBRARIES", {"X": synth10x.bam})
     monkeypatch.setattr(stage, "TAGS", tags)
     monkeypatch.setattr(stage, "BOOT_TAGS", tags[:2])
@@ -451,7 +459,6 @@ def test_stage27_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monke
     assert join.joined.tolist() == [True, True, True, True, False, False]          # the uncalled molecule is left out
     outcome = pd.read_parquet(out / "matrix_outcome.parquet")
     sets = {"with_member": u, "all_labeled": units(mol, tr, fl, tags, 1000, all_labeled=True)}
-    bits = {t: i for i, t in enumerate(tags)}
     pd.testing.assert_frame_equal(outcome, matrix_outcome(ref, sets, tags, bits, "X"))
     assert set(outcome.units) == {"with_member", "all_labeled"} and set(outcome.tag) == set(tags)
     # A (pa read alone) and F (no member read) are units only among all labeled molecules
