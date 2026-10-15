@@ -96,10 +96,9 @@ def leiden(b, seed, resolution, cluster=CLUSTER):
     return b.obs["leiden"].to_numpy().astype(np.int32)
 
 
-def pipeline(counts, gene_ids, seeds=CLUSTER["seeds"][:1], resolutions=(CLUSTER["resolution"],), umap=False, cluster=CLUSTER,
-             min_cells=MIN_CELLS_GENE):
+def pipeline(counts, gene_ids, seeds=CLUSTER["seeds"][:1], resolutions=(CLUSTER["resolution"],), umap=False, cluster=CLUSTER):
     """Steps 1, 2 and 4 of 3.3 on counts (cells x genes, CSR), under cluster["blas_threads"] threads: normalise (all
-    genes), then on the genes with a UMI in min_cells cells or more the cluster["n_hvg"] highly variable genes, scale,
+    genes), then on the genes with a UMI in MIN_CELLS_GENE cells or more the cluster["n_hvg"] highly variable genes, scale,
     PCA, the neighbour graph and Leiden at every seed and resolution asked for; UMAP when asked. No cell is dropped.
 
     Returns Embedding: norm (normalise of all genes), labels {(seed, resolution): Leiden labels}, pca (cells x n_pcs), umap
@@ -108,7 +107,7 @@ def pipeline(counts, gene_ids, seeds=CLUSTER["seeds"][:1], resolutions=(CLUSTER[
     """
     with threadpool_limits(limits=cluster["blas_threads"]):
         norm = normalise(counts, gene_ids, cluster)
-        kept = np.flatnonzero(np.asarray((counts > 0).sum(axis=0)).ravel() >= min_cells)
+        kept = np.flatnonzero(np.asarray((counts > 0).sum(axis=0)).ravel() >= MIN_CELLS_GENE)
         b = norm[:, kept].copy()
         sc.pp.highly_variable_genes(b, n_top_genes=cluster["n_hvg"])
         hv = kept[b.var.highly_variable.to_numpy()]
