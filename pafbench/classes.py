@@ -129,8 +129,9 @@ def scored_classes(lib):
 
 
 def class_scores(norm, symbols, lib, cluster=CLUSTER):
-    """score_genes of every class of scored_classes(lib) on its panel genes in the matrix, and of ROD_TF (column rod_tf), per
-    cell of norm (normalise). symbols: the gene symbol of each column. A class without a gene in the matrix scores NaN."""
+    """score_genes per cell of norm (normalise) of every class of scored_classes(lib) on its panel genes in the matrix, and of
+    ROD_TF. symbols: the gene symbol of each column. Returns the class scores (one column per class, a class without a gene
+    in the matrix scores NaN) and, apart from them so that name_clusters never takes it for a class, the ROD_TF score."""
     column = {s: g for s, g in zip(symbols, norm.var_names)}
     out = {}
     with threadpool_limits(limits=cluster["blas_threads"]):
@@ -141,7 +142,8 @@ def class_scores(norm, symbols, lib, cluster=CLUSTER):
                 continue
             sc.tl.score_genes(norm, present, score_name="_score", random_state=SEED)
             out[name] = norm.obs.pop("_score").to_numpy()
-    return pd.DataFrame(out)
+    rod_tf = out.pop("rod_tf")
+    return pd.DataFrame(out), rod_tf
 
 
 def assign(cluster_scores, margin=CLASS_MARGIN):
@@ -332,10 +334,10 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
     emb = pipeline(counts, gene_ids, seeds, (resolution,), umap=True, cluster=cluster)
     emb.norm.var["symbol"] = symbols
     labels = emb.labels[(seeds[0], resolution)]
-    scores = class_scores(emb.norm, symbols, lib, cluster)
-    names = [c.name for c in scored_classes(lib)]
-    named = name_clusters(scores[names], labels)
-    with_tf = name_clusters(scores[names].assign(rod=scores["rod_tf"]), labels)
+    scores, rod_tf = class_scores(emb.norm, symbols, lib, cluster)
+    names = list(scores)
+    named = name_clusters(scores, labels)
+    with_tf = name_clusters(scores.assign(rod=rod_tf), labels)
     cell_class = named["class"].loc[labels].to_numpy()
     umis = np.asarray(counts.sum(axis=1)).ravel()
     cells = pd.DataFrame({"cb": np.asarray(barcodes, str), "umis": umis.astype(np.int64),
@@ -344,7 +346,7 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
                           "cluster": labels, "class": cell_class, "margin": named.margin.loc[labels].to_numpy()})
     for c in names:
         cells[f"score_{c}"] = scores[c].to_numpy()
-    cells["rod_tf_score"] = scores["rod_tf"].to_numpy()
+    cells["rod_tf_score"] = rod_tf
     cells["rod_share"] = _share(counts, symbols, AMBIENT_ROD_TRANSCRIPTS)
     cells["doublet_score"] = doublet_scores(counts, cluster)
     cells["cr_cluster"] = cr
@@ -387,7 +389,7 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
                             "rod_share_median": float(cells.rod_share[sel].median()),
                             "doublet_score_median": float(cells.doublet_score[sel].median()),
                             "pct_mt_median": float(cells.pct_mt[sel].median())}
-    rare = rare_candidates(scores[names], [c for c in per_class if c != UNASSIGNED])
+    rare = rare_candidates(scores, [c for c in per_class if c != UNASSIGNED])
     summary = {
         "library": lib, "cells": int(counts.shape[0]), "genes": int(counts.shape[1]),
         "genes_clustered": int((np.asarray((counts > 0).sum(axis=0)).ravel() >= MIN_CELLS_GENE).sum()),
@@ -400,7 +402,7 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
         "unassigned": {"cells": int((cell_class == UNASSIGNED).sum()),
                        "clusters": [int(k) for k in clusters.cluster[clusters["class"] == UNASSIGNED]]},
         "cell_ranger": cell_ranger_check(labels, cell_class, cr, lfc, gene_ids, symbols, lib),
-        "seed_stability": seed_stability({s: emb.labels[(s, resolution)] for s in seeds}, scores[names], resolution),
+        "seed_stability": seed_stability({s: emb.labels[(s, resolution)] for s in seeds}, scores, resolution),
         "rare_candidates": rare,
         "collapse_not_askable": [c for c in COLLAPSE_CLASSES if c in rare],
         "panel_genes_missing": list(dict.fromkeys(markers.gene[~markers.in_matrix])),

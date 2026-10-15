@@ -209,11 +209,24 @@ def test_1179_only_classes_are_scored_for_1179_only(trial):
         assert [c.name for c in scored_classes(lib)] == [c.name for c in PANEL[:10]]
     norm = trial[3].embedding.norm
     symbols = norm.var.symbol.to_numpy()
-    nuclei, cells = class_scores(norm, symbols, "1417"), class_scores(norm, symbols, CELLS[0])
-    assert list(nuclei) == [c.name for c in PANEL[:10]] + ["rod_tf"]
-    assert list(cells) == [c.name for c in PANEL] + ["rod_tf"]
-    assert nuclei.equals(cells[nuclei.columns])
+    (nuclei, rod_tf), (cells, rod_tf_cells) = class_scores(norm, symbols, "1417"), class_scores(norm, symbols, CELLS[0])
+    assert list(nuclei) == [c.name for c in PANEL[:10]]
+    assert list(cells) == [c.name for c in PANEL]
+    assert nuclei.equals(cells[nuclei.columns]) and np.array_equal(rod_tf, rod_tf_cells)
     assert [c for c in trial[3].cells if c.startswith("score_")] == [f"score_{c.name}" for c in PANEL[:10]]
+
+
+def test_class_scores_keep_the_rod_tf_score_apart_so_name_clusters_names_panel_classes_only(trial):
+    # stage 26 names the clusters of filtered matrices with class_scores and name_clusters: the second rod score must not
+    # take part as a class
+    res = trial[3]
+    norm = res.embedding.norm
+    for lib in ("1417", CELLS[0]):
+        scores, rod_tf = class_scores(norm, norm.var.symbol.to_numpy(), lib)
+        assert list(scores) == [c.name for c in scored_classes(lib)] and rod_tf.shape == (norm.n_obs,)
+        named = name_clusters(scores, res.cells.cluster.to_numpy())
+        assert set(named["class"]) <= set(scores) | {UNASSIGNED} and set(named.class_second) <= set(scores)
+    assert np.array_equal(rod_tf, res.cells.rod_tf_score.to_numpy())
 
 
 def test_genes_in_fewer_than_min_cells_are_left_out_of_the_clustering_only(toy, trial):
