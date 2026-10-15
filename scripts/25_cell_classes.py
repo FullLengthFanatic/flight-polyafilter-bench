@@ -8,12 +8,13 @@ expression under <analysis> (default: outs/analysis next to the library's BAM). 
 clusters.parquet, marker_table.parquet, model.npz and classes.json (3.3, outputs), and for the review gate class_table.csv
 and marker_plot.png.
 
-Measured on 2026-10-15 (10 Leiden seeds, under /usr/bin/time -v and memwatch, one process limited to 1 thread per pool),
-each library run twice with the same files byte for byte: 1417 (5,571 cells) 2 min 17 s and 2 min 15 s wall, at most
-3.10 GiB resident (/usr/bin/time; memwatch 2.96 and 3.02 GiB); 1419 (5,114 cells) 2 min 19 s and 2 min 6 s, 3.50 GiB
-(memwatch 3.26 and 3.33 GiB); 1179 (24,378 cells, a neighbour graph by pynndescent above 8,192 cells) 7 min 41 s and
-6 min 44 s, 13.04 GiB (memwatch 12.58 and 12.41 GiB). Under cProfile on 1417 the scrublet doublet score took 107 s of
-164 s and the pipeline with UMAP 52 s.
+Measured on 2026-10-15 after the review fixes (10 Leiden seeds, under /usr/bin/time -v and memwatch, each process limited
+to 1 thread per pool; the four runs of 1417 and 1419 at once, the two of 1179 one after the other), each library run twice
+with the same files byte for byte: 1417 (5,571 cells) 2 min 20 s and 2 min 21 s wall, at most 3.10 GiB resident
+(/usr/bin/time; memwatch 2.97 and 2.96 GiB); 1419 (5,114 cells) 2 min 19 s and 2 min 21 s, 3.50 GiB (memwatch 3.33 and
+3.33 GiB); 1179 (24,378 cells, a neighbour graph by pynndescent above 8,192 cells) 6 min 33 s and 6 min 30 s, 13.04 GiB
+(memwatch 12.64 and 12.41 GiB). Under cProfile on 1417 the scrublet doublet score took 107 s of 164 s and the pipeline
+with UMAP 52 s (measured before the review fixes, which leave cells.parquet and model.npz as they were).
 """
 import argparse
 import json
