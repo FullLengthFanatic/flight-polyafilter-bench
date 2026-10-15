@@ -31,22 +31,22 @@ def cell_classes(cb, cells):
     return pd.Series(cb).map(cells.set_index("cb")["class"]).fillna(UNASSIGNED).to_numpy(object)
 
 
-def expr_bins(gene, gene_umis, n_bins=EXPR_BINS):
-    """(bin of each molecule, the n_bins - 1 boundaries in UMIs).
+def expr_bins(gene, gene_umis):
+    """(bin of each molecule, the EXPR_BINS - 1 boundaries in UMIs).
 
     gene: the molecule's gene ('' for none); gene_umis: unfiltered UMIs in called cells by gene id. The boundaries are the
     quantiles of the gene UMIs over the molecules whose gene has a counted UMI, by numpy.quantile at its default method
     ("7. 'linear'  (default)", numpy 2.4.6, numpy/lib/_function_base_impl.py line 4298), so each bin holds about a quarter
-    of them at n_bins 4. A molecule goes to the bin numpy.searchsorted gives with side left ("left    ``a[i-1] < v <=
+    of them at EXPR_BINS 4. A molecule goes to the bin numpy.searchsorted gives with side left ("left    ``a[i-1] < v <=
     a[i]``", numpy/_core/fromnumeric.py line 1435): the bins are right-closed and a molecule at a boundary falls in the lower
-    one, as with pandas.qcut (our observation, tests/test_strata.py). They are named q1 (lowest) to q<n_bins>; the other
+    one, as with pandas.qcut (our observation, tests/test_strata.py). They are named q1 (lowest) to q<EXPR_BINS>; the other
     molecules get NO_UMI.
     """
     x = pd.Series(gene).map(gene_umis).fillna(0).to_numpy(float)
     has = x > 0
-    bounds = np.quantile(x[has], np.arange(1, n_bins) / n_bins) if has.any() else np.full(n_bins - 1, np.nan)
+    bounds = np.quantile(x[has], np.arange(1, EXPR_BINS) / EXPR_BINS) if has.any() else np.full(EXPR_BINS - 1, np.nan)
     out = np.full(len(x), NO_UMI, object)
-    out[has] = np.array([f"q{i}" for i in range(1, n_bins + 1)], object)[np.searchsorted(bounds, x[has])]
+    out[has] = np.array([f"q{i}" for i in range(1, EXPR_BINS + 1)], object)[np.searchsorted(bounds, x[has])]
     return out, bounds
 
 
@@ -57,19 +57,19 @@ def with_strata(u, cells, gene_umis):
     return replace(u, mols=u.mols.assign(cell_class=cell_classes(u.mols.cb.to_numpy(object), cells), expr_bin=bins)), bounds
 
 
-def strata_bootstrap(u, tags, lib, kinds=KINDS, levels=LEVELS, n=1000, seed=0):
+def strata_bootstrap(u, tags, lib, n=1000, seed=0):
     """evaluate.bootstrap on the units of each stratum (evaluate.subset_units), per level, in BOOT_COLUMNS. A stratum
     without a positive or negative unit has nothing to resample and gets no rows."""
     rows = []
     label = u.mols.label.to_numpy()
-    for kind in kinds:
+    for kind in KINDS:
         col = u.mols[kind].to_numpy().astype(str)
         for value in sorted(set(col)):
             m = col == value
             if not ((label[m] == u.pos) | (label[m] == u.neg)).any():
                 continue
             s = subset_units(u, m)
-            for level in levels:
+            for level in LEVELS:
                 rows.append(bootstrap(s, tags, level, n, seed).assign(lib=lib, level=level, stratum_kind=kind, stratum=value))
     return pd.concat(rows, ignore_index=True)[BOOT_COLUMNS]
 
@@ -89,17 +89,18 @@ def few_molecules(u, min_n=MIN_STRATUM):
     return rows
 
 
-def acceptance(strata, metrics, lib, tags, levels=LEVELS, kinds=KINDS, cap=MEMBER_CAP, cutoffs="8/4"):
+def acceptance(strata, metrics, lib, tags, cutoffs):
     """Design 3.5, Acceptance: for every tag, level and stratum kind, tp + fn and tn + fp summed over the strata equal the
-    "all" stratum of metrics (stage 17's eval/metrics.parquet) at cap and cutoffs, and the sensitivity and specificity of
-    the sums equal its; a combination missing from either table differs. Returns passed, the combinations compared, the
-    differing ones and the units per level."""
+    "all" stratum of metrics (stage 17's eval/metrics.parquet) at MEMBER_CAP and cutoffs, and the sensitivity and
+    specificity of the sums equal its; a combination missing from either table differs. Returns passed, the combinations
+    compared, the differing ones and the units per level."""
     keys = ["tag", "level", "stratum_kind"]
     s = strata[strata.lib == lib].groupby(keys, sort=True)[["tp", "fn", "tn", "fp"]].sum()
-    s = s.reindex(pd.MultiIndex.from_product([sorted(tags), levels, kinds], names=keys)).reset_index()
+    s = s.reindex(pd.MultiIndex.from_product([sorted(tags), LEVELS, KINDS], names=keys)).reset_index()
     sens, spec, _ = rates(s.tp.to_numpy(), s.fn.to_numpy(), s.tn.to_numpy(), s.fp.to_numpy())
     s = s.assign(templated=s.tp + s.fn, nontemplated=s.tn + s.fp, sens=sens, spec=spec)
-    m = metrics[(metrics.lib == lib) & (metrics.cap == cap) & (metrics.cutoffs == cutoffs) & (metrics.stratum_kind == "all")]
+    m = metrics[(metrics.lib == lib) & (metrics.cap == MEMBER_CAP) & (metrics.cutoffs == cutoffs) &
+                (metrics.stratum_kind == "all")]
     m = m.assign(templated=m.tp + m.fn, nontemplated=m.tn + m.fp)
     cols = ["templated", "nontemplated", "sens", "spec"]
     j = s.merge(m[["tag", "level"] + cols], on=["tag", "level"], how="left", suffixes=("", "_m2"))

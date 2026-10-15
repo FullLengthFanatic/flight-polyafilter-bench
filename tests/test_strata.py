@@ -211,7 +211,7 @@ def test_acceptance_compares_the_sums_over_strata_with_the_whole_of_milestone_2(
     u, _ = _stratified(7)
     strata = evaluate(u, "L", 1000, levels=LEVELS, kinds=KINDS)
     metrics = pd.concat([_m2_metrics(u), _m2_metrics(u, "M"), evaluate(u, "L", 500)], ignore_index=True)
-    a = acceptance(strata, metrics, "L", TAGS)
+    a = acceptance(strata, metrics, "L", TAGS, "8/4")
     assert a["passed"] is True and a["compared"] == len(TAGS) * len(LEVELS) * len(KINDS) and a["differing"] == []
     lab = u.mols.label.value_counts()
     assert a["units"]["molecule"] == {"templated": int(lab["templated"]), "nontemplated": int(lab["nontemplated"])}
@@ -220,7 +220,7 @@ def test_acceptance_compares_the_sums_over_strata_with_the_whole_of_milestone_2(
     bad = metrics.copy()
     hit = (bad.lib == "L") & (bad.cap == 1000) & (bad.level == "molecule") & (bad.stratum_kind == "all") & (bad.tag == TAGS[1])
     bad.loc[hit, "fn"] += 1
-    a = acceptance(strata, bad, "L", TAGS)
+    a = acceptance(strata, bad, "L", TAGS, "8/4")
     assert a["passed"] is False and a["compared"] == len(TAGS) * len(LEVELS) * len(KINDS)
     assert [(d["tag"], d["level"], d["stratum_kind"]) for d in a["differing"]] == [
         (TAGS[1], "molecule", "cell_class"), (TAGS[1], "molecule", "expr_bin")]
@@ -228,16 +228,20 @@ def test_acceptance_compares_the_sums_over_strata_with_the_whole_of_milestone_2(
     # a sensitivity that differs at equal unit counts fails too
     bad = metrics.copy()
     bad.loc[hit, "sens"] = 0.123
-    assert acceptance(strata, bad, "L", TAGS)["passed"] is False
+    assert acceptance(strata, bad, "L", TAGS, "8/4")["passed"] is False
     # a setting or level missing from milestone 2 fails
-    a = acceptance(strata, metrics[~((metrics.tag == TAGS[2]) & (metrics.level == "read"))], "L", TAGS)
+    a = acceptance(strata, metrics[~((metrics.tag == TAGS[2]) & (metrics.level == "read"))], "L", TAGS, "8/4")
     assert a["passed"] is False and {(d["tag"], d["level"]) for d in a["differing"]} == {(TAGS[2], "read")}
     # so does a setting, level or stratum kind missing from the strata
-    a = acceptance(strata[~((strata.tag == TAGS[0]) & (strata.stratum_kind == "expr_bin"))], metrics, "L", TAGS)
+    a = acceptance(strata[~((strata.tag == TAGS[0]) & (strata.stratum_kind == "expr_bin"))], metrics, "L", TAGS, "8/4")
     assert a["passed"] is False and a["compared"] == len(TAGS) * len(LEVELS) * len(KINDS)
     assert [(d["tag"], d["stratum_kind"], d["templated"]) for d in a["differing"]] == [
         (TAGS[0], "expr_bin", None), (TAGS[0], "expr_bin", None)]
-    assert acceptance(strata, metrics, "L", TAGS + ["c180_l11_m2_i"])["passed"] is False
+    assert acceptance(strata, metrics, "L", TAGS + ["c180_l11_m2_i"], "8/4")["passed"] is False
+    # the cut-offs are the caller's: rows of milestone 2 at other cut-offs are not compared
+    both = pd.concat([metrics, metrics.assign(cutoffs="9/3", fn=metrics.fn + 1)], ignore_index=True)
+    assert acceptance(strata, both, "L", TAGS, "8/4")["passed"] is True
+    assert acceptance(strata, both, "L", TAGS, "9/3")["passed"] is False
 
 
 UMIS = ["ACGTACGTACGT", "CCCCAAAAGGGG", "TTTTGGGGCCCA", "GATTACAGATTA", "AAAACCCCGGGG", "ACACACACACAC"]
