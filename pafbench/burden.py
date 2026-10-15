@@ -112,7 +112,7 @@ def _purity_draws(N, H):
     return out
 
 
-def purity_by_region(mol, n=1000, seed=0, ref_min=REGION_REF_MIN):
+def purity_by_region(mol, n=1000, seed=0):
     """Stage 29 (design 3.7) on one group's labeled molecules (columns a20, hexamer, label, region, gene, ref, strand, site),
     over all regions ('all') and per region value found in mol. The tail-primed share per A band (evaluate.tail_share) and
     the corrected templated share (band_corrected_share) in two versions: with the reference rates of the whole group
@@ -151,8 +151,7 @@ def purity_by_region(mol, n=1000, seed=0, ref_min=REGION_REF_MIN):
                           own["bands"][b]["tail_primed_share"], _clipped(rate, h_ref, h_tail), _clipped(rate, own_ref, own_tail)))
     floats = ["h_tail", "h_tail_lo", "h_tail_hi", "h_ref", "h_ref_lo", "h_ref_hi"]
     ref = pd.DataFrame(refs, columns=["region", "n_ref_tail", "n_ref_internal"] + floats).astype(dict.fromkeys(floats, float))
-    ref["headline_version"] = headline_version(ref, np.nan if h_tail is None else h_tail, np.nan if h_ref is None else h_ref,
-                                               ref_min)
+    ref["headline_version"] = headline_version(ref, np.nan if h_tail is None else h_tail, np.nan if h_ref is None else h_ref)
     floats = ["share_label", "share_corrected", "lo", "hi", "share_corrected_regionref", "lo_regionref", "hi_regionref"]
     share = pd.DataFrame(shares, columns=["region", "n_labeled"] + floats).astype(dict.fromkeys(floats, float))
     share["headline_version"] = ref.headline_version
