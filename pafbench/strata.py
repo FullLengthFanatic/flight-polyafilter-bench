@@ -34,10 +34,13 @@ def cell_classes(cb, cells):
 def expr_bins(gene, gene_umis, n_bins=EXPR_BINS):
     """(bin of each molecule, the n_bins - 1 boundaries in UMIs).
 
-    gene: the molecule's gene ('' for none); gene_umis: unfiltered UMIs in called cells by gene id. The boundaries are
-    numpy.quantile (linear) of the gene UMIs over the molecules whose gene has a counted UMI, so each bin holds about a
-    quarter of them at n_bins 4; the bins are right-closed, as in pandas.qcut, so a molecule at a boundary falls in the lower
-    one, and are named q1 (lowest) to q<n_bins>. The other molecules get NO_UMI.
+    gene: the molecule's gene ('' for none); gene_umis: unfiltered UMIs in called cells by gene id. The boundaries are the
+    quantiles of the gene UMIs over the molecules whose gene has a counted UMI, by numpy.quantile at its default method
+    ("7. 'linear'  (default)", numpy 2.4.6, numpy/lib/_function_base_impl.py line 4298), so each bin holds about a quarter
+    of them at n_bins 4. A molecule goes to the bin numpy.searchsorted gives with side left ("left    ``a[i-1] < v <=
+    a[i]``", numpy/_core/fromnumeric.py line 1435): the bins are right-closed and a molecule at a boundary falls in the lower
+    one, as with pandas.qcut (our observation, tests/test_strata.py). They are named q1 (lowest) to q<n_bins>; the other
+    molecules get NO_UMI.
     """
     x = pd.Series(gene).map(gene_umis).fillna(0).to_numpy(float)
     has = x > 0
