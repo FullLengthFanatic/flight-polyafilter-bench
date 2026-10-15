@@ -119,9 +119,10 @@ def ercc_mix(counts, mixes, lengths, n=1000, seed=0):
     with a UMI and a row in mixes (parse_ercc_mixes), as stage 15's ercc_with_concentration: log2 UMIs regressed on log2
     Mix 1, then the slope of the residuals on the subgroup's log2(Mix 1/Mix 2), with a bootstrap 95% interval over ERCCs
     (evaluate.resample_counts draws, both fits redone in each). Verdict "Mix 1" when the interval contains 0 and not -1,
-    "Mix 2" when it contains -1 and not 0, else "undecided"; also "undecided", with the reason, when a subgroup has fewer
-    than ERCC_MIX_MIN ERCCs (statistics then None) or when ERCC length (lengths: ercc_id to nt) differs between the
-    subgroups (Kruskal-Wallis p < ERCC_LENGTH_ALPHA), so that a capture that depends on length cannot pass for a mix."""
+    "Mix 2" when it excludes 0 and reaches the Mix 2 range, from -1 to minus the fitted log2 slope on Mix 1, else
+    "undecided"; also "undecided", with the reason, when a subgroup has fewer than ERCC_MIX_MIN ERCCs (statistics then None)
+    or when ERCC length (lengths: ercc_id to nt) differs between the subgroups (Kruskal-Wallis p < ERCC_LENGTH_ALPHA), so
+    that a capture that depends on length cannot pass for a mix."""
     m = mixes.set_index("ercc_id")
     ids = [i for i in counts.index if counts[i] > 0 and i in m.index]
     t = m.loc[ids]
@@ -140,8 +141,9 @@ def ercc_mix(counts, mixes, lengths, n=1000, seed=0):
     r = t.log2_mix1_over_mix2.to_numpy()
     length = np.array([lengths[i] for i in ids], np.float64)
     # r is log2(Mix 1/Mix 2). Under Mix 2 an ERCC holds its Mix 1 amount divided by 2 ** r, so log2 input = log2 Mix 1 - r:
-    # with UMIs proportional to input the residuals of the Mix 1 fit fall by r, a slope of -1 (about minus the fitted log2
-    # slope on Mix 1 when UMIs grow more slowly than input); under Mix 1 they do not depend on r, a slope of 0
+    # with UMIs proportional to input the residuals of the Mix 1 fit fall by r, a slope of -1, and with log2 UMIs growing by
+    # b per log2 of input they fall by about b r, a slope of about -b (hence the Mix 2 range from -1 to -b); under Mix 1 they
+    # do not depend on r, a slope of 0
     b, e, s = residual_slope(x1, r, y, np.ones((1, len(ids))))
     lo, hi, n_boot = interval(residual_slope(x1, r, y, resample_counts(len(ids), n, seed).astype(np.float64))[2])
     h, p = stats.kruskal(*[length[sub == g] for g in groups])
@@ -154,12 +156,15 @@ def ercc_mix(counts, mixes, lengths, n=1000, seed=0):
         sel = sub == g
         out["subgroups"][g] |= {"mean_residual": float(e[0, sel].mean()), "median_length": float(np.median(length[sel]))}
     has0, has1 = lo <= 0 <= hi, lo <= -1 <= hi
+    m2 = sorted((-1.0, -float(b[0])))
     if out["length_check"]["related"]:
         out["reason"] = "subgroup related to length"
-    elif has0 != has1:
-        out["verdict"], out["reason"] = ("Mix 1" if has0 else "Mix 2"), None
+    elif has0 and not has1:
+        out["verdict"], out["reason"] = "Mix 1", None
+    elif not has0 and lo <= m2[1] and hi >= m2[0]:
+        out["verdict"], out["reason"] = "Mix 2", None
     else:
-        out["reason"] = "interval contains 0 and -1" if has0 else "interval excludes 0 and -1"
+        out["reason"] = "interval contains 0 and -1" if has0 else "interval excludes 0 and the Mix 2 range"
     return out
 
 

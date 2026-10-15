@@ -411,21 +411,25 @@ def test_ercc_mix_counts_from_mix2():
     # Mix 2 holds more of D than Mix 1 says and less of A: the residuals fall with the log2 ratio
     means = [got["subgroups"][g]["mean_residual"] for g in "ABCD"]
     assert means[0] < means[1] < means[3] and means[0] < means[2] < means[3]
+    # log2 UMIs at 0.9 times log2 input (the fitted slopes of 1417 and 1419 are 0.90 and 0.92): the residuals fall by about the
+    # fitted log2 slope on Mix 1, not by 1, and an interval that excludes -1 and 0 but reaches minus that slope names Mix 2
+    got = ercc_mix(_simulate(mixes, "mix2_amol_per_ul", 0, slope=0.9), mixes, _lengths(mixes))
+    rs = got["residual_slope"]
+    assert -1 < rs["lo"] <= -got["log2_slope_mix1"] <= rs["hi"] < 0
+    assert got["verdict"] == "Mix 2" and got["reason"] is None
 
 
 def test_ercc_mix_verdicts_over_seeds():
-    # 20 simulated libraries per mix: no verdict names the other mix. With UMIs proportional to input the right mix is
-    # named in 17 (Mix 1) and 15 (Mix 2) of 20, the rest undecided. With log2 UMIs at 0.9 times log2 input the residuals of
-    # Mix 2 counts fall by about 0.85 per unit of log2 ratio, and an interval that excludes -1 leaves 16 of 20 undecided
+    # 20 simulated libraries per mix and log2 capture slope (log2 UMIs per log2 input): no verdict names the other mix and the
+    # right mix is named in at least 15. Our runs: at slope 1, Mix 1 in 17 (undecided 2 by the interval, 1 by length) and
+    # Mix 2 in 19 (1 by length); at slope 0.9, Mix 1 in 19 (1 by length) and Mix 2 in 18 (1 by length, 1 by the interval)
     mixes = _mix_table()
     verdicts = {(slope, column): Counter(ercc_mix(_simulate(mixes, column, 100 + s, slope=slope), mixes, _lengths(mixes, s),
                                                   seed=s)["verdict"] for s in range(20))
                 for slope in (1.0, 0.9) for column in ("mix1_amol_per_ul", "mix2_amol_per_ul")}
     for slope in (1.0, 0.9):
         assert verdicts[slope, "mix1_amol_per_ul"]["Mix 2"] == 0 and verdicts[slope, "mix2_amol_per_ul"]["Mix 1"] == 0
-        assert verdicts[slope, "mix1_amol_per_ul"]["Mix 1"] >= 15
-    assert verdicts[1.0, "mix2_amol_per_ul"]["Mix 2"] >= 15
-    assert verdicts[0.9, "mix2_amol_per_ul"]["undecided"] >= 15
+        assert verdicts[slope, "mix1_amol_per_ul"]["Mix 1"] >= 15 and verdicts[slope, "mix2_amol_per_ul"]["Mix 2"] >= 15
 
 
 def test_ercc_mix_too_few_ercc_is_undecided():
@@ -466,12 +470,18 @@ def test_ercc_mix_length_artefact_is_undecided():
 def test_ercc_mix_interval_with_both_or_neither_is_undecided():
     mixes = _mix_table()
     lengths = _lengths(mixes)
-    # residuals rising with the ratio (neither mix): the interval excludes 0 and -1
+    # residuals rising with the ratio (neither mix): the interval excludes 0 and the Mix 2 range
     log2_mu = 0.6 + np.log2(mixes.mix1_amol_per_ul.to_numpy()) + mixes.log2_mix1_over_mix2.to_numpy()
     counts = pd.Series(np.random.default_rng(0).poisson(2.0 ** log2_mu), index=mixes.ercc_id.to_numpy())
     got = ercc_mix(counts, mixes, lengths)
     assert got["residual_slope"]["lo"] > 0
-    assert got["verdict"] == "undecided" and got["reason"] == "interval excludes 0 and -1"
+    assert got["verdict"] == "undecided" and got["reason"] == "interval excludes 0 and the Mix 2 range"
+    # residuals falling at half the Mix 2 rate (input halfway between the mixes on the log scale): below 0 but above the range
+    # from -1 to minus the fitted log2 slope on Mix 1
+    half = mixes.assign(half=mixes.mix1_amol_per_ul * 2.0 ** (-0.5 * mixes.log2_mix1_over_mix2))
+    got = ercc_mix(_simulate(half, "half", 0), mixes, lengths)
+    assert -got["log2_slope_mix1"] < got["residual_slope"]["lo"] and got["residual_slope"]["hi"] < 0
+    assert got["verdict"] == "undecided" and got["reason"] == "interval excludes 0 and the Mix 2 range"
     # noise so large that the interval holds 0 and -1
     got = ercc_mix(_simulate(mixes, "mix1_amol_per_ul", 0, sd=4.0), mixes, lengths)
     assert got["residual_slope"]["lo"] < -1 and got["residual_slope"]["hi"] > 0
