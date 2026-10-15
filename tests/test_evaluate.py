@@ -11,7 +11,7 @@ import pytest
 from pafbench.config import REPO
 from pafbench.evaluate import (METRIC_COLUMNS, STRATA, ambiguous_tail_share, bootstrap, confusion, evaluate, expr_tertiles,
                                gene_clusters, hexamer_check, label_purity, rates, relabel, resample_counts, select_setting, spikein_metrics,
-                               tail_share, units)
+                               subset_units, tail_share, units)
 from pafbench.flags import Setting, setting_tag
 from pafbench.grid import published
 
@@ -288,6 +288,27 @@ def test_bootstrap_single_gene_is_degenerate():
     assert b.estimate.tolist() == [0.5, 0.5, 0.5]
     r = bootstrap(u, [T0], level="read", n=20, seed=0)
     assert r.estimate.tolist() == [0.5, 0.5, 0.5] and (r.lo == r.hi).all()
+
+
+def test_subset_units_keeps_the_molecules_of_the_mask_and_their_reads():
+    mol, tr, fl = _tables()
+    u = units(mol, tr, fl, TAGS, cap=1000)
+    s = subset_units(u, np.array([False, True, False, True]))
+    assert s.mols.mol.tolist() == [1, 3] and s.mols.index.tolist() == [0, 1] and s.K.tolist() == u.K[[1, 3]].tolist()
+    # the reads of m1 and m3 in the order of u, their molecule rows renumbered
+    assert s.reads.qname.tolist() == ["r1a", "r1b", "r3a"] and s.reads.mi.tolist() == [0, 0, 1]
+    assert s.reads.index.tolist() == [0, 1, 2] and s.R.tolist() == u.R[[3, 4, 6]].tolist()
+    assert (s.tags, s.pos, s.neg, s.amb, s.missing_reads, s.dropped_mols) == (
+        u.tags, u.pos, u.neg, u.amb, u.missing_reads, u.dropped_mols)
+    m = evaluate(s, "1417", 1000, levels=("read", "molecule"), kinds=("all", "region"))
+    # m1 templated, 2 of 3 reads removed at T0: kept; m3 ambiguous, removed
+    assert _counts(_row(m, "molecule", "all", "all", T0)) == [0, 1, 0, 0, 1, 1]
+    assert _counts(_row(m, "read", "all", "all", T0)) == [2, 0, 0, 0, 1, 1]
+    assert _counts(_row(m, "read", "region", "CDS", T0)) == [2, 0, 0, 0, 0, 0]
+    b = bootstrap(s, [T0], level="read", n=20, seed=0)
+    assert set(b.n_clusters) == {1}                    # gA only: m3 (gB) is ambiguous at both levels
+    none = subset_units(u, np.zeros(4, bool))
+    assert none.mols.empty and none.reads.empty and none.K.shape == (0, 3) and none.R.shape == (0, 3)
 
 
 def test_hexamer_check():
