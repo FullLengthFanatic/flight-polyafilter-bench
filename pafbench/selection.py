@@ -13,14 +13,19 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from .burden import END_BINS, _exon_coord
-from .config import BIAS_POINTS, DIST_END_BINS
+from .config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS
+from .recount import _in_sorted
+from .strata import _key
 
 AXES = ("region", "cell_class", "expr_bin", "position", "family_size")   # axes 1 to 5 of design 3.6, in its order
 REWEIGHT_AXES = ("region", "cell_class", "expr_bin", "family_size")       # the merge order of the pooling
 REGIONS = ("E", "N", "EN")      # re_class 1, 2 and 3 of stage 23: exonic records only, intronic only, both
 FAMILY = ("1", "2", "3+")       # n_reads
+NONPA = ("0", "1", "2", "3+")   # reads of the molecule without a pa tag, n_reads - n_pa
+EXPR = tuple(f"q{i}" for i in range(1, EXPR_BINS + 1))   # the names of strata.expr_bins
 PAST, PA_ONLY = "past every annotated end", "pa read only"
 POSITIONS = END_BINS[:len(DIST_END_BINS) + 1] + (PAST, PA_ONLY)   # categories of axis 4
 RULE_STRATUM = {"position": "1"}  # the rule reads axis 4 among molecules with one read without a pa tag, the others in "all"
@@ -179,3 +184,89 @@ def position_codes(ix, gene, end3_nonpa):
     code[m] = np.where(np.isnan(d), POSITIONS.index(PAST),
                        np.searchsorted(np.asarray(DIST_END_BINS, np.float64), np.nan_to_num(d), side="left"))
     return code
+
+
+def expr_bins_counted(umis):
+    """(bin of each gene as an index into EXPR, the EXPR_BINS - 1 boundaries in UMIs): the bins of stage 27
+    (strata.expr_bins) cut over the counted molecules, each of which carries the unfiltered UMIs of its gene, so that each
+    bin holds about a quarter of them. umis: unfiltered UMIs per gene in called cells (gene_totals); a gene with u UMIs has u
+    counted molecules, so the quantiles come from the gene totals by numpy.quantile's default method without the repeated
+    array: virtual index (n - 1) q ("'get_virtual_index': lambda n, quantiles: (n - 1) * quantiles", numpy 2.4.6,
+    numpy/lib/_function_base_impl.py line 132), the values at its floor and at the next index (lines 4691 to 4697) and
+    numpy's _lerp between them (lines 4596 to 4599). A gene goes to its bin by numpy.searchsorted with side left, as in
+    strata.expr_bins; -1 for a gene without UMIs."""
+    x = np.asarray(umis, np.int64)
+    v = np.sort(x[x > 0])
+    cum = np.cumsum(v)  # index k of the sorted molecules holds the value v[i] of the first i with cum[i] > k
+    h = (cum[-1] - 1) * (np.arange(1, EXPR_BINS) / EXPR_BINS)
+    lo = np.floor(h)
+    a, b = (v[np.searchsorted(cum, np.minimum(i, cum[-1] - 1), side="right")] for i in (lo, lo + 1))
+    t = h - lo
+    bounds = np.where(t >= 0.5, b - (b - a) * (1 - t), a + (b - a) * t)
+    return np.where(x > 0, np.searchsorted(bounds, x, side="left"), -1), bounds
+
+
+COUNTED_COLUMNS = ["cell", "gene", "umi", "n_reads", "n_pa", "re_class", "end3_nonpa"]
+
+
+@dataclass
+class Tally:
+    """The counted molecules of one library, counted once (tally)."""
+    full: np.ndarray        # [labeled, REGIONS, cell class, FAMILY, NONPA, POSITIONS, n_pa above 0]
+    by_gene: np.ndarray     # [gene row, REGIONS, cell class, FAMILY]
+    labeled: pd.DataFrame   # one row per labeled counted molecule: cell, gene, umi and the codes region, cell_class, family_size
+
+
+def labeled_keys(join):
+    """Sorted read-group keys (strata._key) of the counted molecules that a truth molecule joins: the rows of stage 27's
+    truth_to_counted with joined True, whose gene is the GX of the pa read."""
+    j = join[join.joined.to_numpy(bool)]
+    return np.unique(_key(j.cell.to_numpy(), j.umi.to_numpy(), j.gene.to_numpy()))
+
+
+def tally(counted_path, keys, cell_class, n_classes, ix, batch_rows=1 << 22):
+    """One pass over counted_molecules.parquet (counted_path), COUNTED_COLUMNS only, in batches of batch_rows rows. A
+    molecule is labeled when its key is one of keys (labeled_keys). Codes: REGIONS from re_class, the class code of its
+    barcode row (cell_class, n_classes classes), FAMILY from n_reads, NONPA from n_reads - n_pa, position_codes (ix, an
+    EndIndex of the gene rows) from end3_nonpa, and n_pa above 0, the second definition of labeled."""
+    shape = (2, len(REGIONS), n_classes, len(FAMILY), len(NONPA), len(POSITIONS), 2)
+    gshape = (len(ix.plus), len(REGIONS), n_classes, len(FAMILY))
+    full, by_gene, lab = np.zeros(np.prod(shape), np.int64), np.zeros(np.prod(gshape), np.int64), []
+    for b in pq.ParquetFile(counted_path).iter_batches(batch_size=batch_rows, columns=COUNTED_COLUMNS):
+        c = {k: b.column(k).to_numpy() for k in COUNTED_COLUMNS}
+        cell, gene, umi = c["cell"], c["gene"], c["umi"]
+        labeled = _in_sorted(keys, _key(cell, umi, gene))
+        n_reads, n_pa = c["n_reads"].astype(np.intp), c["n_pa"].astype(np.intp)
+        codes = {"region": c["re_class"].astype(np.intp) - 1, "cell_class": cell_class[cell],
+                 "family_size": np.minimum(n_reads, len(FAMILY)) - 1}
+        idx = (labeled, *codes.values(), np.minimum(n_reads - n_pa, len(NONPA) - 1), position_codes(ix, gene, c["end3_nonpa"]),
+               n_pa > 0)
+        full += np.bincount(np.ravel_multi_index([np.asarray(i, np.intp) for i in idx], shape), minlength=full.size)
+        by_gene += np.bincount(np.ravel_multi_index([gene.astype(np.intp), *codes.values()], gshape), minlength=by_gene.size)
+        lab.append(pd.DataFrame({"cell": cell[labeled], "gene": gene[labeled], "umi": umi[labeled]} |
+                                {k: v[labeled] for k, v in codes.items()}))
+    return Tally(full.reshape(shape), by_gene.reshape(gshape), pd.concat(lab, ignore_index=True))
+
+
+def axis_table(t, classes, expr_code, lib):
+    """The five axes of one library from its Tally t, in AXIS_COLUMNS: region, cell class (classes: the names of the
+    codes), expression bin (expr_code: the EXPR index of each gene row, expr_bins_counted) and family size in stratum "all";
+    position in stratum "all" with every category of POSITIONS, and in the strata 1, 2 and 3+ of NONPA without PA_ONLY,
+    which has a read without pa there."""
+    f = t.full
+
+    def counts(*keep):
+        s = f.sum(axis=tuple(i for i in range(1, f.ndim) if i not in keep))
+        return s[1], s[0]
+
+    n_gene = t.by_gene.sum(axis=(1, 2, 3))
+    m = n_gene > 0
+    lab = np.bincount(t.labeled.gene.to_numpy(np.intp), minlength=len(n_gene))[m]
+    expr = [np.bincount(expr_code[m], weights=w, minlength=len(EXPR)).astype(np.int64) for w in (lab, n_gene[m] - lab)]
+    pos_l, pos_u = counts(4, 5)
+    rows = [axis_rows(lib, "region", "all", REGIONS, *counts(1)), axis_rows(lib, "cell_class", "all", classes, *counts(2)),
+            axis_rows(lib, "expr_bin", "all", EXPR, *expr),
+            axis_rows(lib, "position", "all", POSITIONS, pos_l.sum(axis=0), pos_u.sum(axis=0))]
+    rows += [axis_rows(lib, "position", s, POSITIONS[:-1], pos_l[k, :-1], pos_u[k, :-1]) for k, s in enumerate(NONPA) if k]
+    rows.append(axis_rows(lib, "family_size", "all", FAMILY, *counts(3)))
+    return pd.concat(rows, ignore_index=True)

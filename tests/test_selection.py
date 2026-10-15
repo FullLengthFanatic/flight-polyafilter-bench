@@ -4,11 +4,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from pafbench.burden import END_BINS, _exon_coord, end_bin, end_distances, gene_ends
-from pafbench.config import BIAS_POINTS, DIST_END_BINS
+from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS
 from pafbench.exons import load_collapsed_exons
-from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, PA_ONLY, PAST, POSITIONS, REGIONS, axis_rows, decision,
-                                downstream_end, end_index, exon_coord, gene_strands, position_codes, rule)
+from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, NONPA, PA_ONLY, PAST, POSITIONS, REGIONS, axis_rows, axis_table,
+                                decision, downstream_end, end_index, exon_coord, expr_bins_counted, gene_strands,
+                                labeled_keys, position_codes, rule, tally)
+from pafbench.strata import expr_bins
 from tests.test_matched_sites import GTF, _gtf
 
 # gL on chr3 plus: collapsed exons [1000, 2000) and [9000, 10000), one end at 10000; for the two widest bins
@@ -172,3 +177,83 @@ def test_downstream_end_against_the_nearest_end_of_stage_31(tmp_path):
     code = position_codes(ix, gene, base)
     m = ~np.isnan(d)
     assert (np.array(POSITIONS, object)[code[m]] == end_bin(d[m])).all()
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_expr_bins_are_those_of_stage_27_cut_over_the_counted_molecules(seed):
+    rng = np.random.default_rng(seed)
+    umis = np.where(rng.random(60) < 0.2, 0, rng.integers(1, 400, 60))
+    code, bounds = expr_bins_counted(umis)
+    genes = np.array([f"g{i}" for i in range(len(umis))], object)
+    # one molecule per counted UMI, carrying its gene's UMIs: the bins of strata.expr_bins over them
+    ref, ref_bounds = expr_bins(np.repeat(genes, umis), pd.Series(umis, index=genes))
+    assert bounds.tolist() == ref_bounds.tolist() and len(bounds) == EXPR_BINS - 1
+    assert [f"q{c + 1}" for c in np.repeat(code, umis)] == ref.tolist()
+    assert (code[umis == 0] == -1).all() and (code[umis > 0] >= 0).all()
+    # each bin holds about a quarter of the counted molecules
+    assert np.bincount(np.repeat(code, umis)).max() < umis.sum() / EXPR_BINS + umis.max()
+
+
+def test_expr_bins_of_one_gene():
+    code, bounds = expr_bins_counted(np.array([0, 5]))
+    assert code.tolist() == [-1, 0] and bounds.tolist() == [5.0] * (EXPR_BINS - 1)
+
+
+COUNTED_SCHEMA = pa.schema([("cell", pa.int32()), ("gene", pa.int32()), ("umi", pa.uint32()), ("ref", pa.string()),
+                            ("n_reads", pa.uint16()), ("n_pa", pa.uint16()), ("re_class", pa.uint8()), ("end3", pa.int32()),
+                            ("end3_nonpa", pa.int32()), ("any_removed", pa.uint32()), ("lost", pa.uint32()),
+                            ("switched", pa.uint32())])
+
+
+def _counted(path, rows):
+    """counted_molecules.parquet from (cell, gene row, umi, n_reads, n_pa, re_class, end3_nonpa) rows."""
+    cols = list(zip(*rows))
+    t = {"cell": cols[0], "gene": cols[1], "umi": cols[2], "ref": ["chr1"] * len(rows), "n_reads": cols[3], "n_pa": cols[4],
+         "re_class": cols[5], "end3": [max(x, 0) for x in cols[6]], "end3_nonpa": cols[6]}
+    t |= {k: [0] * len(rows) for k in ("any_removed", "lost", "switched")}
+    pq.write_table(pa.table(t, schema=COUNTED_SCHEMA), path, row_group_size=2)
+    return path
+
+
+# cells 0 (rod) and 1 (cone); gene rows of GENES: gQ 0, gP 1, gL 2, gM 3
+TOY = [(0, 1, 5, 1, 1, 1, -1),       # labeled, its read has pa: pa read only
+       (0, 1, 6, 3, 0, 1, 1249),     # three reads, none with pa; ends on the last base of t2
+       (1, 3, 5, 2, 1, 2, 2300),     # labeled, intronic, one read without pa, 250 nt upstream on minus
+       (1, 3, 7, 2, 1, 3, 1999),     # n_pa above 0 but not joined: unlabeled; past both ends of gM
+       (1, 0, 9, 4, 0, 1, 100)]      # 499 nt from the end of gQ
+TOY_JOIN = pd.DataFrame({"lib": "L", "mol": [10, 11, 12, 13], "cell": np.array([0, 1, 1, 0], np.int32),
+                         "gene": np.array([1, 3, 0, -1], np.int32), "umi": np.array([5, 5, 9, 8], np.uint32),
+                         "joined": [True, True, False, False], "region": "3UTR"})
+
+
+@pytest.mark.parametrize("batch_rows", [2, 1000])
+def test_tally_counts_each_counted_molecule_once_by_axis(tmp_path, batch_rows):
+    ix = _index(tmp_path)
+    keys = labeled_keys(TOY_JOIN)
+    assert len(keys) == 2   # the joined rows only: m12 lies in a counted molecule's key but is not joined
+    t = tally(_counted(tmp_path / "c.parquet", TOY), keys, np.array([1, 0]), 2, ix, batch_rows=batch_rows)
+    assert t.full.shape == (2, len(REGIONS), 2, len(FAMILY), len(NONPA), len(POSITIONS), 2) and t.full.sum() == 5
+    assert t.full.sum(axis=(1, 2, 3, 4, 5)).tolist() == [[2, 1], [0, 2]]   # [labeled][n_pa above 0]
+    assert t.by_gene.shape == (len(GENES), len(REGIONS), 2, len(FAMILY))
+    assert t.by_gene.sum(axis=(1, 2, 3)).tolist() == [1, 2, 0, 2]
+    assert t.labeled.to_dict("list") == {"cell": [0, 1], "gene": [1, 3], "umi": [5, 5], "region": [0, 1], "cell_class": [1, 0],
+                                         "family_size": [0, 1]}
+    tab = axis_table(t, ["cone", "rod"], np.array([0, 1, 2, 3]), "L")
+    assert list(tab.columns) == AXIS_COLUMNS and set(tab.lib) == {"L"}
+
+    def get(axis, stratum="all"):
+        x = tab[(tab.axis == axis) & (tab.stratum == stratum)]
+        return dict(zip(x.category, zip(x.n_labeled, x.n_unlabeled)))
+
+    assert get("region") == {"E": (1, 2), "N": (1, 0), "EN": (0, 1)}
+    assert get("cell_class") == {"cone": (1, 2), "rod": (1, 1)}
+    assert get("expr_bin") == {"q1": (0, 1), "q2": (1, 1), "q3": (0, 0), "q4": (1, 1)}
+    assert get("family_size") == {"1": (1, 0), "2": (1, 1), "3+": (0, 2)}
+    assert get("position") == {"0-100": (0, 1), "101-300": (1, 0), "301-1000": (0, 1), "1001-5000": (0, 0), ">5000": (0, 0),
+                               PAST: (0, 1), PA_ONLY: (1, 0)}
+    # at equal numbers of reads without pa the pa read only category has no place
+    assert get("position", "1") == {"0-100": (0, 0), "101-300": (1, 0), "301-1000": (0, 0), "1001-5000": (0, 0),
+                                    ">5000": (0, 0), PAST: (0, 1)}
+    assert get("position", "2") == dict.fromkeys(POSITIONS[:-1], (0, 0))
+    assert get("position", "3+")["0-100"] == (0, 1) and get("position", "3+")["301-1000"] == (0, 1)
+    assert sorted(set(tab[tab.axis == "position"].stratum)) == ["1", "2", "3+", "all"]
