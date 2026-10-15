@@ -178,7 +178,8 @@ def doublet_scores(counts, cluster=CLUSTER):
 
 def _share(counts, symbols, genes):
     """UMIs of genes (symbols) over all UMIs, per cell."""
-    cols = [i for i, s in enumerate(symbols) if s in set(genes)]
+    wanted = set(genes)
+    cols = [i for i, s in enumerate(symbols) if s in wanted]
     return np.asarray(counts[:, cols].sum(axis=1)).ravel() / np.asarray(counts.sum(axis=1)).ravel()
 
 
