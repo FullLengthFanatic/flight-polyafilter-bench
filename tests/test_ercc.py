@@ -3,14 +3,18 @@ import importlib.util
 import json
 import math
 import sys
+from collections import Counter
 
 import numpy as np
 import pandas as pd
 import pysam
 import pytest
+from scipy import stats
 
 from pafbench.config import REPO
-from pafbench.ercc import ercc_correlation, ercc_reads, ercc_settings, ercc_tables, parse_ercc_conc, umi_counts
+from pafbench.ercc import (ercc_correlation, ercc_mix, ercc_reads, ercc_settings, ercc_tables, mix_acceptance, parse_ercc_conc,
+                          parse_ercc_mixes, residual_slope, umi_counts)
+from pafbench.evaluate import resample_counts
 from pafbench.flags import Setting, flag_reference, setting_tag
 from pafbench.grid import published
 from pafbench.transcripts import load_transcripts
@@ -301,3 +305,275 @@ def test_stage15_on_synthetic_spikes(synth, tmp_path, monkeypatch, capsys):
     counts = pd.read_parquet(out / "ercc_counts.parquet")
     assert list(counts[counts.setting == "c250_l9_m1_e"].itertuples(index=False, name=None)) == [
         (e, "c250_l9_m1_e", extra[(e, "c250_l9_m1_e")]) for e in ids]
+
+
+def test_parse_ercc_mixes():
+    mixes = parse_ercc_mixes(EXCERPT)
+    assert mixes.columns.tolist() == ["ercc_id", "subgroup", "mix1_amol_per_ul", "mix2_amol_per_ul", "log2_mix1_over_mix2"]
+    assert list(mixes.itertuples(index=False, name=None)) == [("ERCC-00130", "A", 30000.0, 7500.0, 2.0),
+                                                              ("ERCC-00108", "A", 937.5, 234.375, 2.0),
+                                                              ("ERCC-00048", "D", 0.01430512, 0.02861023, -1.0)]
+    rows = [line.split("\t") for line in EXCERPT.replace("\r\n", "\n").strip().split("\n")]
+    order = [6, 4, 2, 3, 1, 0, 5]  # log2 ratio first, Mix 2 before Mix 1
+    text = "\n".join("\t".join(r[k] for k in order) for r in rows) + "\n"
+    pd.testing.assert_frame_equal(parse_ercc_mixes(text), mixes)
+
+
+SUBGROUPS = (("A", "4", "2"), ("B", "1", "0"), ("C", "0.67", "-0.58"), ("D", "0.5", "-1"))
+
+
+def _mix_text(per=23):
+    """A table shaped like cms_095046.txt: per ERCCs in each subgroup, Mix 1 from 30,000 amol/ul down 21 log2 units in
+    equal steps, offset by a quarter step per subgroup, Mix 2 = Mix 1 / fold."""
+    rows = [EXCERPT.split("\r\n")[0]]
+    for k, (group, fold, log2r) in enumerate(SUBGROUPS):
+        for j in range(per):
+            mix1 = 30000 * 2.0 ** -((j + k / 4) * 21 / (per - 1))
+            rows.append(f"{len(rows)}\tERCC-{len(rows):05d}\t{group}\t{mix1}\t{mix1 / float(fold)}\t{fold}\t{log2r}")
+    return "\r\n".join(rows) + "\r\n"
+
+
+def _mix_table(per=23):
+    return parse_ercc_mixes(_mix_text(per))
+
+
+def _simulate(mixes, column, seed, slope=1.0, sd=0.5, length_power=0.0, lengths=None):
+    """Poisson UMIs per ERCC (zeros kept) with log2 mean 0.6 + slope * log2(concentration of column) + normal noise of sd,
+    plus length_power * log2(length) for a capture that depends on length. slope 1: UMIs proportional to input, the
+    premise under which design 3.10 expects a residual slope of about -1 from Mix 2."""
+    rng = np.random.default_rng(seed)
+    log2_mu = 0.6 + slope * np.log2(mixes[column].to_numpy()) + rng.normal(0, sd, len(mixes))
+    if length_power:
+        log2_mu += length_power * np.log2(mixes.ercc_id.map(lengths).to_numpy(np.float64))
+    return pd.Series(rng.poisson(2.0 ** log2_mu), index=mixes.ercc_id.to_numpy())
+
+
+def _lengths(mixes, seed=7):
+    """Lengths unrelated to subgroup, 250 to 2,000 nt like the ERCCs of the SIRV FASTA."""
+    return dict(zip(mixes.ercc_id, np.random.default_rng(seed).integers(250, 2001, len(mixes)).tolist()))
+
+
+def test_residual_slope_equals_least_squares_on_resampled_ercc():
+    rng = np.random.default_rng(3)
+    x, r, y = rng.normal(0, 4, 30), rng.choice([2.0, 0.0, -0.58, -1.0], 30), rng.normal(0, 4, 30)
+    w = resample_counts(30, 5, 11).astype(float)
+    b, e, s = residual_slope(x, r, y, np.vstack([np.ones(30), w]))
+    for k, row in enumerate(np.vstack([np.ones(30), w]).astype(int)):
+        idx = np.repeat(np.arange(30), row)
+        fit = np.polyfit(x[idx], y[idx], 1)
+        res = y - np.polyval(fit, x)
+        assert b[k] == pytest.approx(fit[0])
+        assert e[k] == pytest.approx(res)
+        assert s[k] == pytest.approx(np.polyfit(r[idx], res[idx], 1)[0])
+
+
+def test_ercc_mix_counts_from_mix1():
+    mixes = _mix_table()
+    counts = _simulate(mixes, "mix1_amol_per_ul", 0)
+    counts["ERCC-99999"] = 50   # not in the table: left out
+    got = ercc_mix(counts, mixes, _lengths(mixes))
+    ids = [i for i in counts.index if counts[i] > 0 and i in set(mixes.ercc_id)]
+    assert got["n"] == len(ids) and 40 < got["n"] < 92   # ERCCs with a UMI and a concentration, as stage 15 counts them
+    assert got["verdict"] == "Mix 1" and got["reason"] is None
+    rs = got["residual_slope"]
+    assert rs["lo"] <= 0 <= rs["hi"] and rs["hi"] < 0.5 and rs["lo"] > -0.5 and rs["n_boot"] == 1000 and rs["seed"] == 0
+    assert got["pearson_log2_mix1"] > got["pearson_log2_mix2"] > 0.8
+    m = mixes.set_index("ercc_id").loc[ids]
+    y = np.log2(counts[ids].to_numpy(np.float64))
+    assert got["pearson_log2_mix1"] == pytest.approx(np.corrcoef(y, np.log2(m.mix1_amol_per_ul))[0, 1])
+    assert got["pearson_log2_mix2"] == pytest.approx(np.corrcoef(y, np.log2(m.mix2_amol_per_ul))[0, 1])
+    fit = np.polyfit(np.log2(m.mix1_amol_per_ul), y, 1)
+    res = y - np.polyval(fit, np.log2(m.mix1_amol_per_ul))
+    assert got["log2_slope_mix1"] == pytest.approx(fit[0]) and 0.9 < fit[0] < 1.0   # ERCCs without a UMI flatten the low end
+    assert rs["estimate"] == pytest.approx(np.polyfit(m.log2_mix1_over_mix2, res, 1)[0])
+    assert list(got["subgroups"]) == ["A", "B", "C", "D"]
+    for group, fold, log2r in SUBGROUPS:
+        g = got["subgroups"][group]
+        sel = (m.subgroup == group).to_numpy()
+        assert g["log2_ratio"] == float(log2r) and g["n"] == int(sel.sum())
+        assert g["mean_residual"] == pytest.approx(res[sel].mean())
+        assert g["median_length"] == float(np.median([_lengths(mixes)[i] for i in m.index[sel]]))
+    lc = got["length_check"]
+    assert lc["test"] == "kruskal" and lc["alpha"] == 0.05 and lc["p"] > 0.05 and not lc["related"]
+    # over the lengths of the ERCCs used, not of the whole table
+    kw = stats.kruskal(*[[_lengths(mixes)[i] for i in m.index[(m.subgroup == g).to_numpy()]] for g in "ABCD"])
+    assert [lc["h"], lc["p"]] == pytest.approx([kw.statistic, kw.pvalue])
+    assert got["min_per_subgroup"] == 5
+
+
+def test_ercc_mix_counts_from_mix2():
+    mixes = _mix_table()
+    got = ercc_mix(_simulate(mixes, "mix2_amol_per_ul", 0), mixes, _lengths(mixes))
+    assert got["verdict"] == "Mix 2" and got["reason"] is None
+    rs = got["residual_slope"]
+    assert rs["lo"] <= -1 <= rs["hi"] and rs["hi"] < 0
+    assert got["pearson_log2_mix2"] > got["pearson_log2_mix1"]
+    # Mix 2 holds more of D than Mix 1 says and less of A: the residuals fall with the log2 ratio
+    means = [got["subgroups"][g]["mean_residual"] for g in "ABCD"]
+    assert means[0] < means[1] < means[3] and means[0] < means[2] < means[3]
+    # log2 UMIs at 0.9 times log2 input (the fitted slopes of 1417 and 1419 are 0.90 and 0.92): the residuals fall by about the
+    # fitted log2 slope on Mix 1, not by 1, and an interval that excludes -1 and 0 but reaches minus that slope names Mix 2
+    got = ercc_mix(_simulate(mixes, "mix2_amol_per_ul", 0, slope=0.9), mixes, _lengths(mixes))
+    rs = got["residual_slope"]
+    assert -1 < rs["lo"] <= -got["log2_slope_mix1"] <= rs["hi"] < 0
+    assert got["verdict"] == "Mix 2" and got["reason"] is None
+
+
+def test_ercc_mix_verdicts_over_seeds():
+    # 20 simulated libraries per mix and log2 capture slope (log2 UMIs per log2 input): no verdict names the other mix and the
+    # right mix is named in at least 15. Our runs: at slope 1, Mix 1 in 17 (undecided 2 by the interval, 1 by length) and
+    # Mix 2 in 19 (1 by length); at slope 0.9, Mix 1 in 19 (1 by length) and Mix 2 in 18 (1 by length, 1 by the interval)
+    mixes = _mix_table()
+    verdicts = {(slope, column): Counter(ercc_mix(_simulate(mixes, column, 100 + s, slope=slope), mixes, _lengths(mixes, s),
+                                                  seed=s)["verdict"] for s in range(20))
+                for slope in (1.0, 0.9) for column in ("mix1_amol_per_ul", "mix2_amol_per_ul")}
+    for slope in (1.0, 0.9):
+        assert verdicts[slope, "mix1_amol_per_ul"]["Mix 2"] == 0 and verdicts[slope, "mix2_amol_per_ul"]["Mix 1"] == 0
+        assert verdicts[slope, "mix1_amol_per_ul"]["Mix 1"] >= 15 and verdicts[slope, "mix2_amol_per_ul"]["Mix 2"] >= 15
+
+
+def test_ercc_mix_too_few_ercc_is_undecided():
+    # every ERCC counted, noise-free Mix 1: only the number of ERCCs per subgroup decides
+    mixes = _mix_table(per=4)
+    counts = pd.Series(np.round(2.0 ** (1 + np.log2(mixes.mix1_amol_per_ul.to_numpy()) + 10)), index=mixes.ercc_id.to_numpy())
+    got = ercc_mix(counts, mixes, _lengths(mixes))
+    assert got["n"] == 16 and got["verdict"] == "undecided" and got["reason"] == "too few ERCCs"
+    assert {g: v["n"] for g, v in got["subgroups"].items()} == {"A": 4, "B": 4, "C": 4, "D": 4}
+    assert got["residual_slope"] is None and got["pearson_log2_mix1"] is None and got["length_check"] is None
+    assert got["subgroups"]["A"]["mean_residual"] is None
+    # five per subgroup is enough
+    mixes = _mix_table(per=5)
+    counts = pd.Series(np.round(2.0 ** (np.log2(mixes.mix1_amol_per_ul.to_numpy()) + 10)), index=mixes.ercc_id.to_numpy())
+    assert ercc_mix(counts, mixes, _lengths(mixes))["verdict"] == "Mix 1"
+    # a subgroup with no ERCC counted
+    mixes = _mix_table()
+    counts = _simulate(mixes, "mix1_amol_per_ul", 0)
+    counts.loc[mixes.ercc_id[mixes.subgroup == "C"]] = 0
+    got = ercc_mix(counts, mixes, _lengths(mixes))
+    assert got["verdict"] == "undecided" and got["reason"] == "too few ERCCs" and got["subgroups"]["C"]["n"] == 0
+
+
+def test_ercc_mix_length_artefact_is_undecided():
+    # Mix 1 in the tube, but capture grows with length and the subgroups of low log2 ratio hold the long ERCCs (log2 length
+    # = 10 - log2 ratio): the residuals fall with the ratio as they would under Mix 2
+    mixes = _mix_table()
+    rng = np.random.default_rng(5)
+    lengths = dict(zip(mixes.ercc_id, np.round(2.0 ** (10 - mixes.log2_mix1_over_mix2.to_numpy()
+                                                        + rng.normal(0, 0.1, len(mixes)))).tolist()))
+    got = ercc_mix(_simulate(mixes, "mix1_amol_per_ul", 0, length_power=1.0, lengths=lengths), mixes, lengths)
+    rs = got["residual_slope"]
+    assert rs["lo"] <= -1 <= rs["hi"] and rs["hi"] < 0   # without the guard: "Mix 2"
+    assert got["length_check"]["related"] and got["length_check"]["p"] < 1e-6
+    assert got["verdict"] == "undecided" and got["reason"] == "subgroup related to length"
+
+
+def test_ercc_mix_interval_with_both_or_neither_is_undecided():
+    mixes = _mix_table()
+    lengths = _lengths(mixes)
+    # residuals rising with the ratio (neither mix): the interval excludes 0 and the Mix 2 range
+    log2_mu = 0.6 + np.log2(mixes.mix1_amol_per_ul.to_numpy()) + mixes.log2_mix1_over_mix2.to_numpy()
+    counts = pd.Series(np.random.default_rng(0).poisson(2.0 ** log2_mu), index=mixes.ercc_id.to_numpy())
+    got = ercc_mix(counts, mixes, lengths)
+    assert got["residual_slope"]["lo"] > 0
+    assert got["verdict"] == "undecided" and got["reason"] == "interval excludes 0 and the Mix 2 range"
+    # residuals falling at half the Mix 2 rate (input halfway between the mixes on the log scale): below 0 but above the range
+    # from -1 to minus the fitted log2 slope on Mix 1
+    half = mixes.assign(half=mixes.mix1_amol_per_ul * 2.0 ** (-0.5 * mixes.log2_mix1_over_mix2))
+    got = ercc_mix(_simulate(half, "half", 0), mixes, lengths)
+    assert -got["log2_slope_mix1"] < got["residual_slope"]["lo"] and got["residual_slope"]["hi"] < 0
+    assert got["verdict"] == "undecided" and got["reason"] == "interval excludes 0 and the Mix 2 range"
+    # noise so large that the interval holds 0 and -1
+    got = ercc_mix(_simulate(mixes, "mix1_amol_per_ul", 0, sd=4.0), mixes, lengths)
+    assert got["residual_slope"]["lo"] < -1 and got["residual_slope"]["hi"] > 0
+    assert got["verdict"] == "undecided" and got["reason"] == "interval contains 0 and -1"
+
+
+def test_ercc_mix_bootstrap_is_seeded():
+    mixes = _mix_table()
+    counts, lengths = _simulate(mixes, "mix1_amol_per_ul", 0), _lengths(mixes)
+    a, b = ercc_mix(counts, mixes, lengths), ercc_mix(counts, mixes, lengths)
+    assert a == b
+    # the seed reaches the draws: another seed, same n, gives another interval, the percentiles of resample_counts(.., seed)
+    c1 = ercc_mix(counts, mixes, lengths, seed=1)
+    assert c1 == ercc_mix(counts, mixes, lengths, seed=1) and c1["residual_slope"]["seed"] == 1
+    assert (c1["residual_slope"]["lo"], c1["residual_slope"]["hi"]) != (a["residual_slope"]["lo"], a["residual_slope"]["hi"])
+    m = mixes.set_index("ercc_id").loc[[i for i in counts.index if counts[i] > 0]]
+    s = residual_slope(np.log2(m.mix1_amol_per_ul.to_numpy()), m.log2_mix1_over_mix2.to_numpy(),
+                       np.log2(counts[m.index].to_numpy(np.float64)), resample_counts(len(m), 1000, 1).astype(float))[2]
+    assert [c1["residual_slope"]["lo"], c1["residual_slope"]["hi"]] == pytest.approx(np.percentile(s, [2.5, 97.5]))
+    c = ercc_mix(counts, mixes, lengths, n=200, seed=1)
+    assert c["residual_slope"]["n_boot"] == 200 and c["residual_slope"]["seed"] == 1
+    assert c["residual_slope"]["estimate"] == a["residual_slope"]["estimate"]
+    assert (c["residual_slope"]["lo"], c["residual_slope"]["hi"]) != (a["residual_slope"]["lo"], a["residual_slope"]["hi"])
+
+
+def test_mix_acceptance():
+    assert mix_acceptance({"n": 68}, {"ercc_with_concentration": 68}) == {"ercc_with_concentration": 68, "n_equal": True}
+    assert mix_acceptance({"n": 67}, {"ercc_with_concentration": 68}) == {"ercc_with_concentration": 68, "n_equal": False}
+
+
+def test_stage32_on_synthetic_stage15_outputs(tmp_path, monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location("stage32", REPO / "scripts" / "32_ercc_mix.py")
+    stage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage)
+    mixes = _mix_table()
+    lengths = _lengths(mixes)
+    rng = np.random.default_rng(2)
+    fasta = tmp_path / "spikes.fa"
+    fasta.write_text("".join(f">{i}\n{''.join(rng.choice(list('ACGT'), n))}\n" for i, n in lengths.items()) + ">SIRV1\nACGT\n")
+    pysam.faidx(str(fasta))
+    monkeypatch.setattr(stage, "SIRV_FASTA", fasta)
+    sim = _simulate(mixes, "mix1_amol_per_ul", 0)
+    unfiltered = sim[sim > 0]   # stage 15 writes the ERCCs with a UMI unfiltered, then each setting over the same ERCCs
+    base, ref = tmp_path / "base", tmp_path / "ref"
+    base.mkdir()
+    ref.mkdir()
+    (ref / "ercc_conc_raw.txt").write_text(_mix_text())
+    k = len(unfiltered)
+    # another setting's rows first and with more UMIs: only the rows of setting "unfiltered" give the expected json
+    pd.DataFrame({"ercc_id": np.tile(unfiltered.index.to_numpy(), 2), "setting": ["c300_l10_m1_e"] * k + ["unfiltered"] * k,
+                  "umis": np.concatenate([unfiltered.to_numpy() * 3 + 1, unfiltered.to_numpy()])}).to_parquet(
+        base / "ercc_counts.parquet", index=False)
+    (base / "ercc.json").write_text(json.dumps({"library": "SYN", "ercc_with_concentration": len(unfiltered)}))
+    before = {f.name: (f.read_bytes(), f.stat().st_mtime_ns) for f in base.iterdir()}
+
+    out = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", ["32", "SYN", "--base", str(base), "--out", str(out), "--ref", str(ref)])
+    stage.main()
+    js = json.loads((out / "ercc_mix.json").read_text())
+    mix = ercc_mix(unfiltered, mixes, lengths)
+    assert js == json.loads(json.dumps({"library": "SYN", "counts": str(base / "ercc_counts.parquet"), "setting": "unfiltered",
+                                        "table": str(ref / "ercc_conc_raw.txt"), "fasta": str(fasta)} | mix
+                                       | {"acceptance": {"ercc_with_concentration": len(unfiltered), "n_equal": True}}))
+    assert js["verdict"] == "Mix 1" and js["n"] == len(unfiltered)
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["library"] == "SYN" and line["n"] == len(unfiltered) and line["verdict"] == "Mix 1" and line["n_equal"]
+    assert line["residual_slope"] == [mix["residual_slope"][k] for k in ("estimate", "lo", "hi")]
+    assert line["length_p"] == mix["length_check"]["p"] and "seconds" in line
+
+    # default output next to stage 15's files, which stay as they were; an n that differs fails the acceptance: the json and
+    # the summary line are written, then the stage exits non-zero naming both numbers
+    (base / "ercc.json").write_text(json.dumps({"library": "SYN", "ercc_with_concentration": len(unfiltered) + 1}))
+    before["ercc.json"] = ((base / "ercc.json").read_bytes(), (base / "ercc.json").stat().st_mtime_ns)
+    monkeypatch.setattr(sys, "argv", ["32", "SYN", "--base", str(base), "--ref", str(ref)])
+    with pytest.raises(SystemExit) as exc:
+        stage.main()
+    assert exc.value.code == (f"acceptance failed: n is {len(unfiltered)} ERCCs, ercc_with_concentration of ercc.json is "
+                              f"{len(unfiltered) + 1}")
+    assert {f.name: (f.read_bytes(), f.stat().st_mtime_ns) for f in base.iterdir() if f.name != "ercc_mix.json"} == before
+    js = json.loads((base / "ercc_mix.json").read_text())
+    assert js["acceptance"] == {"ercc_with_concentration": len(unfiltered) + 1, "n_equal": False}
+    assert not json.loads(capsys.readouterr().out.strip().splitlines()[-1])["n_equal"]
+
+    # too few ERCCs: the verdict is undecided and the summary line carries None for what was not computed
+    few = tmp_path / "few"
+    few.mkdir()
+    pd.DataFrame({"ercc_id": unfiltered.index[:8], "setting": "unfiltered", "umis": unfiltered.to_numpy()[:8]}).to_parquet(
+        few / "ercc_counts.parquet", index=False)
+    (few / "ercc.json").write_text(json.dumps({"ercc_with_concentration": 8}))
+    monkeypatch.setattr(sys, "argv", ["32", "SYN", "--base", str(few), "--ref", str(ref)])
+    stage.main()
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert (line["n"], line["n_equal"], line["verdict"], line["reason"]) == (8, True, "undecided", "too few ERCCs")
+    assert line["residual_slope"] == [None, None, None] and line["length_p"] is None
+    assert json.loads((few / "ercc_mix.json").read_text())["residual_slope"] is None

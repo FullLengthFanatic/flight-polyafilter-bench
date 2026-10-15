@@ -576,6 +576,8 @@ Two versions are computed and both are printed in any case: reference rates from
 
 **Run time.** Seconds.
 
+**Note of 2026-10-15 (stage 32 as built).** Step 1 expects a residual slope of about -1 under Mix 2, which holds when UMIs grow in proportion to input. The fitted log2 slope of UMIs on Mix 1 is 0.902 in 1417 and 0.917 in 1419, and under Mix 2 the residuals then fall by about that slope times the log2 ratio. With -1 as the only Mix 2 value, counts simulated from Mix 2 with the fitted parameters of the two libraries got "undecided" in 39 and 31 of 100 libraries (review of stage 32, finding S32-1). So `pafbench.ercc.ercc_mix` names Mix 2 when the interval excludes 0 and reaches the range from -1 to minus the fitted slope (`log2_slope_mix1` in `ercc_mix.json`); in the same simulations Mix 2 is then named in 95 and 97 of 100, and no library is given the other mix. The confirmation of Mix 1 is unchanged: the interval contains 0 and excludes -1.
+
 ### 3.11 Stage 33 (optional, D8): one Cell Ranger rerun on a filtered BAM
 
 **Purpose.** The polyAfilter README sends 10x users back through Cell Ranger: "bamtofastq may need to be used to convert the BAM file back to FASTQ files, which can be used as input to cellranger count" (`vendor/polyAfilter/README.md`, line 176, commit 5ce0098). Our recount applies Cell Ranger's gene choice again but keeps its UMI correction, its alignments and its cell calls from the unfiltered run (3.2). Check A6 measures the first of these from the raw UMIs. One rerun shows how far the whole is from the README's route, and A6 says how much of that difference the counting logic alone explains.
