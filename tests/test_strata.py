@@ -164,6 +164,31 @@ def test_few_molecules_marks_the_rates_with_a_denominator_under_min_stratum():
     assert few_molecules(u, min_n=1) == [r | {"sens_few": r["templated"] < 1, "spec_few": r["nontemplated"] < 1} for r in few]
 
 
+def _units_of(groups):
+    """Units of labeled molecules of called cells, all of gene g1, each with a pa read and n member reads within the cap;
+    groups: (barcode, label, molecules, n)."""
+    mol, reads = [], []
+    for cb, label, n_mols, n in groups:
+        for _ in range(n_mols):
+            m = len(mol)
+            mol.append((m, cb, label, "14-20" if label == "templated" else "0-4"))
+            reads += [(f"p{m}", m, "pa", np.nan)] + [(f"r{m}_{k}", m, "member", 100.0) for k in range(n)]
+    mol = pd.DataFrame(mol, columns=["mol", "cb", "label", "a_band"]).assign(region="3UTR", gene="g1", has_ts=False)
+    tr = pd.DataFrame(reads, columns=["qname", "mol", "role", "dist5_exon"]).assign(dist_mode="exon", spliced=False)
+    fl = pd.DataFrame({"qname": tr.qname, "flag": 0} | {t: False for t in TAGS})
+    return with_strata(units(mol, tr, fl, TAGS, cap=1000), CELLS, GENE_UMIS)[0]
+
+
+def test_a_stratum_of_exactly_min_stratum_units_is_not_few():
+    n = MIN_STRATUM
+    u = _units_of([(BARCODES[0], "templated", n, 1), (BARCODES[0], "nontemplated", n - 1, 1),
+                   (BARCODES[2], "templated", n - 1, 1), (BARCODES[2], "nontemplated", n, 1)])
+    got = {(r["stratum_kind"], r["stratum"]): (r["templated"], r["nontemplated"], r["sens_few"], r["spec_few"])
+           for r in few_molecules(u)}
+    assert got == {("cell_class", "rod"): (n, n - 1, False, True), ("cell_class", "cone"): (n - 1, n, True, False),
+                   ("expr_bin", "q1"): (2 * n - 1, 2 * n - 1, False, False)}
+
+
 def _m2_metrics(u, lib="L"):
     """What stage 17 writes for these units: every stratum kind and level at cap 1,000 and cut-offs 8/4."""
     return evaluate(u, lib, 1000, "8/4")
