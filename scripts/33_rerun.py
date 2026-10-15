@@ -36,8 +36,8 @@ measured: hours of wall time, memory within Cell Ranger's 64 GB limit (estimates
 stage 23 or 24 runs on 1179 or while stage 30 runs.
 
 compare, measured on 2026-10-15 under /usr/bin/time -v and memwatch with the outs of the original run of 1417 in place of
-the rerun's: at "unfiltered" 30 s wall, 3.34 GiB resident (memwatch 3.12 GiB); at c375_l3_m2_i, which also reads the
-removed reads of the parts, 24 s and 2.36 GiB (memwatch 2.12 GiB).
+the rerun's: at "unfiltered" 30 s wall, 3.35 GiB resident (memwatch 3.18 GiB); at c375_l3_m2_i, which also reads the
+removed reads of the parts, 25 s and 2.83 GiB (memwatch 2.58 GiB).
 """
 import argparse
 import json
