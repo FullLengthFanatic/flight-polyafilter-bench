@@ -361,21 +361,32 @@ def set_counts(rows):
 
 def downsampling_summary(draws):
     """Mean and 95% range (evaluate.interval) over the draws of downsample_sets of each set size, of the unpaired sites near
-    the other group and of set_shares."""
-    cols = {k: draws[k].to_numpy(np.float64) for k in SETS + ("first_only_near", "second_only_near")}
-    cols |= {f"share_{k}": v for k, v in set_shares(draws).items()}
-    return {"draws": len(draws), "molecules": int(draws.molecules.iloc[0]),
-            **{k: {"mean": float(v.mean()), **dict(zip(("lo", "hi"), interval(v)[:2]))} for k, v in cols.items()}}
+    the other group, of set_shares and, under usage, of spearman_rho and of the median log2 ratio (all, by label, by
+    region); over the draws with a value, None without any."""
+    def stats(v):
+        v = np.asarray(v, np.float64)
+        lo, hi, n = interval(v)
+        return {"mean": float(v[np.isfinite(v)].mean()), "lo": lo, "hi": hi} if n else {"mean": None, "lo": None, "hi": None}
+
+    cols = {k: draws[k] for k in SETS + ("first_only_near", "second_only_near")} | {
+        f"share_{k}": v for k, v in set_shares(draws).items()}
+    return {"draws": len(draws), "molecules": int(draws.molecules.iloc[0]), **{k: stats(v) for k, v in cols.items()},
+            "usage": {"spearman_rho": stats(draws.spearman_rho),
+                      "log2_median": {"all": stats(draws.median_all), "label": {x: stats(draws[f"median_{x}"]) for x in LABELS},
+                                      "region": {x: stats(draws[f"median_{x}"]) for x in REGION_NAMES}}}}
 
 
 def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0):
     """Set sizes of site_sets after drawing, in each gene of genes, as many of the second table's molecules as the first table
     has there (all of them where it has fewer), without replacement; draws draws from numpy.random.default_rng(seed). The
     second table's sites of a draw are those with a drawn molecule. One row per draw: draw, molecules (drawn), shared,
-    first_only, second_only, and first_only_near and second_only_near (set_counts' near)."""
+    first_only, second_only, first_only_near and second_only_near (set_counts' near), then usage_comparison of the draw, the
+    second table's usage taken over the drawn molecules: spearman_rho, median_all (median log2 ratio) and median_<x> for
+    every label and region x (NaN without a value)."""
     a = sa[sa.gene.isin(genes)].reset_index(drop=True)
     b = sb[sb.gene.isin(genes)].reset_index(drop=True)
     ca, cb = _coords(a, b)
+    ua, label, region = usage(a), a.label.to_numpy(object), a.region.to_numpy(object)
     names, code = np.unique(b.gene.to_numpy(object), return_inverse=True)
     target = a.groupby("gene").n.sum().reindex(names, fill_value=0).to_numpy(np.int64)
     site = np.repeat(np.arange(len(b)), b.n.to_numpy(np.int64))
@@ -386,13 +397,21 @@ def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0):
         order = np.lexsort((rng.random(len(site)), gene))
         g = gene[order]
         drawn = order[np.arange(len(g)) - np.searchsorted(g, g) < target[g]]
-        kept = np.zeros(len(b), bool)
-        kept[site[drawn]] = True
-        n = len(_mutual(ca, cb[kept], SITE_TOL)[0])
+        n = np.bincount(site[drawn], minlength=len(b))
+        kept = np.flatnonzero(n)
+        ia, jb = _mutual(ca, cb[kept], SITE_TOL)
+        ib = kept[jb]
         near_a, near_b = _near(ca, cb[kept])
-        out.append((k, len(drawn), n, len(a) - n, int(kept.sum()) - n, near_a - n, near_b - n))
+        ub = n / np.bincount(code, weights=n)[code]
+        u = usage_comparison(pd.DataFrame({"set": "shared", "usage_a": ua[ia], "usage_b": ub[ib], "label": label[ia],
+                                           "region": region[ia]}))
+        r = u["log2_ratio"]
+        out.append((k, len(drawn), len(ia), len(a) - len(ia), len(kept) - len(ia), near_a - len(ia), near_b - len(ia),
+                    u["spearman_rho"], r["all"]["median"], *(r["label"][x]["median"] for x in LABELS),
+                    *(r["region"][x]["median"] for x in REGION_NAMES)))
     return pd.DataFrame(out, columns=["draw", "molecules", "shared", "first_only", "second_only", "first_only_near",
-                                      "second_only_near"])
+                                      "second_only_near", "spearman_rho", "median_all",
+                                      *(f"median_{x}" for x in LABELS + REGION_NAMES)])
 
 
 def same_site_check(sa, sb, expected):

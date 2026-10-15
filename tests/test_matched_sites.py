@@ -311,9 +311,12 @@ def test_usage_comparison():
 
 def _depth_tables():
     """First group: g1 with 3 molecules at 1000; second: g1 with 12 sites of one molecule, every 100 nt from 950 (one of
-    them within tol of 1000), and g2 with more molecules in the first group than in the second."""
+    them within tol of 1000), and g2 with more molecules in the first group than in the second. Sites of g1 are templated
+    3UTR sites, those of g2 ambiguous intron sites."""
     def t(rows):
-        return pd.DataFrame(rows, columns=["ref", "strand", "site", "gene", "n"])
+        d = pd.DataFrame(rows, columns=["ref", "strand", "site", "gene", "n"])
+        g1 = (d.gene == "g1").to_numpy()
+        return d.assign(label=np.where(g1, "templated", "ambiguous"), region=np.where(g1, "3UTR", "intron"))
 
     a = t([("chr1", "+", 1000, "g1", 3), ("chr1", "+", 9000, "g2", 5)])
     b = t([("chr1", "+", 950 + 100 * k + (52 if k == 0 else 0), "g1", 1) for k in range(12)] + [("chr1", "+", 9001, "g2", 2),
@@ -334,6 +337,13 @@ def test_downsample_sets_keeps_the_first_group_count_per_gene_and_is_seeded():
     assert (d.shared + d.first_only == 2).all()
     # g2 9000 with 9001 always; g1 1000 with 1002 only when that molecule is drawn
     assert set(d.shared) == {1, 2}
+    # usage within the drawn molecules: g2 1 against 2/3, g1 1 against 1/3 (3 drawn of 12), not 1/12
+    both = (d.shared == 2).to_numpy()
+    assert np.allclose(d.median_ambiguous, np.log2(1.5)) and np.allclose(d.median_intron, np.log2(1.5))
+    assert np.allclose(d.median_templated[both], np.log2(3)) and d.median_templated[~both].isna().all()
+    assert np.allclose(d.median_all[both], (np.log2(3) + np.log2(1.5)) / 2) and np.allclose(d.median_all[~both], np.log2(1.5))
+    # one usage of the first group in each gene: no Spearman
+    assert d.spearman_rho.isna().all() and d.median_CDS.isna().all()
     pd.testing.assert_frame_equal(d, downsample_sets(a, b, ["g1", "g2"], draws=40, seed=1))
     assert not d.equals(downsample_sets(a, b, ["g1", "g2"], draws=40, seed=2))
     # only the genes given count
@@ -352,14 +362,15 @@ def test_set_counts_and_shares(tmp_path):
 
 
 def _near_tables(tmp_path):
-    """gP, first group 1050, 1060, 1064 and 1150 (3 molecules each), second 1048, 1053, 1063 and 1280 (6 molecules in all).
+    """gP, first group 1050, 1060, 1064 and 1150 (12 molecules in all), second 1048, 1053, 1063 and 1280 (6 molecules).
     Pairs 1050 with 1048 and 1064 with 1063; 1060 (nearest 1063) and 1053 (nearest 1050) are left unpaired within 3 nt of a
     site of the other group, 1150 and 1280 far from any."""
     gtf = _gtf(tmp_path)
     exons, ends = load_collapsed_exons(gtf), gene_ends(gtf)
-    a = site_table(_mols([("chr1", "+", x, "gP", 3, 12, "CDS") for x in (1050, 1060, 1064, 1150)]), exons, ends)
+    a = site_table(_mols([("chr1", "+", x, "gP", n, a20, "CDS")
+                          for x, n, a20 in ((1050, 6, 12), (1060, 3, 12), (1064, 2, 2), (1150, 1, 12))]), exons, ends)
     b = site_table(_mols([("chr1", "+", x, "gP", n, a20, "CDS")
-                          for x, n, a20 in ((1048, 1, 12), (1053, 2, 2), (1063, 1, 6), (1280, 2, 12))]), exons, ends)
+                          for x, n, a20 in ((1048, 2, 12), (1053, 1, 2), (1063, 1, 6), (1280, 2, 12))]), exons, ends)
     return a, b
 
 
@@ -378,7 +389,15 @@ def test_set_counts_count_unpaired_sites_near_the_other_group(tmp_path):
 def test_downsample_sets_without_downsampling_equal_the_full_depth_sets(tmp_path):
     a, b = _near_tables(tmp_path)
     d = downsample_sets(a, b, ["gP"], draws=3, seed=1)
-    c = set_counts(site_sets(a, b, ["gP"]))
+    c, u = set_counts(site_sets(a, b, ["gP"])), usage_comparison(site_sets(a, b, ["gP"]))
+    # shared 1050 (6 of 12) with 1048 (2 of 6) and 1064 (2 of 12, nontemplated) with 1063 (1 of 6)
+    assert u["spearman_rho"] == pytest.approx(1.0) and u["log2_ratio"]["all"]["median"] == pytest.approx(np.log2(1.5) / 2)
+    assert (d.spearman_rho == u["spearman_rho"]).all() and (d.median_all == u["log2_ratio"]["all"]["median"]).all()
+    for kind, names in (("label", ("templated", "nontemplated", "ambiguous")), ("region", REGION_NAMES)):
+        for x in names:
+            want = u["log2_ratio"][kind][x]["median"]
+            assert d[f"median_{x}"].isna().all() if want is None else (d[f"median_{x}"] == want).all()
+    assert d.median_templated.iloc[0] == pytest.approx(np.log2(1.5)) and d.median_nontemplated.iloc[0] == 0
     # the second group has fewer molecules (6 against 12): every draw keeps all of them
     assert (d.molecules == 6).all()
     assert d[["shared", "first_only", "second_only", "first_only_near", "second_only_near"]].values.tolist() == [
@@ -388,10 +407,20 @@ def test_downsample_sets_without_downsampling_equal_the_full_depth_sets(tmp_path
 
 def test_downsampling_summary():
     d = pd.DataFrame({"draw": range(4), "molecules": 9, "shared": [1, 2, 3, 2], "first_only": [3, 2, 1, 2],
-                      "second_only": [0, 2, 1, 6], "first_only_near": [0, 1, 0, 1], "second_only_near": [0, 0, 1, 3]})
+                      "second_only": [0, 2, 1, 6], "first_only_near": [0, 1, 0, 1], "second_only_near": [0, 0, 1, 3],
+                      "spearman_rho": [0.5, 0.7, None, 0.6], "median_all": [0.1, 0.0, -0.1, 0.2]}
+                     | {f"median_{x}": [None] * 4 for x in ("templated", "nontemplated", "ambiguous") + REGION_NAMES})
+    d["median_templated"] = [1.0, 2.0, 3.0, 4.0]
     s = downsampling_summary(d)
     assert list(s) == ["draws", "molecules", "shared", "first_only", "second_only", "first_only_near", "second_only_near",
-                       "share_all", "share_first", "share_second"]
+                       "share_all", "share_first", "share_second", "usage"]
+    # over the draws with a value; None without any
+    assert s["usage"]["spearman_rho"] == {"mean": pytest.approx(0.6), "lo": pytest.approx(np.percentile([0.5, 0.7, 0.6], 2.5)),
+                                          "hi": pytest.approx(np.percentile([0.5, 0.7, 0.6], 97.5))}
+    assert s["usage"]["log2_median"]["all"]["mean"] == pytest.approx(0.05)
+    assert s["usage"]["log2_median"]["label"]["templated"]["mean"] == 2.5
+    assert s["usage"]["log2_median"]["label"]["ambiguous"] == {"mean": None, "lo": None, "hi": None}
+    assert list(s["usage"]["log2_median"]["region"]) == list(REGION_NAMES)
     assert s["first_only_near"]["mean"] == 0.5 and s["second_only_near"]["hi"] == pytest.approx(np.percentile([0, 0, 1, 3], 97.5))
     assert s["draws"] == 4 and s["molecules"] == 9
     assert s["shared"] == {"mean": 2.0, "lo": pytest.approx(np.percentile([1, 2, 3, 2], 2.5)),
@@ -491,6 +520,11 @@ def test_stage31_end_to_end(tmp_path):
     assert ds["shared"]["lo"] >= 1 and ds["second_only"]["hi"] <= 1 and ds["first_only"]["lo"] >= 2
     # 2253 (1419) is unpaired 3 nt from the cell site 2250 in every draw
     assert ds["first_only_near"] == {"mean": 1.0, "lo": 1.0, "hi": 1.0} and ds["second_only_near"]["hi"] == 0
+    # gM 2250: usage 1/2 in nuclei and 1 in cells in every draw; gP 1050 (35 of 40) against 1052 (at most 39 of 40 drawn)
+    du = ds["usage"]
+    assert du["log2_median"]["region"]["3UTR"] == {"mean": -1.0, "lo": -1.0, "hi": -1.0}
+    assert du["spearman_rho"] == {"mean": pytest.approx(-1.0), "lo": pytest.approx(-1.0), "hi": pytest.approx(-1.0)}
+    assert du["log2_median"]["region"]["intergenic"] == {"mean": None, "lo": None, "hi": None}
     assert j["acceptance"]["pass"] is True
     # one way, without the gene filter: 2253 matches 2250 and the intergenic 900 matches 904
     assert j["acceptance"]["nuclei_vs_cells"]["sites_a"] == 6 and j["acceptance"]["nuclei_vs_cells"]["matched"] == 5

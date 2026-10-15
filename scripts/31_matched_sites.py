@@ -45,7 +45,8 @@ Writes under --out (default OUT/burden):
   and usage_b over shared sites with the quartiles of log2(usage_a / usage_b) by label and region, and for nuclei_vs_cells
   the downsampling: the cell molecules of each shared gene drawn without replacement to the nuclei count (all of them where
   the cells have fewer), DOWNSAMPLE_DRAWS draws from numpy.random.default_rng(SEED), mean and 95% range of each set size,
-  of near and of each share; the acceptance.
+  of near, of each share and (usage) of the usage comparison of each draw: Spearman rho and the median log2 ratio, all, by
+  label and by region, with usage_b over the drawn cell molecules; the acceptance.
 
 Acceptance (burden.same_site_check): on the site tables without the gene filter, the one-way nearest match of
 burden.same_site reproduces every label-pair count of <base>/burden/same_site.parquet. When it does not, the outputs are
