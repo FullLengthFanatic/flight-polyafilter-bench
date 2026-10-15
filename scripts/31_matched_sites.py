@@ -20,8 +20,11 @@ region is the strand-wide annotation of milestone 2 (any transcript on the stran
 gene and intronic for its own.
 
 Shared genes: at least MIN_GENE labeled molecules in both groups (the threshold of burden.same_gene). Within them each pair
-of sites that are each other's nearest on the same ref and strand within SITE_TOL nt is shared (burden.match_sites); the
-other sites are first_only or second_only. Our observation on 2026-10-14: no shared pair has sites of two genes (0 of
+of sites that are each other's nearest on the same ref and strand within SITE_TOL nt is shared (burden.match_sites; equal
+distance: the lower coordinate, as burden.same_site, which is upstream on plus and downstream on minus); the other sites are
+first_only or second_only. The tie rule decides real pairs (2026-10-15, review S31-5): 336 nuclei and 449 cell sites have
+two nearest sites at equal distance, and pairs that keep both would be 18,518 instead of 18,209 (1417 against 1419: 83 and
+75 sites, 4,149 against 4,076). Our observation on 2026-10-14: no shared pair has sites of two genes (0 of
 18,209 nuclei against cells, 0 of 4,076 for 1417 against 1419). The match is one to one: where two sites of one group lie
 within SITE_TOL nt of one site of the other, one of them pairs and the other stays unpaired. first_only and second_only
 therefore mean unpaired, not absent from the other group; matched_sites.json counts the unpaired sites within SITE_TOL nt of
@@ -41,19 +44,27 @@ Writes under --out (default OUT/burden):
   molecules at full depth), so a molecule-weighted comparison across the sets reads molecules_a or molecules_b.
 - matched_sites.json: groups, sites and molecules per group; per pair the shared genes, sites and molecules per set (with
   near for first_only and second_only) with the shares of shared sites (among all, the first group's and the second group's
-  sites), the Spearman correlation of usage_a
-  and usage_b over shared sites with the quartiles of log2(usage_a / usage_b) by label and region, and for nuclei_vs_cells
+  sites), the Spearman correlation of usage_a and usage_b over shared sites with the quartiles of log2(usage_a / usage_b)
+  by label and region, and for nuclei_vs_cells
   the downsampling: the cell molecules of each shared gene drawn without replacement to the nuclei count (all of them where
   the cells have fewer), DOWNSAMPLE_DRAWS draws from numpy.random.default_rng(SEED), mean and 95% range of each set size,
   of near, of each share and (usage) of the usage comparison of each draw: Spearman rho and the median log2 ratio, all, by
   label and by region, with usage_b over the drawn cell molecules; the acceptance.
 
+Usage depends on depth (review S31-1): a gene with more molecules shows more sites, each with a smaller share. At full depth
+nuclei against cells give Spearman rho 0.661 and a median log2 ratio of 0.670; with the cell molecules drawn to the nuclei
+count, rho 0.849 (95% range 0.846 to 0.852 over 100 draws) and a median of 0 in every draw (2026-10-15). The depth-matched
+values are the ones to set against the 1417 against 1419 baseline (rho 0.885, median 0.163, at its own depth). The median is
+0 because many shared pairs have equal usage at equal gene totals: in one draw of our own (seed 7), 6,127 of 12,691 pairs,
+and 6,957 have one molecule on each side.
+
 Acceptance (burden.same_site_check): on the site tables without the gene filter, the one-way nearest match of
 burden.same_site reproduces every label-pair count of <base>/burden/same_site.parquet. When it does not, the outputs are
 written and the stage exits with an error.
 
-Measured on 2026-10-14 on the full data (/usr/bin/time -v): 49.8 s wall, 1.15 GiB maximum resident size. A prototype run
-of the same steps took 12 s to read genes.gtf twice, 12 s for the four site tables and 1.5 s for 5 draws.
+Measured on 2026-10-15 on the full data (/usr/bin/time -v), with the usage comparison of every draw: 53.9 s wall, 1.17 GiB
+maximum resident size (49.8 s and 1.15 GiB on 2026-10-14 without it). A prototype run of the same steps took 12 s to read
+genes.gtf twice, 12 s for the four site tables and 1.5 s for 5 draws.
 """
 import argparse
 import json
