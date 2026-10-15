@@ -10,9 +10,17 @@ limited to cluster["blas_threads"] ("Change the maximal number of threads that c
 threadpoolctl.threadpool_limits 3.7.0; user_api None limits all of them). Design 3.0 limits BLAS only. Our observation of
 2026-10-15 on the toy library of tests/test_classes.py (900 cells): with BLAS at 1 thread and the OpenMP pools at 8 against
 1, the scrublet doublet score of 1 cell differs by 0.0017, and with both at 1 nothing differs. The OpenMP pools of the run
-are two libgomp, one of them shipped with scikit-learn (scikit_learn.libs/), whose KNeighborsTransformer scanpy uses for the
-neighbour graph of fewer than 8,192 cells with the euclidean metric (scanpy 1.11.5, scanpy/neighbors/__init__.py lines 646
-to 651 and 673 to 686), in scrublet and in the pipeline alike.
+are two libgomp, one of them shipped with scikit-learn (scikit_learn.libs/), whose KNeighborsTransformer scanpy uses for a
+neighbour graph of fewer than 8,192 rows with the euclidean metric (scanpy 1.11.5, scanpy/neighbors/__init__.py lines 646
+to 651 and 673 to 686); above that scanpy uses pynndescent's PyNNDescentTransformer with n_jobs=settings.n_jobs (lines 689
+to 697), and pynndescent sets numba's thread count to n_jobs while it builds the index (pynndescent/pynndescent_.py 0.6.0,
+lines 1119 to 1121). The graph of the pipeline has one row per cell: KNeighborsTransformer in 1417 (5,571 cells) and 1419
+(5,114), pynndescent in 1179 (24,378). scrublet builds its graph on the observed and the simulated profiles together
+("manifold = concat(adatas)" over "obs" and "sim", then "knn = Neighbors(manifold)" with "transformer = None",
+scanpy/preprocessing/_scrublet/core.py lines 322 to 345), sim_doublet_ratio 2.0 simulated per observed, so on 3 rows per
+cell: pynndescent in all three libraries (16,713, 15,342 and 73,134 rows) and KNeighborsTransformer only on the toy library
+(2,700 rows), where the OpenMP difference was seen. Our observation of 2026-10-15 with the transformers instrumented: on
+3,000 cells the pipeline built its graph with KNeighborsTransformer on 3,000 rows and scrublet with pynndescent on 9,000.
 
 The scanpy functions, each with the first line of its documentation page (read 2026-10-12, as in
 tests/test_scanpy_stack.py, which checks the calls on a toy matrix):
