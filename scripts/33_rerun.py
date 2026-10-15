@@ -24,6 +24,10 @@ Disk, 2026-10-15: /data has 6.1 TB free (df -h /data), the BAM is 6.1 GB; FASTQs
 times that while it runs, with about 12 GB kept, the size of the original outs (design 3.11). Time and memory are not
 measured: hours of wall time, memory within Cell Ranger's 64 GB limit (estimates of the design). Not to be started while
 stage 23 or 24 runs on 1179 or while stage 30 runs.
+
+compare, measured on 2026-10-15 under /usr/bin/time -v and memwatch with the outs of the original run of 1417 in place of
+the rerun's: at "unfiltered" 30 s wall, 3.34 GiB resident (memwatch 3.12 GiB); at c375_l3_m2_i, which also reads the
+removed reads of the parts, 24 s and 2.36 GiB (memwatch 2.12 GiB).
 """
 import argparse
 import json

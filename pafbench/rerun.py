@@ -102,7 +102,19 @@ def rerun_commands(run_dir, bam, transcriptome, folder):
     """(bamtofastq, cellranger count) as argument lists. bamtofastq writes the FASTQs of bam to folder/fastq; cellranger
     count runs on them with the flags of the original call in run_dir (original_run), its own run id (the name of folder),
     FASTQs and sample, the given transcriptome, and its output in folder/count. bamtofastq reads with as many threads as
-    the original run had cores, as the README passes one $NTHREADS to both (lines 185 and 191)."""
+    the original run had cores, as the README passes one $NTHREADS to both (lines 185 and 191).
+
+    `bamtofastq --help` (v1.4.1): "--nthreads=<n>        Threads to use for reading BAM file [default: 4]".
+    `cellranger count --help` (cellranger-9.0.1): "--id <ID> A unique run id and output folder name [a-zA-Z0-9_-]+",
+    "--transcriptome <PATH> Path of folder containing 10x-compatible transcriptome reference", "--fastqs <PATH> Path to
+    input FASTQ data", "--sample <PREFIX> Prefix of the filenames of FASTQs to select", "--include-introns <true|false>
+    Include intronic reads in count [default: true]", "--create-bam <true|false> Enable or disable BAM file generation.",
+    "--localcores <NUM> Set max cores the pipeline may request at one time. Only applies to local jobs", "--localmem <NUM>
+    Set max GB the pipeline may request at one time. Only applies to local jobs", "--output-dir <PATH> Output the results
+    to this directory". Our observation, 2026-10-15: with these flags and --dry on the synthetic FASTQs of the module
+    docstring, the invocation Cell Ranger writes differs from the _invocation of 1417 only in sample_id, read_path,
+    sample_names and reference_path.
+    """
     check_rerun_dir(folder)
     folder, flags = Path(folder), original_run(run_dir)
     fastq = folder / "fastq"
