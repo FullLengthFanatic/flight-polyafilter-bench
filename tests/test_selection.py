@@ -8,12 +8,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from pafbench.burden import END_BINS, _exon_coord, end_bin, end_distances, gene_ends
-from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS
+from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, POOL_MIN
+from pafbench.evaluate import resample_counts
 from pafbench.exons import load_collapsed_exons
 from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS, RECORD_COLUMNS,
                                 REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end, end_index, exon_coord,
-                                expr_bins_counted, gene_strands, gene_table, labeled_keys, position_codes, records_table,
-                                rule, tally)
+                                expr_bins_counted, gene_strands, gene_table, labeled_keys, pool, position_codes,
+                                records_table, reweight, rule, tally)
 from pafbench.strata import expr_bins
 from tests.test_matched_sites import GTF, _gtf
 
@@ -328,3 +329,93 @@ def test_acceptance():
     assert r == {"records": 1450, "stage13": 1450, "cells": 2, "cells_differing": 2, "passed": False}
     r = _accept(records=pd.Series([700], index=["A-1"]))["records"]
     assert r["passed"] is False and r["cells_differing"] == 1
+
+
+def test_pooling_on_a_toy_table():
+    assert POOL_MIN == 30
+    first = np.array(["a", "a", "a", "a", "b", "b", "b", "c", "d", "d", "e"])
+    n_lab = np.array([100, 10, 15, 3, 50, 20, 12, 5, 0, 40, 31])
+    g = pool(first, n_lab)
+    # a: 10 + 15 + 3 = 28 labeled, still under 30, joins the largest stratum of a; b: 20 + 12 reach 30 and stay a stratum of
+    # their own next to 50; c: alone and small, nothing to merge with; d: the empty stratum joins the 40; e: large enough
+    assert g.tolist() == [0, 0, 0, 0, 4, 5, 5, 7, 9, 9, 10]
+    # the first stratum of a category is not always the largest
+    assert pool(np.array(["a", "a", "a"]), np.array([3, 40, 50])).tolist() == [2, 1, 2]
+    assert pool(np.array(["a", "a"]), np.array([20, 20]), min_n=10).tolist() == [0, 1]
+
+
+def _two_strata(counted_e, counted_n):
+    counted = pd.DataFrame({"gene": [0, 1], "region": ["E", "N"], "n": [counted_e, counted_n]})
+    labeled = pd.DataFrame({"gene": [0] * 40 + [1] * 60, "region": ["E"] * 40 + ["N"] * 60,
+                            "templated": [True] * 10 + [False] * 30 + [True] * 45 + [False] * 15})
+    return counted, labeled
+
+
+def test_the_reweighted_share_equals_the_unweighted_one_when_the_mixes_are_equal():
+    r = reweight(*_two_strata(400, 600), ["region"], n_boot=20)
+    assert r["share_counted_unweighted"] == pytest.approx(0.55) and r["share_counted_reweighted"] == pytest.approx(0.55)
+    # E is 80% of the counted molecules and 40% of the labeled ones: 0.8 x 10 / 40 + 0.2 x 45 / 60
+    r = reweight(*_two_strata(800, 200), ["region"], n_boot=20)
+    assert r["share_counted_unweighted"] == pytest.approx(0.55) and r["share_counted_reweighted"] == pytest.approx(0.35)
+    assert r["axes"] == ["region"] and r["strata"] == 2 and r["strata_final"] == 2 and r["strata_pooled"] == 0
+    assert r["pooled_share"] == 0 and r["n_boot"] == 20
+
+
+@pytest.mark.parametrize("axes", [["position"], ["region", "position"], ["records"]])
+def test_axis_4_is_refused_as_a_reweighting_axis(axes):
+    with pytest.raises(ValueError, match="cannot enter the reweighting"):
+        reweight(*_two_strata(400, 600), axes)
+
+
+def _boot_toy():
+    counted = pd.DataFrame([(1, "E", 100), (1, "N", 50), (2, "E", 30), (2, "N", 120), (3, "E", 60), (4, "N", 40)],
+                           columns=["gene", "region", "n"])
+    rows = [(1, "E", 40, 10), (1, "N", 35, 30), (2, "E", 31, 5), (2, "N", 32, 20), (3, "E", 33, 3), (4, "N", 34, 30)]
+    labeled = pd.DataFrame([(g, r, k < t) for g, r, n, t in rows for k in range(n)], columns=["gene", "region", "templated"])
+    return counted, labeled
+
+
+def test_the_gene_bootstrap_recomputes_the_weights_in_every_resample():
+    counted, labeled = _boot_toy()
+    P = {s: counted[counted.region == s].n.sum() / counted.n.sum() for s in "EN"}
+    weight = {s: P[s] / (labeled.region == s).mean() for s in "EN"}   # the weights of the full data
+    differs = []
+    for seed in range(5):
+        r = reweight(counted, labeled, ["region"], n_boot=1, seed=seed)
+        w = resample_counts(4, 1, seed)[0]   # genes 1 to 4, sorted
+        N = {s: sum(w[g - 1] * n for g, x, n in counted.itertuples(index=False) if x == s) for s in "EN"}
+        lab = {s: sum(w[g - 1] for g, x, _ in labeled.itertuples(index=False) if x == s) for s in "EN"}
+        tem = {s: sum(w[g - 1] for g, x, t in labeled.itertuples(index=False) if x == s and t) for s in "EN"}
+        want = sum(N[s] / (N["E"] + N["N"]) * tem[s] / lab[s] for s in "EN")
+        assert r["lo"] == pytest.approx(want) and r["hi"] == pytest.approx(want) and r["n_finite"] == 1
+        held = sum(weight[s] * tem[s] for s in "EN") / sum(weight[s] * lab[s] for s in "EN")
+        differs.append(abs(held - want) > 1e-6)
+    assert any(differs)   # with the weights of the full data the resamples would give other values
+    r = reweight(counted, labeled, ["region"], n_boot=1000, seed=0)
+    assert r["lo"] < r["share_counted_reweighted"] < r["hi"] and r["n_finite"] <= 1000
+    assert reweight(counted, labeled, ["region"], n_boot=1000, seed=0) == r
+
+
+def test_a_resample_without_labeled_molecules_in_a_stratum_is_left_out():
+    # stratum N has its labeled molecules in gene 2 only, and counted molecules in genes 1 and 2
+    counted = pd.DataFrame({"gene": [1, 1, 2], "region": ["E", "N", "N"], "n": [50, 50, 50]})
+    labeled = pd.DataFrame({"gene": [1] * 40 + [2] * 40, "region": ["E"] * 40 + ["N"] * 40, "templated": [True, False] * 40})
+    r = reweight(counted, labeled, ["region"], n_boot=200, seed=1)
+    w = resample_counts(2, 200, 1)
+    assert r["n_finite"] == int((w[:, 1] > 0).sum()) < 200
+
+
+def test_reweight_pools_on_the_first_fired_axis_in_the_merge_order():
+    # strata (region, family size): E/1 has 40 labeled, E/2 10 and E/3+ 5 (merged, still under 30: they join E/1);
+    # N/1 35 labeled; the axes are given out of order
+    counted = pd.DataFrame({"gene": [1, 1, 1, 2], "region": ["E", "E", "E", "N"], "family_size": ["1", "2", "3+", "1"],
+                            "n": [400, 300, 200, 100]})
+    labeled = pd.DataFrame({"gene": [1] * 55 + [2] * 35, "region": ["E"] * 55 + ["N"] * 35,
+                            "family_size": ["1"] * 40 + ["2"] * 10 + ["3+"] * 5 + ["1"] * 35,
+                            "templated": [True] * 20 + [False] * 20 + [True] * 10 + [True] * 5 + [False] * 35})
+    r = reweight(counted, labeled, ["family_size", "region"], n_boot=10)
+    assert r["axes"] == ["region", "family_size"]
+    assert (r["strata"], r["strata_small"], r["strata_pooled"], r["strata_final"]) == (4, 2, 2, 2)
+    assert r["pooled_share"] == pytest.approx(500 / 1000)
+    # E pooled: 900 of 1,000 counted molecules, 35 of 55 labeled templated; N: 0 of 35
+    assert r["share_counted_reweighted"] == pytest.approx(0.9 * 35 / 55)

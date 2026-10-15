@@ -16,7 +16,8 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from .burden import END_BINS, _exon_coord
-from .config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, MIN_STRATUM, TOP_GENES
+from .config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, MIN_STRATUM, POOL_MIN, TOP_GENES
+from .evaluate import interval, resample_counts
 from .recount import _in_sorted
 from .strata import _key
 
@@ -335,3 +336,72 @@ def acceptance(t, keys, m0_sum, gene_umis, join, n_called, records, stage13):
     rec = {"records": int(records.sum()), "stage13": int(stage13.sum()), "cells": len(both), "cells_differing": differing}
     rec["passed"] = rec["records"] == rec["stage13"] and not differing
     return {"molecules": mol, "truth": truth, "records": rec, "passed": mol["passed"] and truth["passed"] and rec["passed"]}
+
+
+def pool(first, n_labeled, min_n=POOL_MIN):
+    """Pooled stratum of each stratum (design 3.6): the strata with fewer than min_n labeled molecules (n_labeled) are
+    merged with the other such strata of the same category of the first fired axis (first, one value per stratum); a merged
+    stratum still under min_n joins the stratum of that category with the most labeled molecules (the first of them on a
+    tie), when the category has one with min_n or more. Returns per stratum the index of the stratum it is pooled into."""
+    first, n_labeled = np.asarray(first), np.asarray(n_labeled)
+    group = np.arange(len(first))
+    for c in pd.unique(first):
+        idx = np.flatnonzero(first == c)
+        small, big = idx[n_labeled[idx] < min_n], idx[n_labeled[idx] >= min_n]
+        if not len(small):
+            continue
+        group[small] = small[0]
+        if n_labeled[small].sum() < min_n and len(big):
+            group[small] = big[np.argmax(n_labeled[big])]
+    return group
+
+
+def _reweighted(N, n, t):
+    """sum over strata (last axis) of N_s / sum(N) x t_s / n_s; NaN where a stratum with counted molecules has no labeled
+    one."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        part = np.where(N > 0, N / N.sum(axis=-1, keepdims=True) * t / n, 0.0)
+    return np.where(((N > 0) & (n == 0)).any(axis=-1), np.nan, part.sum(axis=-1))
+
+
+def reweight(counted, labeled, axes, n_boot=1000, seed=0, min_n=POOL_MIN):
+    """The templated share among counted molecules reweighted over axes (design 3.6, point 2).
+
+    counted: the counted molecules n per gene and stratum (columns gene, the axes, n); labeled: one row per truth molecule
+    that joins a counted molecule, with the gene and the strata of that molecule and templated (bool). Strata are the cross
+    of axes, taken in the merge order REWEIGHT_AXES; axis 4 (position) and anything else outside REWEIGHT_AXES is refused.
+    Weight of a stratum: its share among all counted molecules over its share among the labeled ones, so that the share is
+    the sum over strata of P_s t_s / n_s, which assumes that within a stratum the labeled molecules have the templated share
+    of the unlabeled ones. Pooling: pool on the category of the first axis. Interval: gene bootstrap (n_boot resamples of
+    evaluate.resample_counts from seed over the genes of counted and labeled), the counted and labeled molecules of a drawn
+    gene drawn together and the weights recomputed in every resample over the pooled strata; a resample in which a pooled
+    stratum with counted molecules has no labeled one has no value and is left out (evaluate.interval, n_finite).
+    strata: strata with counted molecules; strata_small: of them with fewer than min_n labeled; strata_pooled and
+    pooled_share: the small ones merged with another stratum, and their share of the counted molecules; strata_final:
+    strata after pooling."""
+    bad = [a for a in axes if a not in REWEIGHT_AXES]
+    if bad:
+        raise ValueError(f"{bad} cannot enter the reweighting (design 3.6): axis 4 compares read positions and its "
+                         f"category {PA_ONLY!r} has no counterpart among unlabeled molecules; the axes are {REWEIGHT_AXES}")
+    cols = [a for a in REWEIGHT_AXES if a in axes]
+    index = pd.MultiIndex.from_frame(counted[cols].drop_duplicates().sort_values(cols))
+    sc, sl = (index.get_indexer(pd.MultiIndex.from_frame(f[cols])) for f in (counted, labeled))
+    n_strata, templated, size = len(index), labeled.templated.to_numpy(np.float64), counted.n.to_numpy(np.float64)
+    N, n = np.bincount(sc, weights=size, minlength=n_strata), np.bincount(sl, minlength=n_strata)
+    group = pool(index.get_level_values(0), n, min_n)
+    _, final, members = np.unique(group, return_inverse=True, return_counts=True)
+    merged = (n < min_n) & (members[final] > 1)
+    genes, code = np.unique(np.concatenate([counted.gene.to_numpy(), labeled.gene.to_numpy()]), return_inverse=True)
+    gc, gl, F = code[:len(counted)], code[len(counted):], len(members)
+
+    def per_gene(g, s, w):
+        return np.bincount(g * F + final[s], weights=w, minlength=len(genes) * F).reshape(len(genes), F)
+
+    Ng, ng, tg = per_gene(gc, sc, size), per_gene(gl, sl, None), per_gene(gl, sl, templated)
+    W = resample_counts(len(genes), n_boot, seed).astype(np.float64)
+    lo, hi, finite = interval(_reweighted(W @ Ng, W @ ng, W @ tg))
+    share = float(_reweighted(Ng.sum(axis=0), ng.sum(axis=0), tg.sum(axis=0)))
+    return {"axes": cols, "share_counted_unweighted": float(templated.mean()),
+            "share_counted_reweighted": None if np.isnan(share) else share, "lo": lo, "hi": hi, "n_boot": n_boot,
+            "n_finite": finite, "strata": n_strata, "strata_small": int((n < min_n).sum()), "strata_pooled": int(merged.sum()),
+            "pooled_share": float(N[merged].sum() / N.sum()), "strata_final": F}
