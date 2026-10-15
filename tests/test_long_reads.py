@@ -497,9 +497,9 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         for table in (summary, region):
             assert table.groupby("version")[["sites", "reads"]].sum().to_dict("index") == {
                 v: {"sites": len(acc), "reads": n_reads} for v in ("placed", "strict")}
-        # placed: 2 x 5 reads keep their class; strict: they are novel junction reads
+        # placed: 2 x 6 reads keep their class; strict: they are novel junction reads
         by = lambda v: summary[summary.version == v].groupby("context").reads.sum()
-        assert by("strict")[NJ] - by("placed")[NJ] == 10 and by("placed")[NJ] == 6
+        assert by("strict")[NJ] - by("placed")[NJ] == 12 and by("placed")[NJ] == 6
         assert by("placed")[AS] == 4 and by("placed")[IG] == 3
         assert set(region.region) == set(acc.region) and "intron" in set(acc.region)
         no_model = pd.read_parquet(d / "sites_no_model.parquet")
@@ -523,8 +523,8 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
                                    "NULL_SHIFT": 1000}
         assert j["acceptance"] == {"sites_and_accepted_reads_equal_stage16": True, "one_class_per_accepted_read": True,
                                    "intron_sites_off_model": 0}
-        assert j["placed"]["reads_by_class"][NJ] == 6 and j["strict"]["reads_by_class"][NJ] == 16
-        assert j["flagged_reads"]["chain_novel"] == 10
+        assert j["placed"]["reads_by_class"][NJ] == 6 and j["strict"]["reads_by_class"][NJ] == 18
+        assert j["flagged_reads"]["chain_novel"] == 12
         assert j["per_ref"]["chrE"]["records"] == 0 and j["per_ref"]["chrS"]["seconds"] > 0
         # link to 1179: the molecules on the scanned references; 1340 is 10 nt from the site 1330, 1341 is 11 nt from it
         v = j["vs_1179"]
@@ -553,17 +553,18 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         assert j["tecap"]["json_bytes"] == (d / "tecap" / "out" / f"{lib}_terminal_exon.json").stat().st_size
         assert j["tecap"]["sites_with_a_classified_read"] == buckets[["strand", "site"]].drop_duplicates().shape[0]
         # top class a no_model reason: the nine sites of sites_no_model.parquet; strict, also the two sites at 1900, where both
-        # reads are chain_novel (at 1550 one of two is, and the tie stays with intron_after_junction)
+        # reads are chain_novel, and the two at 1470, where the one read is (at 1550 one of two is, and the tie stays with
+        # intron_after_junction)
         # tied, with a top class that holds half of the reads: placed, the two sites at 1900 (annotated_end and 3UTR, both reads
-        # chain_novel, so the top class rests on chain_novel reads alone); strict, the two at 1550. The sites of the region
-        # intron are those at 1330 and 1550, none with a no_model top class
+        # chain_novel, so the top class rests on chain_novel reads alone, as at 1470); strict, the two at 1550. The sites of the
+        # region intron are those at 1330 and 1550, none with a no_model top class
         link = {k: {x: j["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")} for k in ("real", "null")}
-        assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "reads_novel_junction": {"placed": 6, "strict": 16},
-                                "sites_top_no_model": {"placed": 9, "strict": 11},
+        assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "reads_novel_junction": {"placed": 6, "strict": 18},
+                                "sites_top_no_model": {"placed": 9, "strict": 13},
                                 "intron_sites": 4, "intron_sites_top_no_model": {"placed": 0, "strict": 0},
                                 "sites_tied": {"placed": 2, "strict": 2},
                                 "sites_top_share_at_most_half": {"placed": 2, "strict": 2},
-                                "sites_top_class_on_chain_novel_only": 2, "vs_1179": link, "tecap": per_label}
+                                "sites_top_class_on_chain_novel_only": 4, "vs_1179": link, "tecap": per_label}
         assert (acc.region == "intron").sum() == 4
         assert at("+", 1900).context_without_chain_novel == NJ
         assert at("+", 1550).context_without_chain_novel == "intron_after_junction"

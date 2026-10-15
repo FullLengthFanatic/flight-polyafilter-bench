@@ -82,6 +82,13 @@ DESIGNED = {
                                 ctx("intron_after_junction", "TA", 1, 1, covers_start=True)),
     # exon 2 of TA skipped: not compatible with TA, placed by its last intron only
     "skips_upstream_exon": ([(1050, 1100), (1400, 1500), (1600, 1812)], 1800, ctx("3UTR", "TA", 1, 1, covers_start=True)),
+    # the exonic overlap counts the whole body. TB and TC hold its intron, both ends are far from its end and both have 40
+    # exonic nt in its last block; upstream of the junction TB has 200 exonic nt and TC 150. TC has the nearer end
+    "upstream_overlap_decides": ([(1200, 1500), (1700, 1752)], 1740, ctx("CDS", "TB", 1, covers_start=True, other_class=True)),
+    # the same for a read placed by its last intron, which TA and TB hold with 70 exonic nt in its last block: the unmatched
+    # upstream part has 150 exonic nt in TB and 100 in TA, which has the nearer end
+    "placed_upstream_overlap_decides": ([(900, 950), (1180, 1300), (1400, 1482)], 1470,
+                                        ctx("CDS", "TB", 1, 1, covers_start=True)),
     # exon 3 skipped: the last intron joins two annotated splice sites that no transcript joins
     "skips_last_internal_exon": ([(1050, 1100), (1200, 1300), (1600, 1812)], 1800, ctx(NJ, sub_cause=NOT_JOINED)),
     # no transcript of the strand, inside the mirrored locus of the other strand
