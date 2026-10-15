@@ -9,15 +9,20 @@ Five axes (AXES), each a table of category shares among labeled and among unlabe
 An axis fires when a share differs by more than BIAS_POINTS points between the two groups (rule); what that decides is
 decision.
 """
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
-from .config import BIAS_POINTS
+from .burden import END_BINS, _exon_coord
+from .config import BIAS_POINTS, DIST_END_BINS
 
 AXES = ("region", "cell_class", "expr_bin", "position", "family_size")   # axes 1 to 5 of design 3.6, in its order
 REWEIGHT_AXES = ("region", "cell_class", "expr_bin", "family_size")       # the merge order of the pooling
 REGIONS = ("E", "N", "EN")      # re_class 1, 2 and 3 of stage 23: exonic records only, intronic only, both
 FAMILY = ("1", "2", "3+")       # n_reads
+PAST, PA_ONLY = "past every annotated end", "pa read only"
+POSITIONS = END_BINS[:len(DIST_END_BINS) + 1] + (PAST, PA_ONLY)   # categories of axis 4
 RULE_STRATUM = {"position": "1"}  # the rule reads axis 4 among molecules with one read without a pa tag, the others in "all"
 AXIS_COLUMNS = ["lib", "axis", "stratum", "category", "n_labeled", "n_unlabeled", "share_labeled", "share_unlabeled",
                 "diff_points"]
@@ -80,3 +85,97 @@ def decision(fired, records_fired):
             "burden_numbers": ["headline", "counted_unweighted"] + (["counted_reweighted"] if reweight else []),
             "reweight_axes": reweight,
             "main_text_accuracy": [{"axis": a, "table": PLACEMENT[a], "stratum_kind": a} for a in named if a in PLACEMENT]}
+
+
+def gene_strands(gtf):
+    """{gene_id: True on plus} from the GTF transcript lines, the lines burden.gene_ends takes the ends from."""
+    out = {}
+    with open(gtf) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            f = line.split("\t")
+            if f[2] == "transcript":
+                out[f[8].split('gene_id "', 1)[1].split('"', 1)[0]] = f[6] == "+"
+    return out
+
+
+_LOW = np.int64((1 << 32) - 1)
+
+
+@dataclass
+class EndIndex:
+    """Collapsed exons and annotated 3' ends of the genes of a features.tsv, gene row g, as keys (g << 32) | coordinate
+    sorted over all genes, so that one numpy.searchsorted finds a molecule's exon or end within its own gene."""
+    plus: np.ndarray          # bool per gene row
+    exon_key: np.ndarray      # start of each collapsed exon
+    exon_end: np.ndarray      # its end
+    exon_before: np.ndarray   # collapsed-exon bases of the gene before the exon
+    end_key: np.ndarray       # annotated end (burden.gene_ends)
+    end_exon_key: np.ndarray  # annotated end in collapsed-exon bases (burden._exon_coord)
+
+
+def end_index(gene_ids, exons, ends, strands):
+    """EndIndex of the genes gene_ids (features.tsv order) from exons.load_collapsed_exons, burden.gene_ends and
+    gene_strands."""
+    keys = [[] for _ in range(5)]
+    for row, gid in enumerate(gene_ids):
+        (s, e), g, x = exons[gid], np.int64(row) << 32, ends[gid]
+        for k, v in enumerate((g | s, e, np.concatenate([[0], np.cumsum(e - s)[:-1]]), g | x,
+                               g | np.unique(_exon_coord(s, e, x)))):
+            keys[k].append(v)
+    return EndIndex(np.array([strands[g] for g in gene_ids], bool), *(np.concatenate(k).astype(np.int64) for k in keys))
+
+
+def exon_coord(ix, gene, x):
+    """burden._exon_coord of each boundary x within the collapsed exons of its gene (row of the EndIndex ix): the
+    collapsed-exon bases before x, 0 before the gene's first exon."""
+    g = np.asarray(gene, np.int64)
+    x = np.asarray(x, np.int64)
+    j = np.searchsorted(ix.exon_key, (g << 32) | x, side="right") - 1
+    k = np.maximum(j, 0)
+    start = ix.exon_key[k] & _LOW
+    same = (j >= 0) & ((ix.exon_key[k] >> 32) == g)
+    return np.where(same, ix.exon_before[k] + np.minimum(x - start, ix.exon_end[k] - start), 0)
+
+
+def downstream_end(ix, gene, base):
+    """(d, exonic) per molecule: d the distance from base, the 0-based 3'-most aligned base of a read in transcript sense,
+    to the nearest annotated 3' end of the molecule's gene (row of ix) that lies at or downstream of it; NaN when every
+    annotated end lies upstream (past every annotated end). The definition of design 3.6, axis 4.
+
+    As burden.end_distances of stage 31, the base is a boundary in the priming_site convention of burden.gene_ends (base + 1
+    on plus, base on minus), and when the base lies in a collapsed exon of the gene (exonic) d counts collapsed-exon bases,
+    otherwise genomic bases; d is 0 when the base is the last base of a transcript. Two differences: end_distances takes the
+    nearest end on either side (d < 0 when it lies upstream) and the best of the genes of a site, this function the nearest
+    end downstream within the one gene of the counted molecule."""
+    g = np.asarray(gene, np.int64)
+    base = np.asarray(base, np.int64)
+    plus = ix.plus[g]
+    k = np.searchsorted(ix.exon_key, (g << 32) | base, side="right") - 1
+    kk = np.maximum(k, 0)
+    exonic = (k >= 0) & ((ix.exon_key[kk] >> 32) == g) & (base < ix.exon_end[kk])
+    x = base + plus
+    c = np.where(exonic, exon_coord(ix, g, x), x)
+    d = np.full(len(g), np.nan)
+    for m, keys in ((exonic, ix.end_exon_key), (~exonic, ix.end_key)):
+        q, p = (g[m] << 32) | c[m], plus[m]
+        i = np.where(p, np.searchsorted(keys, q, side="left"), np.searchsorted(keys, q, side="right") - 1)
+        ii = np.clip(i, 0, len(keys) - 1)
+        ok = (i >= 0) & (i < len(keys)) & ((keys[ii] >> 32) == g[m])
+        e = keys[ii] & _LOW
+        d[m] = np.where(ok, np.where(p, e - c[m], c[m] - e), np.nan)
+    return d, exonic
+
+
+def position_codes(ix, gene, end3_nonpa):
+    """Index into POSITIONS (axis 4) of each counted molecule from its end3_nonpa: the bin of downstream_end, by
+    burden.end_bin's rule (|d| at DIST_END_BINS, right-closed), PAST without an annotated end at or downstream, PA_ONLY when
+    end3_nonpa is -1, that is every read of the molecule has a pa tag (stage 23)."""
+    end3_nonpa = np.asarray(end3_nonpa)
+    code = np.full(len(end3_nonpa), POSITIONS.index(PA_ONLY), np.int8)
+    m = end3_nonpa >= 0
+    d, _ = downstream_end(ix, np.asarray(gene)[m], end3_nonpa[m])
+    code[m] = np.where(np.isnan(d), POSITIONS.index(PAST),
+                       np.searchsorted(np.asarray(DIST_END_BINS, np.float64), np.nan_to_num(d), side="left"))
+    return code

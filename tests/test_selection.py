@@ -4,8 +4,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pafbench.config import BIAS_POINTS
-from pafbench.selection import AXES, AXIS_COLUMNS, FAMILY, REGIONS, axis_rows, decision, rule
+from pafbench.burden import END_BINS, _exon_coord, end_bin, end_distances, gene_ends
+from pafbench.config import BIAS_POINTS, DIST_END_BINS
+from pafbench.exons import load_collapsed_exons
+from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, PA_ONLY, PAST, POSITIONS, REGIONS, axis_rows, decision,
+                                downstream_end, end_index, exon_coord, gene_strands, position_codes, rule)
+from tests.test_matched_sites import GTF, _gtf
+
+# gL on chr3 plus: collapsed exons [1000, 2000) and [9000, 10000), one end at 10000; for the two widest bins
+LONG = [("chr3", "transcript", 1001, 10000, "+", 'gene_id "gL"; transcript_id "t8";'),
+        ("chr3", "exon", 1001, 2000, "+", 'gene_id "gL"; transcript_id "t8";'),
+        ("chr3", "exon", 9001, 10000, "+", 'gene_id "gL"; transcript_id "t8";')]
+GENES = ["gQ", "gP", "gL", "gM"]  # rows of a features.tsv
 
 
 def _region(lib, labeled, unlabeled, axis="region", stratum="all"):
@@ -80,3 +90,85 @@ def test_what_a_fired_axis_decides():
         {"axis": "cell_class", "table": "eval/strata_m3.parquet", "stratum_kind": "cell_class"}]
     assert decision(["region"], False)["main_text_accuracy"] == [
         {"axis": "region", "table": "eval/metrics.parquet", "stratum_kind": "region"}]
+
+
+def _index(tmp_path, genes=GENES):
+    gtf = _gtf(tmp_path, GTF + LONG)
+    return end_index(genes, load_collapsed_exons(gtf), gene_ends(gtf), gene_strands(gtf))
+
+
+def test_gene_strands(tmp_path):
+    assert gene_strands(_gtf(tmp_path, GTF + LONG)) == {"gP": True, "gM": False, "gQ": True, "gL": True}
+
+
+def test_exon_coord_is_that_of_burden_for_many_genes_at_once(tmp_path):
+    gtf = _gtf(tmp_path, GTF + LONG)
+    exons, ix = load_collapsed_exons(gtf), _index(tmp_path)
+    rng = np.random.default_rng(0)
+    gene = rng.integers(0, len(GENES), 2000)
+    x = rng.integers(0, 11_000, 2000)
+    want = np.array([_exon_coord(*exons[GENES[g]], np.array([p]))[0] for g, p in zip(gene, x)])
+    assert exon_coord(ix, gene, x).tolist() == want.tolist()
+
+
+# base: the 3'-most aligned base of a read, 0-based. gP (plus) has two annotated ends, 1250 (t2) and 1300 (t1), collapsed
+# exons [1000, 1100) and [1200, 1300); gM (minus) ends at 2000 (t3) and 2050 (t4), exons [2000, 2100) and [2200, 2300)
+@pytest.mark.parametrize("gene,base,dist,exonic,position", [
+    ("gP", 1249, 0, True, "0-100"),        # the last base of t2
+    ("gP", 1250, 49, True, "0-100"),       # one base past t2: the end of t1, 49 exon bases on
+    ("gP", 1299, 0, True, "0-100"),        # the last base of t1
+    ("gP", 1050, 99, True, "0-100"),       # 49 + 50 exon bases to t2, 199 along the genome
+    ("gP", 1150, 99, False, "0-100"),      # intronic: along the genome to t2
+    ("gP", 999, 250, False, "101-300"),    # upstream of the gene
+    ("gP", 1300, None, False, PAST),       # past both ends
+    ("gM", 2050, 0, True, "0-100"),        # the last base of t4
+    ("gM", 2049, 49, True, "0-100"),       # one base past t4: 49 exon bases to t3
+    ("gM", 2250, 100, True, "0-100"),      # 50 + 50 exon bases to t4, 200 along the genome
+    ("gM", 2150, 100, False, "0-100"),     # intronic
+    ("gM", 2300, 250, False, "101-300"),   # upstream on minus
+    ("gM", 1999, None, False, PAST),
+    ("gQ", 100, 499, True, "301-1000"),
+    ("gL", 1000, 1999, True, "1001-5000"),   # 999 + 1000 exon bases
+    ("gL", 5000, 4999, False, "1001-5000"),
+    ("gL", 3000, 6999, False, ">5000"),
+])
+def test_distances_on_a_synthetic_gene_with_two_annotated_ends(tmp_path, gene, base, dist, exonic, position):
+    ix = _index(tmp_path)
+    g, b = np.array([GENES.index(gene)]), np.array([base])
+    d, ex = downstream_end(ix, g, b)
+    assert (np.isnan(d[0]) if dist is None else d[0] == dist) and ex[0] == exonic
+    assert POSITIONS[position_codes(ix, g, b)[0]] == position
+
+
+def test_positions_are_the_end_bins_then_past_then_pa_read_only():
+    assert POSITIONS == END_BINS[:len(DIST_END_BINS) + 1] + (PAST, PA_ONLY)
+    assert POSITIONS == ("0-100", "101-300", "301-1000", "1001-5000", ">5000", "past every annotated end", "pa read only")
+
+
+def test_a_molecule_whose_reads_all_have_a_pa_tag_lands_in_its_own_category(tmp_path):
+    ix = _index(tmp_path)
+    code = position_codes(ix, np.array([1, 1, 3]), np.array([-1, 1249, -1]))
+    assert [POSITIONS[c] for c in code] == [PA_ONLY, "0-100", PA_ONLY]
+
+
+def test_downstream_end_against_the_nearest_end_of_stage_31(tmp_path):
+    """Where stage 31's end_distances finds its nearest end at or downstream, the two agree in distance and mode; where its
+    nearest end lies upstream (d < 0), stage 28 takes the nearest end downstream, which lies no nearer, or none."""
+    gtf = _gtf(tmp_path, GTF + LONG)
+    ix = _index(tmp_path)
+    gene = np.repeat(np.arange(len(GENES)), 3000)
+    base = np.tile(np.arange(0, 3000), len(GENES)) + np.repeat([0, 800, 0, 1500], 3000)
+    plus = np.array([True, True, True, False])[gene]
+    sites = pd.DataFrame({"strand": np.where(plus, "+", "-"), "site": base + plus, "genes": np.array(GENES, object)[gene]})
+    ref, mode = end_distances(sites, load_collapsed_exons(gtf), gene_ends(gtf))
+    d, exonic = downstream_end(ix, gene, base)
+    assert (mode == np.where(exonic, "exon", "genome")).all()
+    ahead = ref >= 0
+    assert ahead.sum() > 1000 and (~ahead).sum() > 1000
+    assert (d[ahead] == ref[ahead]).all()
+    behind = d[~ahead]
+    assert (np.isnan(behind) | (behind >= -ref[~ahead])).all() and np.isnan(behind).any() and (behind > 0).any()
+    # the bins are burden.end_bin's for a distance at or downstream
+    code = position_codes(ix, gene, base)
+    m = ~np.isnan(d)
+    assert (np.array(POSITIONS, object)[code[m]] == end_bin(d[m])).all()
