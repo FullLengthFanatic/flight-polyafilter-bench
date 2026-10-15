@@ -10,9 +10,11 @@ bamtofastq v1.4.1 (`bamtofastq --help`: "bamtofastq [options] <bam> <output-path
 https://github.com/10XGenomics/bamtofastq, src/main.rs): it creates <output-path> itself and stops when it exists ("error
 creating output directory: {:?}. Does it already exist?", line 1094); it writes one folder per read group of the header,
 named after the ID without its last ":" field ("vv.rsplitn(2, ':')", line 321) with ":" replaced by "_" (line 671), and in
-it FASTQs named "{}_S1_L{:03}_R1_{:03}.fastq.gz" with the sample name "bamtofastq" (lines 680 and 775). Our observation on
-a synthetic BAM with the @RG and @CO lines of 1417/original/c375_l3_m2_i.bam: the folder S1_0_1_unknow_flowcell with
-bamtofastq_S1_L000_R1_001.fastq.gz and bamtofastq_S1_L000_R2_001.fastq.gz, and the error above on a second run.
+it FASTQs named "{}_S1_L{:03}_R1_{:03}.fastq.gz" with the sample name "bamtofastq" (lines 680 and 775). Our observation,
+2026-10-15, on a synthetic BAM of three records with the @RG line (ID 1417_HsRetina_D28_3k:0:1:unknow_flowcell:0) and the
+@CO lines of 1417/original/c375_l3_m2_i.bam: the folder 1417_HsRetina_D28_3k_0_1_unknow_flowcell, the name fastq_folder
+gives, with bamtofastq_S1_L000_R1_001.fastq.gz and bamtofastq_S1_L000_R2_001.fastq.gz, and the error above on a second
+run into the same output path.
 
 What a Cell Ranger outs folder says about family size (reads per UMI). The matrices hold UMIs only. molecule_info.h5 has a
 row per "unique (UMI, cell-barcode, feature) tuple indicating the feature best supported by the reads (i.e., including PCR
