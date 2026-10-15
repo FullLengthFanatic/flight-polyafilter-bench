@@ -663,7 +663,7 @@ def test_tail_share_takes_the_reference_rates_as_given():
     assert e["bands"]["0-4"] == {"n": 0, "hexamer_rate": None, "tail_primed_share": None}
 
 
-E1, E2, E3, CE, I1, I2 ="c300_l10_m1_e", "c450_l9_m1_e", "c150_l20_m0_e", "c450_lnone_m0_e", "c300_l10_m1_i", "c375_l3_m2_i"
+E1, E2, E3, CE, I1, I2 = "c300_l10_m1_e", "c450_l9_m1_e", "c150_l20_m0_e", "c450_lnone_m0_e", "c300_l10_m1_i", "c375_l3_m2_i"
 SEL_TAGS = [E1, E2, E3, CE, I1, I2]
 # id, label, a20, gene, member dist5_exon (None: no member), hexamer; Tm's member is absent from truth_flags
 SEL_MOLS = [(0, "templated", 15, "gA", 100, False), (1, "templated", 15, "gB", 100, False), (2, "templated", 15, "gC", 700, False),
