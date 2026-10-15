@@ -37,6 +37,12 @@ Writes under --out (default OUT/eval), one block of rows per library:
 Acceptance (strata.acceptance): for each setting, level and stratum kind, tp + fn and tn + fp summed over the strata equal
 the "all" stratum of metrics.parquet at cap 1,000 and 8/4, and the sensitivity and specificity of the sums equal its. When
 it fails for a library, every output is written and the stage exits non-zero.
+
+Trial on 1417 on 2026-10-15 (stage 24 outputs of the trial run, classes standing in for stage 25: the Cell Ranger graph
+cluster of each barcode as "cr<k>"; /usr/bin/time -v and memwatch): 13 s wall, 1.35 GB maximum resident size. Acceptance
+passed for all 56 combinations, with 31,627 templated and 941 non-templated molecule units; expression bins at 1,609,
+4,816 and 15,635 UMIs (7,698, 7,688, 7,692 and 7,692 molecule units, 4,314 in no_umi); 70,466 of 90,099 molecules
+joined, 283 of them with our gene other than GX, as in design 2.3.
 """
 import argparse
 import json
