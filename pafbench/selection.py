@@ -16,7 +16,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from .burden import END_BINS, _exon_coord
-from .config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS
+from .config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, MIN_STRATUM, TOP_GENES
 from .recount import _in_sorted
 from .strata import _key
 
@@ -31,6 +31,10 @@ POSITIONS = END_BINS[:len(DIST_END_BINS) + 1] + (PAST, PA_ONLY)   # categories o
 RULE_STRATUM = {"position": "1"}  # the rule reads axis 4 among molecules with one read without a pa tag, the others in "all"
 AXIS_COLUMNS = ["lib", "axis", "stratum", "category", "n_labeled", "n_unlabeled", "share_labeled", "share_unlabeled",
                 "diff_points"]
+RE = ("E", "N", "I")
+RECORD_COLUMNS = ["lib", "re", "labeled", "records", "units", "share_labeled", "share_records", "share_units",
+                  "diff_points_records", "diff_points_units", "units_rg", "read_groups", "units_per_read_group"]
+GENE_COLUMNS = ["lib", "gene_id", "gene_name", "umis", "labeled", "labeled_fraction", "top"]
 # the accuracy table of a fired axis that moves from the details block into the main text (design 3.6, point 3)
 PLACEMENT = {"region": "eval/metrics.parquet", "cell_class": "eval/strata_m3.parquet", "expr_bin": "eval/strata_m3.parquet"}
 _TOL = 1e-9  # a difference of exactly BIAS_POINTS, up to floating point rounding, does not fire
@@ -270,3 +274,64 @@ def axis_table(t, classes, expr_code, lib):
     rows += [axis_rows(lib, "position", s, POSITIONS[:-1], pos_l[k, :-1], pos_u[k, :-1]) for k, s in enumerate(NONPA) if k]
     rows.append(axis_rows(lib, "family_size", "all", FAMILY, *counts(3)))
     return pd.concat(rows, ignore_index=True)
+
+
+def records_table(re, totals, lib):
+    """The record table of design 3.6 in RECORD_COLUMNS, one row per RE (E, N, I): labeled molecules of called cells by
+    the RE of their pa read (re, from molecules_labeled.parquet) against the called-cell primary records (rec_<RE>) and the
+    duplicate-free units (units_<RE>) of cell_totals at unfiltered (totals, one row per cell). Shares are over the three
+    RE; diff_points_records and diff_points_units are share_labeled minus the other share, in points. Printed next to it:
+    units over read-group records (units_rg) per read group with a record of that RE (read_groups), the distance of a unit
+    from a molecule where both are known; RE I has no read group (0 and NaN)."""
+    re = np.asarray(re, object)
+    labeled = np.array([(re == x).sum() for x in RE], np.int64)
+    records, units = (np.array([totals[f"{k}_{x}"].sum() for x in RE], np.int64) for k in ("rec", "units"))
+    rg = {k: np.array([totals[f"{k}_{x}"].sum() if f"{k}_{x}" in totals else 0 for x in RE], np.int64)
+          for k in ("units_rg", "rg")}
+    sl, sr, su = _share(labeled), _share(records), _share(units)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        per_group = rg["units_rg"] / rg["rg"]
+    return pd.DataFrame({"lib": lib, "re": list(RE), "labeled": labeled, "records": records, "units": units,
+                         "share_labeled": sl, "share_records": sr, "share_units": su, "diff_points_records": 100 * (sl - sr),
+                         "diff_points_units": 100 * (sl - su), "units_rg": rg["units_rg"], "read_groups": rg["rg"],
+                         "units_per_read_group": np.where(rg["rg"] > 0, per_group, np.nan)})
+
+
+def gene_table(gene_ids, gene_names, umis, labeled, lib, min_umis=MIN_STRATUM, top=TOP_GENES):
+    """Per gene with a counted molecule, in GENE_COLUMNS and gene row order: unfiltered UMIs (umis, the counted molecules
+    of the gene), labeled counted molecules and their fraction. top marks the top genes furthest above ("above") and below
+    ("below") the library's fraction (all labeled over all counted molecules) by labeled_fraction minus it, among the genes
+    with at least min_umis UMIs; on equal distance the gene with more UMIs first, then the gene id."""
+    umis, labeled = np.asarray(umis, np.int64), np.asarray(labeled, np.int64)
+    keep = umis > 0
+    t = pd.DataFrame({"lib": lib, "gene_id": np.asarray(gene_ids, object)[keep], "gene_name": np.asarray(gene_names, object)[keep],
+                      "umis": umis[keep], "labeled": labeled[keep], "labeled_fraction": labeled[keep] / umis[keep], "top": ""})
+    d = t.labeled_fraction - labeled.sum() / umis.sum()
+    ranked = t.assign(d=d)[t.umis >= min_umis]
+    for name, side, up in (("above", ranked.d > 0, False), ("below", ranked.d < 0, True)):
+        r = ranked[side].sort_values(["d", "umis", "gene_id"], ascending=[up, False, True])
+        t.loc[r.index[:top], "top"] = name
+    return t.reset_index(drop=True)
+
+
+def acceptance(t, keys, m0_sum, gene_umis, join, n_called, records, stage13):
+    """Design 3.6, Acceptance, for one library. molecules: labeled plus unlabeled counted molecules (the Tally t) equal the
+    sum of M0 (m0_sum); every joined key (keys, labeled_keys) is a counted molecule; and the counted molecules per gene
+    equal gene_umis, the unfiltered UMIs of gene_totals that the expression bins are cut on. truth: joined plus not joined
+    truth molecules (join, the library's rows of truth_to_counted) equal the labeled molecules of called cells (n_called).
+    records: per called cell, the primary records summed over RE (records: by barcode, rec_E + rec_N + rec_I + rec_none of
+    cell_totals at unfiltered) equal the total of stage 13 (stage13: grid/cell_counts.parquet total, by barcode), and so do
+    their sums over cells."""
+    lab = t.full.sum(axis=tuple(range(1, t.full.ndim)))
+    genes_differing = int((t.by_gene.sum(axis=(1, 2, 3)) != np.asarray(gene_umis)).sum())
+    mol = {"labeled": int(lab[1]), "unlabeled": int(lab[0]), "m0_sum": int(m0_sum), "joined_keys": len(keys),
+           "genes_differing": genes_differing}
+    mol["passed"] = mol["labeled"] + mol["unlabeled"] == mol["m0_sum"] and mol["joined_keys"] == mol["labeled"] and not genes_differing
+    joined = int(join.joined.sum())
+    truth = {"joined": joined, "not_joined": len(join) - joined, "labeled_in_called_cells": int(n_called)}
+    truth["passed"] = len(join) == truth["labeled_in_called_cells"]
+    both = pd.concat([records.rename("ours"), stage13.rename("stage13")], axis=1)
+    differing = int((both.ours != both.stage13).sum())
+    rec = {"records": int(records.sum()), "stage13": int(stage13.sum()), "cells": len(both), "cells_differing": differing}
+    rec["passed"] = rec["records"] == rec["stage13"] and not differing
+    return {"molecules": mol, "truth": truth, "records": rec, "passed": mol["passed"] and truth["passed"] and rec["passed"]}

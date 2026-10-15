@@ -10,9 +10,10 @@ import pyarrow.parquet as pq
 from pafbench.burden import END_BINS, _exon_coord, end_bin, end_distances, gene_ends
 from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS
 from pafbench.exons import load_collapsed_exons
-from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, NONPA, PA_ONLY, PAST, POSITIONS, REGIONS, axis_rows, axis_table,
-                                decision, downstream_end, end_index, exon_coord, expr_bins_counted, gene_strands,
-                                labeled_keys, position_codes, rule, tally)
+from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS, RECORD_COLUMNS,
+                                REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end, end_index, exon_coord,
+                                expr_bins_counted, gene_strands, gene_table, labeled_keys, position_codes, records_table,
+                                rule, tally)
 from pafbench.strata import expr_bins
 from tests.test_matched_sites import GTF, _gtf
 
@@ -257,3 +258,73 @@ def test_tally_counts_each_counted_molecule_once_by_axis(tmp_path, batch_rows):
     assert get("position", "2") == dict.fromkeys(POSITIONS[:-1], (0, 0))
     assert get("position", "3+")["0-100"] == (0, 1) and get("position", "3+")["301-1000"] == (0, 1)
     assert sorted(set(tab[tab.axis == "position"].stratum)) == ["1", "2", "3+", "all"]
+
+
+def _totals():
+    """cell_totals rows at unfiltered of two cells."""
+    return pd.DataFrame({"cb": ["A-1", "B-1"], "rec_E": [100, 200], "rec_N": [300, 300], "rec_I": [50, 50], "rec_none": [0, 0],
+                         "units_E": [80, 120], "units_N": [200, 200], "units_I": [40, 40], "units_none": [0, 0],
+                         "units_rg_E": [70, 70], "units_rg_N": [150, 150], "rg_E": [60, 60], "rg_N": [140, 140]})
+
+
+def test_records_table_sets_labeled_molecules_against_records_and_duplicate_free_units():
+    re = np.array(["E"] * 30 + ["N"] * 60 + ["I"] * 10, object)
+    t = records_table(re, _totals(), "L")
+    assert list(t.columns) == RECORD_COLUMNS and t.re.tolist() == ["E", "N", "I"] and set(t.lib) == {"L"}
+    assert t.labeled.tolist() == [30, 60, 10] and t.records.tolist() == [300, 600, 100] and t.units.tolist() == [200, 400, 80]
+    assert t.share_labeled.tolist() == pytest.approx([0.3, 0.6, 0.1])
+    assert t.share_records.tolist() == pytest.approx([0.3, 0.6, 0.1])
+    assert t.share_units.tolist() == pytest.approx([200 / 680, 400 / 680, 80 / 680])
+    assert t.diff_points_records.tolist() == pytest.approx([0, 0, 0])
+    assert t.diff_points_units.tolist() == pytest.approx([100 * (0.3 - 200 / 680), 100 * (0.6 - 400 / 680), 100 * (0.1 - 80 / 680)])
+    # units per read group with a record of that RE, printed next to the table; RE I is in no read group
+    assert t.units_rg.tolist() == [140, 300, 0] and t.read_groups.tolist() == [120, 280, 0]
+    assert t.units_per_read_group.tolist()[:2] == pytest.approx([140 / 120, 300 / 280]) and np.isnan(t.units_per_read_group[2])
+
+
+def test_gene_table_ranks_the_genes_furthest_from_the_library_fraction():
+    ids = [f"g{i}" for i in range(7)]
+    umis = np.array([100, 60, 40, 200, 500, 0, 80])
+    labeled = np.array([10, 30, 40, 0, 0, 0, 8])
+    t = gene_table(ids, [f"N{i}" for i in range(7)], umis, labeled, "L", min_umis=50, top=2)
+    assert list(t.columns) == GENE_COLUMNS and set(t.lib) == {"L"}
+    # g5 has no counted molecule; g2 has fewer than min_umis and is not ranked
+    assert t.gene_id.tolist() == ["g0", "g1", "g2", "g3", "g4", "g6"] and t.gene_name.tolist()[0] == "N0"
+    assert t.labeled_fraction.tolist() == pytest.approx([0.1, 0.5, 1.0, 0.0, 0.0, 0.1])
+    # library fraction 88 / 980: above, g1 and then g0 (g0 and g6 tie, more UMIs first); below, g4 and g3 (a tie at 0)
+    assert dict(zip(t.gene_id, t.top)) == {"g0": "above", "g1": "above", "g2": "", "g3": "below", "g4": "below", "g6": ""}
+
+
+def _accept(**kw):
+    t = tally_stub(labeled=2, unlabeled=3, per_gene=[1, 2, 0, 2])
+    args = {"t": t, "keys": np.array([1, 2], np.uint64), "m0_sum": 5, "gene_umis": np.array([1, 2, 0, 2]), "join": TOY_JOIN,
+            "n_called": 4, "records": pd.Series([700, 750], index=["A-1", "B-1"]),
+            "stage13": pd.Series([750, 700], index=["B-1", "A-1"])}
+    return acceptance(**(args | kw))
+
+
+def tally_stub(labeled, unlabeled, per_gene):
+    full = np.zeros((2, len(REGIONS), 1, len(FAMILY), len(NONPA), len(POSITIONS), 2), np.int64)
+    full[1, 0, 0, 0, 1, 0, 1], full[0, 0, 0, 0, 1, 0, 0] = labeled, unlabeled
+    by_gene = np.zeros((len(per_gene), len(REGIONS), 1, len(FAMILY)), np.int64)
+    by_gene[:, 0, 0, 0] = per_gene
+    return Tally(full, by_gene, pd.DataFrame({"cell": [0] * labeled}))
+
+
+def test_acceptance():
+    a = _accept()
+    assert a["passed"] is True
+    assert a["molecules"] == {"labeled": 2, "unlabeled": 3, "m0_sum": 5, "joined_keys": 2, "genes_differing": 0, "passed": True}
+    assert a["truth"] == {"joined": 2, "not_joined": 2, "labeled_in_called_cells": 4, "passed": True}
+    assert a["records"] == {"records": 1450, "stage13": 1450, "cells": 2, "cells_differing": 0, "passed": True}
+    assert _accept(m0_sum=6)["molecules"]["passed"] is False and _accept(m0_sum=6)["passed"] is False
+    # a joined key that is no counted molecule
+    assert _accept(keys=np.array([1, 2, 3], np.uint64))["molecules"]["passed"] is False
+    # the gene totals of stage 24 other than the counted molecules per gene
+    assert _accept(gene_umis=np.array([1, 2, 1, 1]))["molecules"]["genes_differing"] == 2
+    assert _accept(n_called=5)["truth"]["passed"] is False
+    # per cell, not only in sum; and a cell missing on one side
+    r = _accept(records=pd.Series([750, 700], index=["A-1", "B-1"]))["records"]
+    assert r == {"records": 1450, "stage13": 1450, "cells": 2, "cells_differing": 2, "passed": False}
+    r = _accept(records=pd.Series([700], index=["A-1"]))["records"]
+    assert r["passed"] is False and r["cells_differing"] == 1
