@@ -10,10 +10,12 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
-from pafbench.config import REPO
-from pafbench.burden import (near_shares, proximity_table, same_gene, same_site, selection_bias, share_ci, share_table,
+from pafbench.config import A_BANDS, REPO
+from pafbench.burden import (TEMPLATED_BANDS, band_corrected_share, headline_version, near_shares, proximity_table,
+                             purity_acceptance, purity_by_region, same_gene, same_site, selection_bias, share_ci, share_table,
                              site_labels)
-from pafbench.evaluate import gene_clusters, resample_counts
+from pafbench.evaluate import gene_clusters, interval, label_purity, resample_counts, tail_share
+from pafbench.labels import label_molecules
 from pafbench.polyasite import BINS
 
 
@@ -394,3 +396,278 @@ def test_stage18_polyasite(tmp_path):
         assert p["within_10nt"][g] == {
             "label": dict(zip(("templated", "nontemplated", "ambiguous", "null_shift1kb"), labels)),
             "templated_a_band": {"8-9": None, "10-13": None, "14-20": band}}, g
+
+
+def _purity_frame(seed=0, n=600):
+    """Labeled molecules over three regions with hexamers likelier at few A's, 20 genes and intergenic loci, plus 12 5UTR
+    molecules with no a20 >= 14 molecule (no internal reference of their own)."""
+    rng = np.random.default_rng(seed)
+    a20 = np.concatenate([rng.integers(0, 21, n), np.arange(12) % 11])
+    hexa = rng.random(len(a20)) < np.where(a20 <= 4, 0.7, np.where(a20 >= 14, 0.05, 0.25))
+    region = np.concatenate([rng.choice(["3UTR", "intron", "CDS"], n), ["5UTR"] * 12])
+    gene = np.where(rng.random(len(a20)) < 0.1, "", np.char.add("g", rng.integers(0, 20, len(a20)).astype(str))).astype(object)
+    mol = pd.DataFrame({"a20": a20, "hexamer": hexa, "region": region, "gene": gene, "ref": "chr1", "strand": "+",
+                        "site": rng.integers(0, 50_000, len(a20))})
+    return label_molecules(mol)
+
+
+def _own_rates(mol):
+    p = label_purity(mol)
+    return p["reference"]["hexamer_rate"], p["bands"]["0-4"]["hexamer_rate"]
+
+
+def test_band_sum_equals_the_class_level_formula_unless_clipped():
+    mol = _purity_frame()
+    for region in ("3UTR", "intron", "CDS"):
+        sub = mol[mol.region == region]
+        p = label_purity(sub)
+        assert not any(_clipped_band(p, b) for b in TEMPLATED_BANDS)
+        assert band_corrected_share(p) == pytest.approx(p["templated_share_corrected"], abs=1e-12)
+    # library rates 0.1 and 0.6 put the 14-20 band (rate 0.05) below the reference: clipped to 0, the sums part
+    toy = pd.DataFrame({"a20": [2] * 10 + [8] * 10 + [11] * 10 + [16] * 20, "hexamer": [True] * 6 + [False] * 4 + [True] * 2
+                        + [False] * 8 + [True] + [False] * 9 + [True] + [False] * 19})
+    toy = label_molecules(toy)
+    t = tail_share(toy, 0.1, 0.6)
+    assert band_corrected_share(t) == pytest.approx((10 * 0.8 + 10 * 1 + 20 * 1) / 50)
+    assert t["templated_share_corrected"] == pytest.approx(40 / 50)
+    # a templated band with molecules and no estimate: no corrected share; no molecules: none either
+    assert band_corrected_share(tail_share(toy, None, 0.6)) is None
+    assert band_corrected_share(tail_share(toy.iloc[:0], 0.1, 0.6)) is None
+
+
+def _clipped_band(p, band):
+    r, ref, tail = p["bands"][band]["hexamer_rate"], p["reference"]["hexamer_rate"], p["bands"]["0-4"]["hexamer_rate"]
+    return not 0 <= (r - ref) / (tail - ref) <= 1
+
+
+def test_headline_version_rule():
+    # library rates: h_tail 0.6, h_ref 0.05
+    rows = [(200, 200, 0.3, 0.4, 0.04, 0.06, "region"),  # h_tail outside, 200 in each class: the boundary counts
+            (199, 200, 0.3, 0.4, 0.04, 0.06, "library"),  # one tail-reference molecule short
+            (200, 199, 0.3, 0.4, 0.04, 0.06, "library"),  # one internal-reference molecule short
+            (500, 500, 0.5, 0.7, 0.06, 0.08, "region"),  # h_ref outside (below the interval)
+            (500, 500, 0.5, 0.7, 0.01, 0.04, "region"),  # h_ref outside (above the interval)
+            (500, 500, 0.6, 0.7, 0.03, 0.05, "library"),  # both on a bound: inside
+            (500, 500, 0.5, 0.7, 0.04, 0.06, "library"),  # both inside
+            (500, 0, 0.5, 0.7, np.nan, np.nan, "library")]  # no internal reference: no interval
+    ref = pd.DataFrame(rows, columns=["n_ref_tail", "n_ref_internal", "h_tail_lo", "h_tail_hi", "h_ref_lo", "h_ref_hi", "want"])
+    assert headline_version(ref, 0.6, 0.05).tolist() == ref.want.tolist()
+    assert headline_version(ref, 0.6, 0.05, ref_min=199).tolist()[:3] == ["region", "region", "region"]
+
+
+PURITY_REF_COLUMNS = ["region", "n_ref_tail", "n_ref_internal", "h_tail", "h_tail_lo", "h_tail_hi", "h_ref", "h_ref_lo",
+                      "h_ref_hi", "headline_version"]
+PURITY_SHARE_COLUMNS = ["region", "n_labeled", "share_label", "share_corrected", "lo", "hi", "share_corrected_regionref",
+                        "lo_regionref", "hi_regionref", "headline_version"]
+PURITY_BAND_COLUMNS = ["region", "a_band", "n", "hexamer_rate", "tail_primed_share", "tail_primed_share_regionref", "clipped",
+                       "clipped_regionref"]
+
+
+def _none(x):
+    return np.nan if x is None else x
+
+
+def test_purity_by_region_point_values():
+    mol = _purity_frame()
+    ref, share, bands = purity_by_region(mol, n=50, seed=1)
+    assert list(ref.columns) == PURITY_REF_COLUMNS and list(share.columns) == PURITY_SHARE_COLUMNS
+    assert list(bands.columns) == PURITY_BAND_COLUMNS
+    regions = ["all", "3UTR", "5UTR", "CDS", "intron"]
+    assert ref.region.tolist() == regions and share.region.tolist() == regions
+    assert bands.region.tolist() == [r for r in regions for _ in A_BANDS] and bands.a_band.tolist() == [b[0] for b in A_BANDS] * 5
+    lib_ref, lib_tail = _own_rates(mol)
+    ref, share, bands = ref.set_index("region"), share.set_index("region"), bands.set_index(["region", "a_band"])
+    for r in regions:
+        sub = mol if r == "all" else mol[mol.region == r]
+        own, lib = label_purity(sub), tail_share(sub, lib_ref, lib_tail)
+        assert ref.loc[r, ["n_ref_tail", "n_ref_internal"]].tolist() == [(sub.a20 <= 4).sum(), (sub.a20 >= 14).sum()]
+        assert ref.loc[r, ["h_tail", "h_ref"]].tolist() == pytest.approx(
+            [_none(own["bands"]["0-4"]["hexamer_rate"]), _none(own["reference"]["hexamer_rate"])], nan_ok=True)
+        assert share.loc[r, "n_labeled"] == len(sub) and share.loc[r, "share_label"] == pytest.approx(own["templated_share"])
+        assert share.loc[r, "share_corrected"] == pytest.approx(band_corrected_share(lib))
+        assert share.loc[r, "share_corrected_regionref"] == pytest.approx(_none(band_corrected_share(own)), nan_ok=True)
+        for b, *_ in A_BANDS:
+            row = bands.loc[(r, b)]
+            assert row.n == own["bands"][b]["n"]
+            assert [row.hexamer_rate, row.tail_primed_share, row.tail_primed_share_regionref] == pytest.approx(
+                [_none(own["bands"][b]["hexamer_rate"]), _none(lib["bands"][b]["tail_primed_share"]),
+                 _none(own["bands"][b]["tail_primed_share"])], nan_ok=True)
+    # over all regions the two versions are one
+    assert share.loc["all", "share_corrected"] == share.loc["all", "share_corrected_regionref"]
+    assert share.loc["all", ["lo", "hi"]].tolist() == share.loc["all", ["lo_regionref", "hi_regionref"]].tolist()
+    assert ref.headline_version.tolist() == share.headline_version.tolist()
+    assert ref.headline_version.tolist() == headline_version(ref, lib_tail, lib_ref).tolist()
+
+
+def test_purity_by_region_region_without_reference_molecules():
+    ref, share, bands = (t.set_index("region") for t in purity_by_region(_purity_frame(), n=50, seed=1))
+    # 5UTR has no a20 >= 14 molecule: no rate, interval or estimate of its own; the library-wide version stands
+    assert ref.loc["5UTR", "n_ref_internal"] == 0 and ref.loc["5UTR", ["h_ref", "h_ref_lo", "h_ref_hi"]].isna().all()
+    assert share.loc["5UTR", ["share_corrected_regionref", "lo_regionref", "hi_regionref"]].isna().all()
+    assert bands.loc["5UTR", "tail_primed_share_regionref"].isna().all() and not bands.loc["5UTR", "clipped_regionref"].any()
+    assert np.isfinite(share.loc["5UTR", ["share_corrected", "lo", "hi"]].to_numpy(float)).all()
+    assert ref.loc["5UTR", "headline_version"] == share.loc["5UTR", "headline_version"] == "library"
+
+
+def test_purity_by_region_region_with_equal_reference_rates():
+    # ncexon has molecules in both reference classes and no hexamer (h_tail = h_ref = 0, in every resample too): the
+    # formula is undefined, so no estimate or interval of its own, as tail_share gives none for equal rates
+    rng = np.random.default_rng(5)
+    extra = label_molecules(pd.DataFrame({"a20": np.arange(60) % 21, "hexamer": False, "region": "ncexon",
+                                          "gene": np.char.add("g", rng.integers(0, 20, 60).astype(str)).astype(object),
+                                          "ref": "chr1", "strand": "+", "site": rng.integers(0, 50_000, 60)}))
+    mol = pd.concat([_purity_frame(), extra], ignore_index=True)
+    ref, share, bands = (t.set_index("region") for t in purity_by_region(mol, n=50, seed=1))
+    assert ref.loc["ncexon", ["n_ref_tail", "n_ref_internal", "h_tail", "h_ref"]].tolist() == [15, 18, 0, 0]
+    assert share.loc["ncexon", ["share_corrected_regionref", "lo_regionref", "hi_regionref"]].isna().all()
+    assert bands.loc["ncexon", "tail_primed_share_regionref"].isna().all()
+    assert np.isfinite(share.loc["ncexon", ["share_corrected", "lo", "hi"]].to_numpy(float)).all()
+
+
+def test_purity_by_region_intervals_match_brute_force():
+    mol = _purity_frame(seed=3)
+    n, seed = 40, 6
+    ref, share, _ = (t.set_index("region") for t in purity_by_region(mol, n=n, seed=seed))
+    names, code = np.unique(gene_clusters(mol), return_inverse=True)
+    vals = {}
+    # every resample materialised: rates recomputed on the resampled molecules, the library-wide ones included
+    for w in resample_counts(len(names), n, seed):
+        rs = mol.iloc[np.repeat(np.arange(len(mol)), w[code])]
+        lib_ref, lib_tail = _own_rates(rs)
+        for r in ref.index:
+            sub = rs if r == "all" else rs[rs.region == r]
+            own = label_purity(sub)
+            for k, v in (("h_tail", own["bands"]["0-4"]["hexamer_rate"]), ("h_ref", own["reference"]["hexamer_rate"]),
+                         ("lib", band_corrected_share(tail_share(sub, lib_ref, lib_tail))), ("own", band_corrected_share(own))):
+                vals.setdefault((r, k), []).append(_none(v))
+    for r in ref.index:
+        got = [ref.loc[r, "h_tail_lo"], ref.loc[r, "h_tail_hi"], ref.loc[r, "h_ref_lo"], ref.loc[r, "h_ref_hi"],
+               share.loc[r, "lo"], share.loc[r, "hi"], share.loc[r, "lo_regionref"], share.loc[r, "hi_regionref"]]
+        want = [x for k in ("h_tail", "h_ref", "lib", "own") for x in interval(np.array(vals[(r, k)], float))[:2]]
+        assert got == pytest.approx(want, nan_ok=True), r
+        assert share.loc[r, "lo"] <= share.loc[r, "share_corrected"] <= share.loc[r, "hi"]
+
+
+def test_purity_by_region_bootstrap_is_seeded():
+    mol = _purity_frame()
+    a = purity_by_region(mol, n=50, seed=3)
+    for x, y in zip(a, purity_by_region(mol, n=50, seed=3)):
+        pd.testing.assert_frame_equal(x, y)
+    other = purity_by_region(mol, n=50, seed=4)[1]
+    assert not np.allclose(a[1].lo.to_numpy(float), other.lo.to_numpy(float))
+    pd.testing.assert_frame_equal(a[1].drop(columns=["lo", "hi", "lo_regionref", "hi_regionref", "headline_version"]),
+                                  other.drop(columns=["lo", "hi", "lo_regionref", "hi_regionref", "headline_version"]))
+
+
+def test_purity_by_region_headline_boundary_at_200():
+    # one gene per molecule; region A: 200 tail references at rate 0.2, region B: 200 at rate 0.9, each with 200 internal
+    # references at rate 0.05 and 100 templated molecules; the library-wide tail rate 0.55 lies outside both intervals
+    def block(region, tail_rate, n_tail):
+        a20 = [2] * n_tail + [16] * 200 + [9] * 100
+        hexa = [i < round(tail_rate * n_tail) for i in range(n_tail)] + [i < 10 for i in range(200)]
+        hexa += [i < 20 for i in range(100)]
+        return pd.DataFrame({"a20": a20, "hexamer": hexa, "region": region})
+
+    def frame(n_tail_a):
+        m = label_molecules(pd.concat([block("A", 0.2, n_tail_a), block("B", 0.9, 200)], ignore_index=True))
+        return m.assign(gene=[f"g{i}" for i in range(len(m))], ref="chr1", strand="+", site=np.arange(len(m)))
+
+    ref = purity_by_region(frame(200), n=200, seed=0)[0].set_index("region")
+    assert ref.loc[["A", "B"], "headline_version"].tolist() == ["region", "region"]
+    assert not ref.loc["A", "h_tail_lo"] <= _own_rates(frame(200))[1] <= ref.loc["A", "h_tail_hi"]
+    ref = purity_by_region(frame(199), n=200, seed=0)[0].set_index("region")
+    assert ref.loc["A", "n_ref_tail"] == 199 and ref.loc[["A", "B"], "headline_version"].tolist() == ["library", "region"]
+
+
+def test_purity_acceptance():
+    mol = _purity_frame()
+    want = label_purity(mol)["templated_share_corrected"]
+    a = purity_acceptance(mol, want)
+    assert a == {"expected": want, "class_level": pytest.approx(want, abs=0), "band_sum": pytest.approx(want, abs=1e-12),
+                 "clipped_bands": [], "class_level_equal": True, "band_sum_equal": True, "pass": True}
+    a = purity_acceptance(mol, want + 1e-9)
+    assert not a["class_level_equal"] and not a["band_sum_equal"] and not a["pass"]
+    assert purity_acceptance(mol, want + 2e-10)["pass"]
+    # templated label at a20 >= 10: the class-level value equals, the per-band sum (band 8-9 included) does not and no band
+    # is clipped, so the library fails
+    narrow = label_molecules(mol, {"templated_min": 10, "nontemplated_max": 4})
+    a = purity_acceptance(narrow, label_purity(narrow)["templated_share_corrected"])
+    assert a["class_level_equal"] and not a["band_sum_equal"] and a["clipped_bands"] == [] and not a["pass"]
+    # rates 0.5 (0-4), 0, 0.3, 0.1 (14-20): band 8-9 lies below the reference and is clipped to 0, so the per-band sum
+    # (25 / 40) parts from the class-level value (templated rate 4 / 30: 30 / 40 x (1 - 1 / 12)), which alone decides
+    clip = label_molecules(pd.DataFrame({"a20": [2] * 10 + [8] * 10 + [11] * 10 + [16] * 10,
+                                         "hexamer": [True] * 5 + [False] * 15 + [True] * 3 + [False] * 7 + [True] + [False] * 9}))
+    want = label_purity(clip)["templated_share_corrected"]
+    assert want == pytest.approx(30 / 40 * 11 / 12)
+    a = purity_acceptance(clip, want)
+    assert a["clipped_bands"] == ["8-9"] and a["band_sum"] == pytest.approx(25 / 40)
+    assert a["class_level_equal"] and not a["band_sum_equal"] and a["pass"]
+
+
+def _stage29(base, out):
+    env = dict(os.environ, PYTHONPATH=str(REPO))
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "29_purity_by_region.py"), "--base", str(base), "--out",
+                           str(out)], capture_output=True, text=True, env=env, cwd=REPO)
+
+
+def _stage29_base(base, in_cell=True):
+    """Three libraries of _purity_frame molecules, a quarter of them outside called cells, and eval/selection.json with
+    label_purity of the called cells as stage 17 writes it."""
+    libs, purity = {}, {}
+    for seed, lib in enumerate(("1417", "1419", "1179")):
+        mol = _purity_frame(seed=seed).assign(in_cell=np.arange(612) % 4 != 0)
+        libs[lib] = mol if in_cell else mol.drop(columns="in_cell")
+        (base / lib / "truth").mkdir(parents=True)
+        libs[lib].to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
+        purity[lib] = label_purity(mol[mol.in_cell])
+    (base / "eval").mkdir()
+    (base / "eval" / "selection.json").write_text(json.dumps({"label_purity": purity}, indent=1))
+    return libs
+
+
+def test_stage29_end_to_end(tmp_path):
+    base, out = tmp_path / "base", tmp_path / "burden"
+    libs = _stage29_base(base)
+    r = _stage29(base, out)
+    assert r.returncode == 0, r.stderr
+    assert sorted(p.name for p in out.iterdir()) == ["purity_by_region.parquet", "purity_reference_by_region.parquet",
+                                                     "templated_share_corrected.parquet"]
+    tables = [pd.read_parquet(out / f"{name}.parquet") for name in ("purity_reference_by_region", "templated_share_corrected",
+                                                                     "purity_by_region")]
+    for t, cols in zip(tables, (PURITY_REF_COLUMNS, PURITY_SHARE_COLUMNS, PURITY_BAND_COLUMNS)):
+        assert list(t.columns) == ["group"] + cols and list(dict.fromkeys(t.group)) == ["1417", "1419", "1179", "nuclei", "cells"]
+    # called cells only; a group's library-wide rates are those of the group
+    cells = {lib: m[m.in_cell].reset_index(drop=True) for lib, m in libs.items()}
+    cells["nuclei"] = pd.concat([cells["1417"], cells["1419"]], ignore_index=True)
+    cells["cells"] = cells["1179"]
+    for g, mol in cells.items():
+        for t, want in zip(tables, purity_by_region(mol)):
+            pd.testing.assert_frame_equal(t[t.group == g].drop(columns="group").reset_index(drop=True), want)
+    assert tables[1].set_index("group").loc["nuclei"].set_index("region").loc["all", "n_labeled"] == 2 * 459
+    s = json.loads(r.stdout.strip().splitlines()[-1])
+    assert s["groups"] == {"1417": ["1417"], "1419": ["1419"], "1179": ["1179"], "nuclei": ["1417", "1419"], "cells": ["1179"]}
+    assert s["molecules"] == {"1417": 459, "1419": 459, "1179": 459}
+    assert s["regions"]["1417"] == ["3UTR", "5UTR", "CDS", "intron"]
+    head = tables[0][tables[0].group == "nuclei"]
+    assert s["headline_version"]["nuclei"] == dict(zip(head.region, head.headline_version))
+    for lib in ("1417", "1419", "1179"):
+        a = s["acceptance"][lib]
+        assert a["pass"] and a["class_level_equal"] and a["band_sum_equal"] and a["clipped_bands"] == []
+        assert a["expected"] == label_purity(cells[lib])["templated_share_corrected"]
+
+
+def test_stage29_acceptance_failure_and_missing_in_cell(tmp_path):
+    base = tmp_path / "base"
+    _stage29_base(base)
+    sel = json.loads((base / "eval" / "selection.json").read_text())
+    sel["label_purity"]["1419"]["templated_share_corrected"] += 1e-6
+    (base / "eval" / "selection.json").write_text(json.dumps(sel))
+    r = _stage29(base, tmp_path / "out")
+    assert r.returncode == 1 and "acceptance failed: 1419" in r.stderr
+    s = json.loads(r.stdout.strip().splitlines()[-1])
+    assert not s["acceptance"]["1419"]["pass"] and s["acceptance"]["1417"]["pass"]
+    assert (tmp_path / "out" / "templated_share_corrected.parquet").exists()
+    base = tmp_path / "no_in_cell"
+    _stage29_base(base, in_cell=False)
+    r = _stage29(base, tmp_path / "out2")
+    assert r.returncode != 0 and "in_cell" in r.stderr

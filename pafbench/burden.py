@@ -1,4 +1,5 @@
 """Stage 18: internal-priming burden (templated share of labeled molecules), same-site and same-gene comparisons, selection bias.
+Stage 29: the templated share corrected for label purity, by region.
 Stage 31: sites matched between two groups within their shared genes (match_sites onwards; design of 2026-10-12, section 3.9).
 
 Descriptive only (spec 8): tissue, maturity, cell-type mix and the cell/nucleus difference are confounded.
@@ -9,8 +10,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from .config import A_BANDS, DIST_END_BINS, DOWNSAMPLE_DRAWS, LABEL_CUTOFFS, SITE_TOL
-from .evaluate import gene_clusters, interval, resample_counts
+from .config import A_BANDS, DIST_END_BINS, DOWNSAMPLE_DRAWS, LABEL_CUTOFFS, REGION_REF_MIN, SITE_TOL
+from .evaluate import gene_clusters, interval, resample_counts, tail_share
 from .polyasite import BINS, NULL_LABEL, distance_bin, nearest_signed
 from .regions import REGION_NAMES
 
@@ -51,6 +52,135 @@ def share_ci(mol, by=None, n=1000, seed=0, of="share_all"):
     share = np.divide(num, den, out=np.full(num.shape, np.nan), where=den > 0)
     ci = [interval(share[:, k])[:2] for k in range(len(strata))]
     return pd.DataFrame({"stratum": strata, "lo": [c[0] for c in ci], "hi": [c[1] for c in ci]})
+
+
+def band_corrected_share(purity):
+    """Corrected templated share of stage 29 (design 3.7) from a label_purity or tail_share result: the sum over the
+    templated A bands of n_b x (1 - tail-primed share of b), divided by the labeled molecules. None without molecules or
+    when a templated band with molecules has no estimate. It equals templated_share_corrected when the templated label
+    is the templated bands and no band estimate is clipped."""
+    if not purity["n_labeled"]:
+        return None
+    kept = 0.0
+    for b in TEMPLATED_BANDS:
+        e = purity["bands"][b]
+        if e["n"]:
+            if e["tail_primed_share"] is None:
+                return None
+            kept += e["n"] * (1 - e["tail_primed_share"])
+    return kept / purity["n_labeled"]
+
+
+def _reference(mol):
+    """[molecules, hexamer rate] of the tail reference (A band 0-4) and then of the internal reference (a20 >= 14), the
+    classes label_purity takes its rates from; a rate is None for an empty class."""
+    a20, hexa = mol.a20.to_numpy(), mol.hexamer.to_numpy(bool)
+    out = []
+    for m in (a20 <= A_BANDS[0][2], a20 >= 14):
+        out += [int(m.sum()), float(hexa[m].mean()) if m.any() else None]
+    return out
+
+
+def _clipped(rate, ref, tail):
+    """Whether (rate - ref) / (tail - ref) lies outside [0, 1], so that the tail-primed share is clipped."""
+    return None not in (rate, ref, tail) and ref != tail and not 0 <= (rate - ref) / (tail - ref) <= 1
+
+
+def headline_version(ref, h_tail_lib, h_ref_lib, ref_min=REGION_REF_MIN):
+    """Headline version of each region, by the rule design 3.7 fixed before any number: 'region' (the region's own rates)
+    where the region has at least ref_min molecules in each reference class and a library-wide rate lies outside the 95%
+    interval of the region's rate of that class, 'library' elsewhere. ref has the columns n_ref_tail, n_ref_internal,
+    h_tail_lo, h_tail_hi, h_ref_lo and h_ref_hi; a missing interval (NaN) leaves nothing outside."""
+    enough = (ref.n_ref_tail >= ref_min) & (ref.n_ref_internal >= ref_min)
+    outside = ((h_tail_lib < ref.h_tail_lo) | (h_tail_lib > ref.h_tail_hi) | (h_ref_lib < ref.h_ref_lo)
+               | (h_ref_lib > ref.h_ref_hi))
+    return np.where(enough & outside, "region", "library").astype(object)
+
+
+# columns of the counts behind the bootstrap of purity_by_region: all molecules, the A bands, the two reference classes
+_TEMPLATED_COLUMNS = [1 + i for i, (name, _, _) in enumerate(A_BANDS) if name in TEMPLATED_BANDS]
+
+
+def _purity_draws(N, H):
+    """[h_tail, h_ref, corrected share with the library-wide rates (those of region 0), corrected share with each region's
+    own rates], each [..., regions], from molecule and hexamer counts [..., regions, columns]; NaN where undefined."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rate = H / N
+        tail, ref = rate[..., -2], rate[..., -1]
+        out = [tail, ref]
+        for t, r in ((tail[..., :1], ref[..., :1]), (tail, ref)):
+            d = t - r
+            share = np.clip((rate[..., _TEMPLATED_COLUMNS] - r[..., None]) / np.where(d == 0, np.nan, d)[..., None], 0, 1)
+            nb = N[..., _TEMPLATED_COLUMNS]
+            out.append(np.where(nb > 0, nb * (1 - share), 0.0).sum(axis=-1) / N[..., 0])
+    return out
+
+
+def purity_by_region(mol, n=1000, seed=0):
+    """Stage 29 (design 3.7) on one group's labeled molecules (columns a20, hexamer, label, region, gene, ref, strand, site),
+    over all regions ('all') and per region value found in mol. The tail-primed share per A band (evaluate.tail_share) and
+    the corrected templated share (band_corrected_share) in two versions: with the reference rates of the whole group
+    (library-wide) and with the region's own (regionref); the headline version of each region by headline_version.
+    Intervals: gene-cluster bootstrap with n resamples (clusters and draws as share_ci), every rate, the library-wide
+    ones included, recomputed in each resample; resamples in which a value is undefined are left out (evaluate.interval).
+    Returns the tables purity_reference_by_region, templated_share_corrected and purity_by_region, without the group
+    column."""
+    a20, hexa = mol.a20.to_numpy(), mol.hexamer.to_numpy(bool)
+    regions, reg = np.unique(mol.region.astype(str).to_numpy(object), return_inverse=True)
+    names, code = np.unique(gene_clusters(mol), return_inverse=True)
+    columns = [np.ones(len(mol), bool)] + [(a20 >= lo) & (a20 <= hi) for _, lo, hi in A_BANDS] + [a20 <= A_BANDS[0][2], a20 >= 14]
+    shape = (len(names), len(regions) + 1)
+    counts = np.zeros((2, *shape, len(columns)))  # molecules and molecules with a hexamer per cluster; region 0 is all
+    for k, m in enumerate(columns):
+        cell = code[m] * shape[1] + reg[m] + 1
+        counts[0, ..., k] = np.bincount(cell, minlength=shape[0] * shape[1]).reshape(shape)
+        counts[1, ..., k] = np.bincount(cell, weights=hexa[m].astype(float), minlength=shape[0] * shape[1]).reshape(shape)
+    counts[:, :, 0] = counts[:, :, 1:].sum(axis=2)
+    W = resample_counts(len(names), n, seed).astype(float)
+    drawn = (W @ counts.transpose(1, 0, 2, 3).reshape(len(names), -1)).reshape(n, 2, shape[1], len(columns))
+    ci = [[interval(d[:, j])[:2] for j in range(shape[1])] for d in _purity_draws(drawn[:, 0], drawn[:, 1])]
+
+    _, h_tail, _, h_ref = _reference(mol)
+    refs, shares, bands = [], [], []
+    for j, region in enumerate(("all", *regions)):
+        sub = mol if j == 0 else mol[reg == j - 1]
+        n_tail, own_tail, n_ref, own_ref = _reference(sub)
+        lib, own = tail_share(sub, h_ref, h_tail), tail_share(sub, own_ref, own_tail)
+        refs.append((region, n_tail, n_ref, own_tail, *ci[0][j], own_ref, *ci[1][j]))
+        shares.append((region, lib["n_labeled"], lib["templated_share"], band_corrected_share(lib), *ci[2][j],
+                       band_corrected_share(own), *ci[3][j]))
+        for b, *_ in A_BANDS:
+            rate = lib["bands"][b]["hexamer_rate"]
+            bands.append((region, b, lib["bands"][b]["n"], rate, lib["bands"][b]["tail_primed_share"],
+                          own["bands"][b]["tail_primed_share"], _clipped(rate, h_ref, h_tail), _clipped(rate, own_ref, own_tail)))
+    floats = ["h_tail", "h_tail_lo", "h_tail_hi", "h_ref", "h_ref_lo", "h_ref_hi"]
+    ref = pd.DataFrame(refs, columns=["region", "n_ref_tail", "n_ref_internal"] + floats).astype(dict.fromkeys(floats, float))
+    ref["headline_version"] = headline_version(ref, np.nan if h_tail is None else h_tail, np.nan if h_ref is None else h_ref)
+    floats = ["share_label", "share_corrected", "lo", "hi", "share_corrected_regionref", "lo_regionref", "hi_regionref"]
+    share = pd.DataFrame(shares, columns=["region", "n_labeled"] + floats).astype(dict.fromkeys(floats, float))
+    share["headline_version"] = ref.headline_version
+    floats = ["hexamer_rate", "tail_primed_share", "tail_primed_share_regionref"]
+    band = pd.DataFrame(bands, columns=["region", "a_band", "n"] + floats + ["clipped", "clipped_regionref"]).astype(
+        dict.fromkeys(floats, float))
+    return ref, share, band
+
+
+def purity_acceptance(mol, expected, tol=5e-10):
+    """Acceptance of stage 29 (design 3.7) for one library: on its labeled molecules of called cells, the all-regions
+    corrected share by the class-level formula of evaluate.label_purity (tail_share at the library's own rates, as
+    purity_by_region takes them) equals expected, templated_share_corrected of eval/selection.json, to 9 decimals (tol),
+    and so does the per-band sum unless a templated band estimate is clipped."""
+    _, h_tail, _, h_ref = _reference(mol)
+    p = tail_share(mol, h_ref, h_tail)
+    class_level, band_sum = p["templated_share_corrected"], band_corrected_share(p)
+    clipped = [b for b in TEMPLATED_BANDS if _clipped(p["bands"][b]["hexamer_rate"], h_ref, h_tail)]
+
+    def equal(x):
+        return x is not None and abs(x - expected) < tol
+
+    return {"expected": expected, "class_level": class_level, "band_sum": band_sum, "clipped_bands": clipped,
+            "class_level_equal": equal(class_level), "band_sum_equal": equal(band_sum),
+            "pass": equal(class_level) and (equal(band_sum) or bool(clipped))}
 
 
 def site_labels(mol):
