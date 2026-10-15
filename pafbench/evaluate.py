@@ -332,14 +332,16 @@ def label_purity(mol_labeled):
 def tail_share(mol, ref_rate, tail_rate):
     """label_purity with the two reference rates given instead of taken from mol (stage 29, design 3.7): ref_rate stands
     for the rate of a20 >= 14, tail_rate for the rate of A band 0-4. The keys of label_purity except "reference"; estimates
-    are None where a rate is None or the two rates are equal."""
+    are None where a rate is None or the two rates are equal. With tail_rate below ref_rate, a rate equal to ref_rate gives 0
+    and not -0."""
     a20 = mol.a20.to_numpy()
     hexa = mol.hexamer.to_numpy(bool)
     lab = mol.label.to_numpy()
 
     def entry(m):
         r = float(hexa[m].mean()) if m.any() else None
-        return {"n": int(m.sum()), "hexamer_rate": r, "tail_primed_share": _tail_estimate(r, ref_rate, tail_rate)}
+        t = _tail_estimate(r, ref_rate, tail_rate)
+        return {"n": int(m.sum()), "hexamer_rate": r, "tail_primed_share": None if t is None else t + 0.0}
 
     bands = {name: entry((a20 >= lo) & (a20 <= hi)) for name, lo, hi in A_BANDS}
     classes = {k: entry(lab == k) for k in ("templated", "ambiguous")}

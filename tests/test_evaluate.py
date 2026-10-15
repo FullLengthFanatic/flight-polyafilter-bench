@@ -653,6 +653,11 @@ def test_tail_share_takes_the_reference_rates_as_given():
     assert [v["tail_primed_share"] for v in t["bands"].values()] == pytest.approx([1, 0.8, 0.2, 0, 0])
     # the templated class (rate 0.1) equals the given reference: nothing to remove
     assert t["classes"]["templated"]["tail_primed_share"] == 0.0 and t["templated_share_corrected"] == pytest.approx(40 / 54)
+    # the tail rate below the reference rate (stage 29 regions where h_tail < h_ref): a rate equal to the reference gives
+    # 0 / negative, stored as 0 and not as -0
+    t = tail_share(mol, 0.1, 0.05)
+    for e in (t["bands"]["10-13"], t["classes"]["templated"]):
+        assert e["tail_primed_share"] == 0 and not np.signbit(e["tail_primed_share"])
     # a rate missing, or the two rates equal: no estimates, the templated share stays
     for ref, tail in ((None, 0.6), (0.1, None), (0.3, 0.3)):
         t = tail_share(mol, ref, tail)
