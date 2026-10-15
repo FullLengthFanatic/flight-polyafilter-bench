@@ -72,7 +72,7 @@ def compare(args, tag):
     out = args.out or root / ("compare.json" if args.tag == tag else f"compare_{args.tag}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(got, indent=1))
-    keys = ("entries_compared", "entries_differing", "umis_only_ours", "umis_only_rerun", "above_rerun_diff")
+    keys = ("entries_compared", "entries_differing", "umis_excess_ours", "umis_excess_rerun", "above_rerun_diff")
     print(json.dumps({"library": LIB, "tag": args.tag, "compare": str(out)} | {k: got[k] for k in keys} | {
         "cells_called": {k: got["cells_called"][k] for k in ("original", "rerun", "both")},
         "seconds": round(time.monotonic() - t0, 1)}))

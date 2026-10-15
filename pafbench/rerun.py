@@ -168,15 +168,19 @@ def union_features(ours, theirs):
     return list(ours) + [f for f in theirs if f[0] not in known]
 
 
-def compare_matrices(ours, barcodes, features, theirs, their_barcodes, their_features):
+def compare_matrices(ours, barcodes, features, theirs, their_barcodes, their_features, one_sided):
     """Our matrix (cells by genes, rows barcodes, columns features) against theirs, both joined by barcode and gene id;
     the rows of theirs that are not among barcodes are left out, and a gene in one feature list only is a column of zeros
-    on the other side.
+    on the other side. one_sided: the gene columns (in the order of union_features) of our molecules the rerun lacks and
+    of the rerun's molecules we lack, one entry per molecule (compare).
 
-    Entries compared and equal (recount.check_entries), UMIs on each side, UMIs only we count and only they count (summed
-    over the entries where one side has more), their share of our UMIs against RERUN_DIFF (design section 6), our cells
-    absent from their matrix, the genes of one list only with their UMIs, by_gene for every gene with a differing entry
-    (most differing UMIs first) and the first recount.EXAMPLES differing entries.
+    Entries compared and equal (recount.check_entries), UMIs on each side, and the excess of each side: the UMIs by which
+    its count is higher, summed over the differing entries. The two excesses add up to the distance of the matrices entry
+    by entry, and their share of our UMIs is set against RERUN_DIFF (design section 6). A molecule that one side holds
+    under another UMI in the same entry is in no excess, so the molecules of one side (by_family) can be more. Then our
+    cells absent from their matrix, the genes of one list only with their UMIs, by_gene for every gene with a differing
+    entry or a molecule of one side (excess and molecules of each side; most such molecules first, then the excess) and
+    the first recount.EXAMPLES differing entries.
     """
     union = union_features(features, their_features)
     col = {g: j for j, (g, _) in enumerate(union)}
@@ -190,18 +194,22 @@ def compare_matrices(ours, barcodes, features, theirs, their_barcodes, their_fea
     e = check_entries(ours, theirs, 0)
     dif = e["differing"]
     d = (dif.ours - dif.theirs).to_numpy()
-    sums = {"umis_ours": int(ours.sum()), "umis_rerun": int(theirs.sum()), "umis_only_ours": int(d[d > 0].sum()),
-            "umis_only_rerun": int(-d[d < 0].sum())}
-    share = (sums["umis_only_ours"] + sums["umis_only_rerun"]) / max(sums["umis_ours"], 1)
-    per_gene = pd.DataFrame({"j": dif.gene.to_numpy(), "umis_only_ours": np.maximum(d, 0), "umis_only_rerun": np.maximum(-d, 0),
-                             "entries_differing": 1}).groupby("j").sum()
-    j = per_gene.index.to_numpy()
+    sums = {"umis_ours": int(ours.sum()), "umis_rerun": int(theirs.sum()), "umis_excess_ours": int(d[d > 0].sum()),
+            "umis_excess_rerun": int(-d[d < 0].sum())}
+    share = (sums["umis_excess_ours"] + sums["umis_excess_rerun"]) / max(sums["umis_ours"], 1)
+    mol = [np.bincount(np.asarray(g, np.int64), minlength=len(union)) for g in one_sided]
+    per_gene = pd.DataFrame({"j": dif.gene.to_numpy(), "umis_excess_ours": np.maximum(d, 0),
+                             "umis_excess_rerun": np.maximum(-d, 0), "entries_differing": 1}).groupby("j").sum()
+    j = np.union1d(per_gene.index.to_numpy(), np.flatnonzero(mol[0] + mol[1])).astype(np.int64)
+    per_gene = per_gene.reindex(j, fill_value=0).astype(np.int64)
     by_gene = per_gene.assign(gene_id=[union[k][0] for k in j], gene_name=[union[k][1] for k in j],
                               umis_ours=np.asarray(ours.sum(axis=0)).ravel()[j],
                               umis_rerun=np.asarray(theirs.sum(axis=0)).ravel()[j],
-                              n=per_gene.umis_only_ours + per_gene.umis_only_rerun)
-    by_gene = by_gene.sort_values(["n", "gene_id"], ascending=[False, True])[
-        ["gene_id", "gene_name", "umis_ours", "umis_rerun", "umis_only_ours", "umis_only_rerun", "entries_differing"]]
+                              molecules_only_ours=mol[0][j], molecules_only_rerun=mol[1][j], m=mol[0][j] + mol[1][j],
+                              n=per_gene.umis_excess_ours + per_gene.umis_excess_rerun)
+    by_gene = by_gene.sort_values(["m", "n", "gene_id"], ascending=[False, False, True])[
+        ["gene_id", "gene_name", "umis_ours", "umis_rerun", "umis_excess_ours", "umis_excess_rerun", "entries_differing",
+         "molecules_only_ours", "molecules_only_rerun"]]
     theirs_ids, n_ours = {f[0] for f in their_features}, len(features)
     only_ours = [j for j in range(n_ours) if union[j][0] not in theirs_ids]
     only_theirs = list(range(n_ours, len(union)))
@@ -295,17 +303,21 @@ def compare(lib, tag, tags, outs, recount_dir, matrix_dir, matrix="raw_feature_b
     """compare.json of design 3.11: the matrix of the Cell Ranger outs folder outs (raw_feature_bc_matrix) restricted to
     the cells our matrix holds, the called cells of the original run, against our matrix at tag (matrices.load; tags:
     the settings of recount.json in bit order), compare_matrices; the cells the rerun calls among them (its
-    filtered_feature_bc_matrix), called_cells; and its molecule_info.h5 against our molecules, by_family."""
+    filtered_feature_bc_matrix), called_cells; and its molecule_info.h5 against our molecules, by_family, whose molecules
+    of one side also go by gene into compare_matrices. The molecules are those of all our cells, whichever matrix."""
     t0 = time.monotonic()
     matrix_dir, outs = Path(matrix_dir), Path(outs)
     barcodes = (matrix_dir / "barcodes.tsv").read_text().split()
     features = [tuple(line.split("\t")[:2]) for line in (matrix_dir / "features.tsv").read_text().splitlines()]
     theirs, their_barcodes, their_features = read_mex(outs / matrix)
+    gene_col = {g: j for j, (g, _) in enumerate(union_features(features, their_features))}
+    ours_m = our_molecules(recount_dir, tag, tags)
+    theirs_m = rerun_molecules(outs / "molecule_info.h5", {b: i for i, b in enumerate(barcodes)}, gene_col)
+    one_sided = [(k[~_in_sorted(other, k)] & np.uint64(0xFFFF)).astype(np.int64)
+                 for k, other in ((ours_m[0], theirs_m[0]), (theirs_m[0], ours_m[0]))]
     res = {"library": lib, "tag": tag, "outs": str(outs), "matrix": matrix} | compare_matrices(
-        matrices.load(lib, tag, matrix_dir), barcodes, features, theirs, their_barcodes, their_features)
+        matrices.load(lib, tag, matrix_dir), barcodes, features, theirs, their_barcodes, their_features, one_sided)
     with gzip.open(outs / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", "rt") as fh:
         res["cells_called"] = called_cells(barcodes, fh.read().split())
-    gene_col = {g: j for j, (g, _) in enumerate(union_features(features, their_features))}
-    res["molecules"] = by_family(our_molecules(recount_dir, tag, tags),
-                                 rerun_molecules(outs / "molecule_info.h5", {b: i for i, b in enumerate(barcodes)}, gene_col))
+    res["molecules"] = by_family(ours_m, theirs_m)
     return res | {"seconds": round(time.monotonic() - t0, 1)}

@@ -35,17 +35,24 @@ THEIRS = np.array([[0, 7, 0, 0],   # TTTT: not an original cell, left out
                    [4, 0, 0, 0]])
 
 
+# the columns (g1 to g4, then g5) of the molecules of one side only: those that make the differing entries, and in the
+# equal entry AAAC g1 one molecule each side under another UMI
+ONE_SIDED = (np.array([1, 1, 3, 0, 0, 1, 0]),     # AAAC g2 twice, AAAC g4, AAAT g1 twice, AACA g2; AAAC g1
+             np.array([2, 2, 2, 2, 4, 0]))        # AAAG g3 four times, AAAT g5; AAAC g1
+
+
 def _csr(a):
     return sp.csr_matrix(a, dtype=np.int32)
 
 
 def test_matrices_are_joined_by_barcode_and_gene_id_and_every_kind_of_difference_is_counted():
-    got = rerun.compare_matrices(_csr(OURS), BARCODES, FEATURES, _csr(THEIRS), THEIR_BARCODES, THEIR_FEATURES)
+    got = rerun.compare_matrices(_csr(OURS), BARCODES, FEATURES, _csr(THEIRS), THEIR_BARCODES, THEIR_FEATURES, ONE_SIDED)
     # entries with a count on either side in the original cells: AAAC g1, g2, g4; AAAG g3; AAAT g1, g5; AACA g2
     assert (got["entries_compared"], got["entries_equal"], got["entries_differing"]) == (7, 1, 6)
     assert got["per_million"] == pytest.approx(1e6 * 6 / 7)
-    # UMIs of the original cells; the 7 of TTTT-1 are not among them
-    assert (got["umis_ours"], got["umis_rerun"], got["umis_only_ours"], got["umis_only_rerun"]) == (12, 11, 6, 5)
+    # UMIs of the original cells; the 7 of TTTT-1 are not among them. The excess of a side is summed over the entries
+    # where it is higher, so the swap in AAAC g1 is not in it
+    assert (got["umis_ours"], got["umis_rerun"], got["umis_excess_ours"], got["umis_excess_rerun"]) == (12, 11, 6, 5)
     assert got["umis_differing_share"] == pytest.approx(11 / 12) and got["rerun_diff"] == RERUN_DIFF
     assert got["above_rerun_diff"] is True
     assert got["cells_absent_from_rerun_matrix"] == ["AACA-1"]
@@ -55,18 +62,19 @@ def test_matrices_are_joined_by_barcode_and_gene_id_and_every_kind_of_difference
         {"cell": "AAAC-1", "gene": "g2", "ours": 2, "theirs": 0}, {"cell": "AAAC-1", "gene": "g4", "ours": 1, "theirs": 0},
         {"cell": "AAAG-1", "gene": "g3", "ours": 0, "theirs": 4}, {"cell": "AAAT-1", "gene": "g1", "ours": 5, "theirs": 3},
         {"cell": "AAAT-1", "gene": "g5", "ours": 0, "theirs": 1}, {"cell": "AACA-1", "gene": "g2", "ours": 1, "theirs": 0}]
-    # by gene, the genes with a differing entry, most differing UMIs first
+    # by gene, the genes with a differing entry or a molecule of one side, most such molecules first, then the excess; the
+    # molecule columns add up to the molecules of one side (7 and 6), the swap in g1 included
     assert got["by_gene"] == [
-        {"gene_id": "g3", "gene_name": "G3", "umis_ours": 0, "umis_rerun": 4, "umis_only_ours": 0, "umis_only_rerun": 4,
-         "entries_differing": 1},
-        {"gene_id": "g2", "gene_name": "G2", "umis_ours": 3, "umis_rerun": 0, "umis_only_ours": 3, "umis_only_rerun": 0,
-         "entries_differing": 2},
-        {"gene_id": "g1", "gene_name": "G1", "umis_ours": 8, "umis_rerun": 6, "umis_only_ours": 2, "umis_only_rerun": 0,
-         "entries_differing": 1},
-        {"gene_id": "g4", "gene_name": "G4", "umis_ours": 1, "umis_rerun": 0, "umis_only_ours": 1, "umis_only_rerun": 0,
-         "entries_differing": 1},
-        {"gene_id": "g5", "gene_name": "G5", "umis_ours": 0, "umis_rerun": 1, "umis_only_ours": 0, "umis_only_rerun": 1,
-         "entries_differing": 1}]
+        {"gene_id": "g3", "gene_name": "G3", "umis_ours": 0, "umis_rerun": 4, "umis_excess_ours": 0, "umis_excess_rerun": 4,
+         "entries_differing": 1, "molecules_only_ours": 0, "molecules_only_rerun": 4},
+        {"gene_id": "g1", "gene_name": "G1", "umis_ours": 8, "umis_rerun": 6, "umis_excess_ours": 2, "umis_excess_rerun": 0,
+         "entries_differing": 1, "molecules_only_ours": 3, "molecules_only_rerun": 1},
+        {"gene_id": "g2", "gene_name": "G2", "umis_ours": 3, "umis_rerun": 0, "umis_excess_ours": 3, "umis_excess_rerun": 0,
+         "entries_differing": 2, "molecules_only_ours": 3, "molecules_only_rerun": 0},
+        {"gene_id": "g4", "gene_name": "G4", "umis_ours": 1, "umis_rerun": 0, "umis_excess_ours": 1, "umis_excess_rerun": 0,
+         "entries_differing": 1, "molecules_only_ours": 1, "molecules_only_rerun": 0},
+        {"gene_id": "g5", "gene_name": "G5", "umis_ours": 0, "umis_rerun": 1, "umis_excess_ours": 0, "umis_excess_rerun": 1,
+         "entries_differing": 1, "molecules_only_ours": 0, "molecules_only_rerun": 1}]
 
 
 def test_equal_matrices_in_another_order_differ_nowhere():
@@ -74,13 +82,19 @@ def test_equal_matrices_in_another_order_differ_nowhere():
     theirs = np.zeros((5, 4), np.int64)
     theirs[:4] = OURS[order]
     theirs[4] = [9, 9, 9, 9]                         # an uncalled barcode of the rerun
-    got = rerun.compare_matrices(_csr(OURS), BARCODES, FEATURES, _csr(theirs), [BARCODES[i] for i in order] + ["TTTT-1"],
-                                 FEATURES)
+    args = (_csr(OURS), BARCODES, FEATURES, _csr(theirs), [BARCODES[i] for i in order] + ["TTTT-1"], FEATURES)
+    got = rerun.compare_matrices(*args, ([], []))
     assert (got["entries_compared"], got["entries_equal"], got["entries_differing"]) == (5, 5, 0)
-    assert (got["umis_ours"], got["umis_rerun"], got["umis_only_ours"], got["umis_only_rerun"]) == (12, 12, 0, 0)
+    assert (got["umis_ours"], got["umis_rerun"], got["umis_excess_ours"], got["umis_excess_rerun"]) == (12, 12, 0, 0)
     assert got["above_rerun_diff"] is False and got["by_gene"] == got["differing"] == []
     assert got["cells_absent_from_rerun_matrix"] == []
     assert got["genes_only_ours"] == got["genes_only_rerun"] == {"genes": 0, "umis": 0, "ids": []}
+    # two molecules swapped inside one entry of g1 (same counts, another UMI): equal matrices, one molecule each side
+    swap = rerun.compare_matrices(*args, ([0], [0]))
+    assert swap.pop("by_gene") == [{"gene_id": "g1", "gene_name": "G1", "umis_ours": 8, "umis_rerun": 8, "umis_excess_ours": 0,
+                                    "umis_excess_rerun": 0, "entries_differing": 0, "molecules_only_ours": 1,
+                                    "molecules_only_rerun": 1}]
+    assert swap == {k: v for k, v in got.items() if k != "by_gene"}
 
 
 def test_cells_the_rerun_calls_among_the_original_called_cells():
@@ -141,7 +155,7 @@ def test_our_molecules_at_a_tag_with_the_reads_that_survive(tmp_path):
 
 # the rerun's molecules: barcode (without the "-1", the gem_group), feature, UMI, count
 MOLECULES = [("AAAC", "g1", 1, 2),     # m1, with fewer reads
-             ("AAAC", "g1", 2, 1),     # m2
+             ("AAAC", "g1", 12, 1),    # m2 under another UMI: the entry AAAC g1 is equal, the molecule on both sides once
              ("AAAT", "g1", 6, 1),     # o1
              ("AAAG", "g3", 9, 4),     # only the rerun
              ("AAAT", "g5", 8, 1),     # only the rerun, a gene not in our feature list
@@ -168,7 +182,7 @@ def test_rerun_molecules_are_joined_by_barcode_and_gene_id(tmp_path):
     cell_row = {b: i for i, b in enumerate(BARCODES)}
     gene_col = {g: j for j, g in enumerate(["g1", "g2", "g3", "g4", "g5"])}
     key, count = rerun.rerun_molecules(_molecule_info(tmp_path / "molecule_info.h5"), cell_row, gene_col)
-    assert dict(zip(key.tolist(), count.tolist())) == {_key(0, 1, 0): 2, _key(0, 2, 0): 1, _key(2, 6, 0): 1,
+    assert dict(zip(key.tolist(), count.tolist())) == {_key(0, 1, 0): 2, _key(0, 12, 0): 1, _key(2, 6, 0): 1,
                                                        _key(1, 9, 2): 4, _key(2, 8, 4): 1}
     assert key.tolist() == sorted(key.tolist())
     two = _molecule_info(tmp_path / "two.h5")
@@ -183,10 +197,11 @@ def test_molecules_by_family_size(tmp_path):
     gene_col = {g: j for j, g in enumerate(["g1", "g2", "g3", "g4", "g5"])}
     got = rerun.by_family(rerun.our_molecules(_recount_dir(tmp_path / "recount"), "tB", TAGS),
                           rerun.rerun_molecules(_molecule_info(tmp_path / "molecule_info.h5"), cell_row, gene_col))
-    # both: m1 (3 reads here, 2 in the rerun), m2, o1; only ours: m3 and m5; only the rerun: AAAG g3 and AAAT g5
-    assert got == {"molecules_ours": 5, "molecules_rerun": 5, "both": 3, "only_ours": 2, "only_rerun": 2,
-                   "both_same_reads": 2,
-                   "by_family": [{"reads": 1, "only_ours": 2, "only_rerun": 1, "both": 2},
+    # both: m1 (3 reads here, 2 in the rerun), o1; only ours: m2, m3 and m5; only the rerun: m2 under another UMI, AAAG g3
+    # and AAAT g5
+    assert got == {"molecules_ours": 5, "molecules_rerun": 5, "both": 2, "only_ours": 3, "only_rerun": 3,
+                   "both_same_reads": 1,
+                   "by_family": [{"reads": 1, "only_ours": 3, "only_rerun": 2, "both": 1},
                                  {"reads": 3, "only_ours": 0, "only_rerun": 0, "both": 1},
                                  {"reads": 4, "only_ours": 0, "only_rerun": 1, "both": 0}]}
 
@@ -235,23 +250,29 @@ def test_compare_reads_the_outs_by_string_and_writes_every_part_of_the_design(li
     got = rerun.compare("X", "tB", TAGS, outs, rec, mat)
     assert got.pop("seconds") >= 0
     assert list(got) == ["library", "tag", "outs", "matrix", "entries_compared", "entries_equal", "entries_differing",
-                         "per_million", "umis_ours", "umis_rerun", "umis_only_ours", "umis_only_rerun",
+                         "per_million", "umis_ours", "umis_rerun", "umis_excess_ours", "umis_excess_rerun",
                          "umis_differing_share", "rerun_diff", "above_rerun_diff", "cells_absent_from_rerun_matrix",
                          "genes_only_ours", "genes_only_rerun", "by_gene", "differing", "cells_called", "molecules"]
     assert (got["library"], got["tag"], got["outs"], got["matrix"]) == ("X", "tB", str(outs), "raw_feature_bc_matrix")
     # ours at tB: AAAC g1 2, g2 1; AAAT g1 2. The rerun: AAAC g1 2; AAAG g3 1; AAAT g1 1, g5 1
     assert (got["entries_compared"], got["entries_equal"], got["entries_differing"]) == (5, 1, 4)
-    assert (got["umis_ours"], got["umis_rerun"], got["umis_only_ours"], got["umis_only_rerun"]) == (5, 5, 2, 2)
+    assert (got["umis_ours"], got["umis_rerun"], got["umis_excess_ours"], got["umis_excess_rerun"]) == (5, 5, 2, 2)
     assert got["cells_called"] == {"original": 4, "rerun": 3, "both": 2, "original_only": 2, "rerun_only": 1,
                                    "original_only_barcodes": ["AAAG-1", "AACA-1"]}
-    # the molecules account for the UMIs of both matrices
+    # the molecules account for the UMIs of both matrices; m2 under another UMI adds one molecule to each side that the
+    # excess does not hold
     mol = got["molecules"]
-    assert (mol["molecules_ours"], mol["molecules_rerun"], mol["only_ours"], mol["only_rerun"]) == (5, 5, 2, 2)
+    assert (mol["molecules_ours"], mol["molecules_rerun"], mol["only_ours"], mol["only_rerun"]) == (5, 5, 3, 3)
+    # by gene and by family size the molecules of one side add up to the same totals
+    assert [(g["gene_id"], g["umis_excess_ours"], g["umis_excess_rerun"], g["molecules_only_ours"], g["molecules_only_rerun"])
+            for g in got["by_gene"]] == [("g1", 1, 0, 2, 1), ("g2", 1, 0, 1, 0), ("g3", 0, 1, 0, 1), ("g5", 0, 1, 0, 1)]
+    for side in ("only_ours", "only_rerun"):
+        assert sum(g[f"molecules_{side}"] for g in got["by_gene"]) == sum(f[side] for f in mol["by_family"]) == mol[side]
     assert json.loads(json.dumps(got)) == got
     # the filtered matrix of the outs in place of the raw one: only the cells the rerun calls, AAAG g3 is gone
     got = rerun.compare("X", "tB", TAGS, outs, rec, mat, "filtered_feature_bc_matrix")
     assert got["matrix"] == "filtered_feature_bc_matrix" and got["cells_absent_from_rerun_matrix"] == ["AAAG-1", "AACA-1"]
-    assert (got["entries_compared"], got["umis_rerun"], got["umis_only_rerun"]) == (4, 4, 1)
+    assert (got["entries_compared"], got["umis_rerun"], got["umis_excess_rerun"]) == (4, 4, 1)
 
 
 # _cmdline and _invocation of the Cell Ranger run of 1417 (/data/element_runs/1417_HsRetina_D28_3k), copied
@@ -509,7 +530,7 @@ def test_stage33_compares_when_the_outs_exist(tmp_path, monkeypatch, capsys, lib
     assert got.pop("seconds") >= 0 and want.pop("seconds") >= 0 and got == json.loads(json.dumps(want))
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert summary == {"library": "1417", "tag": "tB", "compare": str(trial / "compare_tB.json"), "entries_compared": 5,
-                       "entries_differing": 4, "umis_only_ours": 2, "umis_only_rerun": 2, "above_rerun_diff": True,
+                       "entries_differing": 4, "umis_excess_ours": 2, "umis_excess_rerun": 2, "above_rerun_diff": True,
                        "cells_called": {"original": 4, "rerun": 3, "both": 2}, "seconds": summary["seconds"]}
     # at the tag of D8 the default is compare.json
     monkeypatch.setattr(rerun, "compare", lambda lib, tag, tags, o, r, m: want | {"tag": tag})
