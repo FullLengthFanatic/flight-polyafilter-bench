@@ -344,7 +344,8 @@ def test_same_site_check_reproduces_same_site(tmp_path):
     c = same_site_check(sa, sb, wrong)
     assert c["pass"] is False and c["label_pairs_equal"] is False and c["expected_sites_a"] == 6
     swapped = expected.assign(label_b=expected.label_b.replace({"templated": "ambiguous"}))
-    assert same_site_check(sa, sb, swapped)["label_pairs_equal"] is False
+    c = same_site_check(sa, sb, swapped)
+    assert c["label_pairs_equal"] is False and c["pass"] is False
 
 
 def _stage_libs(base):
