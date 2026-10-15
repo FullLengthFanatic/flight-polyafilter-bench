@@ -128,7 +128,7 @@ def near_shares(table):
             "templated_a_band": {x: share("templated", x) for x in TEMPLATED_BANDS}}
 
 
-SITE_FIELDS = ["label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene"]
+SITE_FIELDS = ["label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "genes"]
 FEATURES = ["label", "a_band", "a20", "down20", "hexamer", "region", "dist_end", "dist_mode"]
 SETS = ("shared", "first_only", "second_only")
 _SIZES = tuple(f"{lo}-{hi}" for lo, hi in zip((0,) + tuple(b + 1 for b in DIST_END_BINS[:-1]), DIST_END_BINS)) + (
@@ -162,26 +162,33 @@ def _exon_coord(starts, ends, pos):
 
 
 def end_distances(sites, exons, ends):
-    """(dist_end, dist_mode) per row of sites (strand '+'/'-', site, gene): the signed distance to the nearest 3' end of the
-    gene (gene_ends), > 0 when that end lies downstream of the site in transcript sense, equal |d| the positive one
-    (polyasite.nearest_signed). Mode 'exon' when the last cDNA base (site - 1 on plus, site on minus) lies in a collapsed exon
-    of the gene (exons.load_collapsed_exons, the union of the exons of all its transcripts): d counts the collapsed-exon bases
-    between the site and the end. Mode 'genome' otherwise: d counts genomic bases. Rows without a gene (''): NaN and ''."""
-    dist = np.full(len(sites), np.nan)
-    mode = np.full(len(sites), "", object)
-    pos = sites.site.to_numpy(np.int64)
-    for (gene, strand), idx in sites.groupby(["gene", "strand"], sort=False).indices.items():
-        if gene == "":
+    """(dist_end, dist_mode) per row of sites (strand '+'/'-', site, genes ';'-separated): the signed distance to the nearest
+    3' end of a gene of the site (gene_ends), > 0 when that end lies downstream of the site in transcript sense. Per gene, mode
+    'exon' when the last cDNA base (site - 1 on plus, site on minus) lies in a collapsed exon of the gene
+    (exons.load_collapsed_exons, the union of the exons of all its transcripts): d counts the collapsed-exon bases between the
+    site and the end. Mode 'genome' otherwise: d counts genomic bases. Over the genes the smallest |d| wins, on equal |d| the
+    positive one (polyasite.nearest_signed's rule within a gene), then the first gene of genes. Rows without a gene (''): NaN
+    and ''."""
+    genes = sites.genes.str.split(";").to_numpy(object)
+    row = np.repeat(np.arange(len(sites)), [len(g) for g in genes])
+    gene = np.asarray([g for gs in genes for g in gs], object)
+    strand, pos = sites.strand.to_numpy(object)[row], sites.site.to_numpy(np.int64)[row]
+    dist = np.full(len(row), np.nan)
+    mode = np.full(len(row), "", object)
+    for (g, strd), idx in pd.DataFrame({"gene": gene, "strand": strand}).groupby(["gene", "strand"], sort=False).indices.items():
+        if g == "":
             continue
-        plus = strand == "+"
-        (s, e), x, g_ends = exons[gene], pos[idx], ends[gene]
+        plus = strd == "+"
+        (s, e), x, g_ends = exons[g], pos[idx], ends[g]
         last = x - plus
         k = np.searchsorted(s, last, side="right") - 1
         exonic = (k >= 0) & (last < e[np.maximum(k, 0)])
         along = nearest_signed(_exon_coord(s, e, x), plus, np.unique(_exon_coord(s, e, g_ends)))
         dist[idx] = np.where(exonic, along, nearest_signed(x, plus, g_ends))
         mode[idx] = np.where(exonic, "exon", "genome")
-    return dist, mode
+    order = np.lexsort((np.arange(len(row)), -dist, np.abs(dist), row))
+    best = order[np.flatnonzero(np.diff(row[order], prepend=-1))]
+    return dist[best], mode[best]
 
 
 def end_bin(d):
@@ -198,7 +205,7 @@ def end_bin(d):
 def site_table(mol, exons, ends):
     """One row per site (ref, strand, site) of labeled molecules, sorted: n (molecules) and the SITE_FIELDS of its first
     molecule (in the labeled molecules of called cells each takes one value per site, our observation in scripts/31), then
-    dist_end and dist_mode (end_distances)."""
+    dist_end and dist_mode (end_distances over its genes)."""
     g = mol.groupby(["ref", "strand", "site"], sort=True)
     t = g[SITE_FIELDS].first()
     t.insert(0, "n", g.size())

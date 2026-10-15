@@ -39,11 +39,20 @@ GTF = [
     ("chr2", "transcript", 101, 600, "+", 'gene_id "gQ"; transcript_id "t5";'),
     ("chr2", "exon", 101, 600, "+", 'gene_id "gQ"; transcript_id "t5";'),
 ]
+# Two genes on plus inside the intron of gP: gE with one exon [1130, 1160), gF with exons [1100, 1120) and [1155, 1160); both
+# end at 1160
+EMBEDDED = [
+    ("chr1", "transcript", 1131, 1160, "+", 'gene_id "gE"; transcript_id "t6";'),
+    ("chr1", "exon", 1131, 1160, "+", 'gene_id "gE"; transcript_id "t6";'),
+    ("chr1", "transcript", 1101, 1160, "+", 'gene_id "gF"; transcript_id "t7";'),
+    ("chr1", "exon", 1101, 1120, "+", 'gene_id "gF"; transcript_id "t7";'),
+    ("chr1", "exon", 1156, 1160, "+", 'gene_id "gF"; transcript_id "t7";'),
+]
 
 
-def _gtf(tmp_path):
+def _gtf(tmp_path, rows=GTF):
     p = tmp_path / "genes.gtf"
-    p.write_text("".join(f"{c}\tt\t{ft}\t{s}\t{e}\t.\t{strand}\t.\t{attr}\n" for c, ft, s, e, strand, attr in GTF))
+    p.write_text("".join(f"{c}\tt\t{ft}\t{s}\t{e}\t.\t{strand}\t.\t{attr}\n" for c, ft, s, e, strand, attr in rows))
     return p
 
 
@@ -52,13 +61,14 @@ def _sites(rows):
 
 
 def _mols(spec, in_cell=True):
-    """Molecules from (ref, strand, site, gene, n, a20, region) rows: n copies each, label and a_band from a20."""
+    """Molecules from (ref, strand, site, gene, n, a20, region) rows: n copies each, genes the gene, label and a_band from
+    a20."""
     rows = []
     for ref, strand, site, gene, n, a20, region in spec:
         down20 = "A" * a20 + "C" * (20 - a20)
         rows += [(ref, strand, site, gene, a20, down20, "G" * 40, a20 == 0, region, in_cell)] * n
     m = pd.DataFrame(rows, columns=["ref", "strand", "site", "gene", "a20", "down20", "up40", "hexamer", "region", "in_cell"])
-    return m.assign(label=[classify(x, 8, 4) for x in m.a20], a_band=[a_band(x) for x in m.a20])
+    return m.assign(genes=m.gene, label=[classify(x, 8, 4) for x in m.a20], a_band=[a_band(x) for x in m.a20])
 
 
 def _brute_mutual(a, b, tol):
@@ -143,7 +153,27 @@ def test_gene_ends(tmp_path):
 ])
 def test_end_distances_both_strands(tmp_path, strand, site, gene, dist, mode):
     gtf = _gtf(tmp_path)
-    s = pd.DataFrame({"ref": ["chr1"], "strand": [strand], "site": [site], "gene": [gene]})
+    s = pd.DataFrame({"ref": ["chr1"], "strand": [strand], "site": [site], "genes": [gene]})
+    d, m = end_distances(s, load_collapsed_exons(gtf), gene_ends(gtf))
+    assert d.tolist() == [dist] and m.tolist() == [mode]
+
+
+@pytest.mark.parametrize("site,genes,dist,mode", [
+    # last cDNA base 1157: intronic in gP (92 to 1250), in the exon of gE (2 to 1160); the nearest end wins in either order
+    (1158, "gP;gE", 2, "exon"),
+    (1158, "gE;gP", 2, "exon"),
+    # last base 1239 in the second exon of gP (10 to 1250), past gE's end (-80 genome)
+    (1240, "gP;gE", 10, "exon"),
+    # +45 along gP's exons to 1250 and -45 past gE's end: the positive one in either order
+    (1205, "gE;gP", 45, "exon"),
+    (1205, "gP;gE", 45, "exon"),
+    # 10 to 1160 in both genes, in gE's exon and in gF's intron: the first gene of genes
+    (1150, "gE;gF", 10, "exon"),
+    (1150, "gF;gE", 10, "genome"),
+])
+def test_end_distances_take_the_nearest_end_over_the_genes_of_the_site(tmp_path, site, genes, dist, mode):
+    gtf = _gtf(tmp_path, GTF + EMBEDDED)
+    s = pd.DataFrame({"ref": ["chr1"], "strand": ["+"], "site": [site], "genes": [genes]})
     d, m = end_distances(s, load_collapsed_exons(gtf), gene_ends(gtf))
     assert d.tolist() == [dist] and m.tolist() == [mode]
 
@@ -151,7 +181,7 @@ def test_end_distances_both_strands(tmp_path, strand, site, gene, dist, mode):
 def test_end_distances_mixed_rows_and_no_gene(tmp_path):
     gtf = _gtf(tmp_path)
     s = pd.DataFrame({"ref": ["chr1", "chr1", "chr1", "chr2"], "strand": ["-", "+", "+", "+"], "site": [2250, 1500, 1050, 700],
-                      "gene": ["gM", "", "gP", "gQ"]})
+                      "genes": ["gM", "", "gP", "gQ"]})
     d, m = end_distances(s, load_collapsed_exons(gtf), gene_ends(gtf))
     assert np.isnan(d[1]) and m[1] == ""
     assert d[[0, 2, 3]].tolist() == [100, 100, -100] and m.tolist() == ["exon", "", "exon", "genome"]
@@ -178,7 +208,7 @@ def test_site_table(tmp_path):
                  ("chr1", "-", 2250, "gM", 1, 6, "3UTR"), ("chr2", "+", 900, "", 4, 9, "intergenic")])
     t = site_table(mol, load_collapsed_exons(gtf), gene_ends(gtf))
     assert list(t.columns) == ["ref", "strand", "site", "n", "label", "a_band", "a20", "down20", "up40", "hexamer", "region",
-                               "gene", "dist_end", "dist_mode"]
+                               "gene", "genes", "dist_end", "dist_mode"]
     assert t[["ref", "strand", "site", "n"]].values.tolist() == [["chr1", "+", 1050, 2], ["chr1", "+", 1280, 3],
                                                                   ["chr1", "-", 2250, 1], ["chr2", "+", 900, 4]]
     assert t.label.tolist() == ["nontemplated", "templated", "ambiguous", "templated"]

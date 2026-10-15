@@ -4,16 +4,19 @@ nucleus against cell are confounded.
 
 Site tables (burden.site_table), one per group (1417, 1419, nuclei, cells), from the labeled molecules of called cells
 (<lib>/truth/molecules_labeled.parquet, in_cell): one row per site (ref, strand, site) with its molecules, label, A band,
-a20, down20, up40, hexamer, region and gene, which take one value per site in these tables (our observation, 2026-10-14:
-no site of 1417, 1419 or 1179 has two values of any of them), and dist_end, dist_mode (burden.end_distances): the signed
-distance to the nearest annotated 3' end of the site's gene, > 0 when that end lies downstream in transcript sense, equal
-|d| the positive one. The ends are the 3' ends of every transcript line of the gene in genes.gtf (GTF end on plus, start - 1
-on minus: the priming_site convention, where the last cDNA base is site - 1 on plus and site on minus). The collapsed exons
-of a gene are the union of the exon lines of all its transcripts, overlapping or abutting exons merged
-(exons.load_collapsed_exons). A site is exonic, dist_mode "exon", when its last cDNA base lies in a collapsed exon of its
-own gene; the distance then counts collapsed-exon bases between the site and the end. Otherwise dist_mode is "genome" and
-the distance counts genomic bases. Sites without a gene: NaN and "". region is the strand-wide annotation of milestone 2
-(any transcript on the strand), so a site can be in a CDS of another gene and intronic for its own.
+a20, down20, up40, hexamer, region, gene and genes (gene is the first of genes, truth.label_truth_molecules), which take one
+value per site in these tables (our observation, 2026-10-14 and for genes 2026-10-15: no site of 1417, 1419 or 1179 has two
+values of any of them), and dist_end, dist_mode (burden.end_distances): the signed distance to the nearest annotated 3' end
+of a gene of the site, > 0 when that end lies downstream in transcript sense. The ends are the 3' ends of every transcript
+line of the gene in genes.gtf (GTF end on plus, start - 1 on minus: the priming_site convention, where the last cDNA base is
+site - 1 on plus and site on minus). The collapsed exons of a gene are the union of the exon lines of all its transcripts,
+overlapping or abutting exons merged (exons.load_collapsed_exons). For each gene of the site, the site is exonic, mode
+"exon", when its last cDNA base lies in a collapsed exon of that gene; the distance then counts collapsed-exon bases between
+the site and the end. Otherwise the mode is "genome" and the distance counts genomic bases. A site covered by several genes
+takes the gene with the smallest |d| (equal |d|: the positive one, then the first gene), in either mode. exons.member_distance
+also looks over all the site's genes but takes any exon distance before a genomic one. With gene alone, a site at the end
+of a gene nested in a longer one was measured to the longer gene's ends (review S31-3). Sites without a gene: NaN and "". region is the strand-wide annotation of milestone 2 (any
+transcript on the strand), so a site can be in a CDS of another gene and intronic for its own.
 
 Shared genes: at least MIN_GENE labeled molecules in both groups (the threshold of burden.same_gene). Within them each pair
 of sites that are each other's nearest on the same ref and strand within SITE_TOL nt is shared (burden.match_sites); the
@@ -59,7 +62,7 @@ from pafbench.config import CELLS, DIST_END_BINS, DOWNSAMPLE_DRAWS, GTF, NUCLEI,
 from pafbench.exons import load_collapsed_exons
 from pafbench.truth import in_population
 
-COLUMNS = ["ref", "strand", "site", "label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "in_cell"]
+COLUMNS = ["ref", "strand", "site", "label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "genes", "in_cell"]
 PAIRS = (("1417_vs_1419", "1417", "1419"), ("nuclei_vs_cells", "nuclei", "cells"))
 MIN_GENE = 20  # burden.same_gene's min_n
 SEED = 0
