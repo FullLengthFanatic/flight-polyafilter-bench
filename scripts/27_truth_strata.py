@@ -38,15 +38,16 @@ Acceptance (strata.acceptance): for each setting, level and stratum kind, tp + f
 the "all" stratum of metrics.parquet at cap 1,000 and 8/4, and the sensitivity and specificity of the sums equal its. When
 it fails for a library, every output is written and the stage exits non-zero.
 
-Measured on 2026-10-15, the three libraries in one run (stage 24 outputs of the trial runs; classes of the stage 25 trial
-for 1417, and for 1419 and 1179 the Cell Ranger graph cluster of each barcode as "cr<k>" in place of stage 25; BLAS and
-OpenMP limited to 8 threads; /usr/bin/time -v and memwatch): 3 min 11 s wall and 3.85 GiB peak tree memory, most of
-both on 1179; 1417 alone 12 s and 1.10 GiB. Acceptance passed for all 56 combinations of each library, with
-31,627 / 36,113 / 179,159 templated and 941 / 1,183 / 60,775 non-templated molecule units (1417 / 1419 / 1179).
-Expression bins at 1,609, 4,816 and 15,635 UMIs in 1417, 1,564, 4,675 and 15,479 in 1419 and 10,333, 31,339 and 141,310
-in 1179. Joined 70,466 of 90,099, 82,359 of 105,400 and 851,305 of 1,174,777 molecules, with our gene other than GX for
-283, 411 and 5,844 of them, as in design 2.3; the molecules not joined equal those of its source (the review file
-join_and_offset.json) in every region of every library.
+Measured on 2026-10-15, the three libraries in one run (stage 24 outputs of the trial runs; classes of the stage 25
+trial for 1417, and for 1419 and 1179 the Cell Ranger graph cluster of each barcode as "cr<k>" in place of stage 25;
+BLAS and OpenMP limited to 8 threads; /usr/bin/time -v and memwatch): 92 s wall and 3.83 GiB peak tree memory; 1179
+alone 70 s and 3.75 GiB, 1417 alone 12 s and 1.10 GiB. A second run wrote the same four tables, and the same json but
+for its seconds. Acceptance passed for all 56 combinations of each library, with 31,627 / 36,113 / 179,159 templated and
+941 / 1,183 / 60,775 non-templated molecule units (1417 / 1419 / 1179). Expression bins at 1,609, 4,816 and 15,635 UMIs
+in 1417, 1,564, 4,675 and 15,479 in 1419 and 10,333, 31,339 and 141,310 in 1179. Joined 70,466 of 90,099, 82,359 of
+105,400 and 851,305 of 1,174,777 molecules, with our gene other than GX for 283, 411 and 5,844 of them, as in design
+2.3; the molecules not joined equal those of its source (the review file join_and_offset.json) in every region of every
+library.
 """
 import argparse
 import json
