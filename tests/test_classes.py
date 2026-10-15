@@ -195,12 +195,17 @@ def test_margin_rule_at_its_boundary():
 def test_cells_inherit_the_class_of_their_cluster_and_the_cluster_score_is_the_mean_cell_score(trial):
     res = trial[3]
     c = res.cells
-    named = name_clusters(c[[f"score_{k.name}" for k in scored_classes("1417")]].set_axis(
-        [k.name for k in scored_classes("1417")], axis=1), c.cluster.to_numpy())
-    columns = ["class", "score_best", "class_second", "score_second", "margin"]
-    assert named[columns].equals(res.clusters.set_index("cluster")[columns].rename_axis(None))
-    assert (c["class"].to_numpy() == named["class"].loc[c.cluster].to_numpy()).all()
-    assert (c.margin.to_numpy() == named.margin.loc[c.cluster].to_numpy()).all()
+    names = [k.name for k in scored_classes("1417")]
+    # the cluster scores computed here, not by name_clusters: the mean of the cell scores of each class per cluster
+    mean = c.groupby("cluster")[[f"score_{k}" for k in names]].mean().set_axis(names, axis=1)
+    cl = res.clusters.set_index("cluster")
+    assert np.array_equal(cl.score_best.to_numpy(), mean.max(axis=1).to_numpy())
+    assert np.array_equal(cl.score_second.to_numpy(), [r.nlargest(2).iloc[1] for _, r in mean.iterrows()])
+    assert cl.class_best.tolist() == mean.idxmax(axis=1).tolist()
+    assert cl.class_second.tolist() == [r.nlargest(2).index[1] for _, r in mean.iterrows()]
+    assert np.array_equal(cl.margin.to_numpy(), cl.score_best.to_numpy() - cl.score_second.to_numpy())
+    assert (c["class"].to_numpy() == cl["class"].loc[c.cluster].to_numpy()).all()
+    assert (c.margin.to_numpy() == cl.margin.loc[c.cluster].to_numpy()).all()
 
 
 def test_1179_only_classes_are_scored_for_1179_only(trial):
