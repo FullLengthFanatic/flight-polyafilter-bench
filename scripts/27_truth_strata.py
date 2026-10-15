@@ -30,9 +30,9 @@ Writes under --out (default OUT/eval), one block of rows per library:
   both (strata.matrix_outcome).
 - strata_m3.json: parameters, and per library the inputs, the units, molecule units per class, the expression bin
   boundaries in UMIs with the molecule units per bin, the join counts (joined, in a read group that is not counted, without
-  a read group; by region; joined molecules whose own gene differs from GX, by label), the strata whose sensitivity or
-  specificity rests on fewer than MIN_STRATUM molecule units (marked at both levels: the read units of a stratum are member
-  reads of its molecule units), and the acceptance.
+  a read group; by region; joined molecules whose own gene differs from GX, by label), per level and stratum the units of
+  the two labels and whether the sensitivity or the specificity rests on fewer than MIN_STRATUM of them (few_molecules:
+  molecule units, or member reads at read level), and the acceptance.
 
 Acceptance (strata.acceptance): for each setting, level and stratum kind, tp + fn and tn + fp summed over the strata equal
 the "all" stratum of metrics.parquet at cap 1,000 and 8/4, and the sensitivity and specificity of the sums equal its. When

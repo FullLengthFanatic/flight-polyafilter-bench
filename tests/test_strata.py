@@ -154,11 +154,12 @@ def test_strata_bootstrap_is_the_bootstrap_of_each_stratum():
 def test_few_molecules_marks_the_rates_with_a_denominator_under_min_stratum():
     u, _ = _stratified(6)
     few = few_molecules(u)
-    lab = u.mols.label.to_numpy()
-    assert [(r["stratum_kind"], r["stratum"]) for r in few] == [(k, v) for k in KINDS for v in sorted(set(u.mols[k]))]
-    for r in few:
-        m = u.mols[r["stratum_kind"]].to_numpy() == r["stratum"]
-        assert (r["templated"], r["nontemplated"]) == ((lab[m] == "templated").sum(), (lab[m] == "nontemplated").sum())
+    # the denominators of the sensitivity and the specificity in the rows of the strata, per level
+    first = evaluate(u, "L", 1000, levels=LEVELS, kinds=KINDS).query("tag == @TAGS[0]")
+    assert [(r["level"], r["stratum_kind"], r["stratum"]) for r in few] == list(zip(first.level, first.stratum_kind,
+                                                                                    first.stratum))
+    for r, e in zip(few, first.itertuples()):
+        assert (r["templated"], r["nontemplated"]) == (e.tp + e.fn, e.tn + e.fp)
         assert (r["sens_few"], r["spec_few"]) == (r["templated"] < MIN_STRATUM, r["nontemplated"] < MIN_STRATUM)
     assert any(r["sens_few"] for r in few) and not all(r["sens_few"] for r in few)
     assert few_molecules(u, min_n=1) == [r | {"sens_few": r["templated"] < 1, "spec_few": r["nontemplated"] < 1} for r in few]
@@ -187,6 +188,18 @@ def test_a_stratum_of_exactly_min_stratum_units_is_not_few():
            for r in few_molecules(u)}
     assert got == {("cell_class", "rod"): (n, n - 1, False, True), ("cell_class", "cone"): (n - 1, n, True, False),
                    ("expr_bin", "q1"): (2 * n - 1, 2 * n - 1, False, False)}
+
+
+def test_few_molecules_marks_each_level_by_its_own_units():
+    # molecules with two member reads each: under MIN_STRATUM molecule units, at least MIN_STRATUM read units
+    n = MIN_STRATUM
+    u = _units_of([(BARCODES[3], "templated", n - 1, 2), (BARCODES[3], "nontemplated", n // 2, 2)])
+    got = {(r["level"], r["stratum_kind"], r["stratum"]): (r["templated"], r["nontemplated"], r["sens_few"], r["spec_few"])
+           for r in few_molecules(u)}
+    assert got == {("read", "cell_class", UNASSIGNED): (2 * n - 2, 2 * (n // 2), False, False),
+                   ("read", "expr_bin", "q1"): (2 * n - 2, 2 * (n // 2), False, False),
+                   ("molecule", "cell_class", UNASSIGNED): (n - 1, n // 2, True, True),
+                   ("molecule", "expr_bin", "q1"): (n - 1, n // 2, True, True)}
 
 
 def _m2_metrics(u, lib="L"):

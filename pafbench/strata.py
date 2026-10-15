@@ -12,7 +12,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from .config import EXPR_BINS, MEMBER_CAP, MIN_STRATUM
-from .evaluate import bootstrap, rates, subset_units
+from .evaluate import _strata, bootstrap, rates, subset_units
 from .molstream import _umi_codes
 from .recount import _in_sorted
 
@@ -74,18 +74,18 @@ def strata_bootstrap(u, tags, lib, kinds=KINDS, levels=LEVELS, n=1000, seed=0):
     return pd.concat(rows, ignore_index=True)[BOOT_COLUMNS]
 
 
-def few_molecules(u, kinds=KINDS, min_n=MIN_STRATUM):
-    """Per stratum the molecule units of the two labels, and whether the sensitivity (sens_few) or the specificity
-    (spec_few) rests on fewer than min_n of them. This holds for the read level too, whose units are member reads of these
-    molecules."""
-    label = u.mols.label.to_numpy()
+def few_molecules(u, min_n=MIN_STRATUM):
+    """Per level and stratum (those of evaluate.evaluate) the units of the two labels at that level, molecules or member
+    reads, and whether the sensitivity (sens_few) or the specificity (spec_few) rests on fewer than min_n of them: design
+    3.5 marks "a rate whose denominator is under 50"."""
     rows = []
-    for kind in kinds:
-        col = u.mols[kind].to_numpy().astype(str)
-        for value in sorted(set(col)):
-            n_pos, n_neg = (int((label[col == value] == x).sum()) for x in (u.pos, u.neg))
-            rows.append({"stratum_kind": kind, "stratum": value, u.pos: n_pos, u.neg: n_neg, "sens_few": n_pos < min_n,
-                         "spec_few": n_neg < min_n})
+    for level in LEVELS:
+        frame = u.reads if level == "read" else u.mols
+        label = frame.label.to_numpy()
+        for kind, value, m in _strata(u, frame, KINDS):
+            n_pos, n_neg = (int((label[m] == x).sum()) for x in (u.pos, u.neg))
+            rows.append({"level": level, "stratum_kind": kind, "stratum": value, u.pos: n_pos, u.neg: n_neg,
+                         "sens_few": n_pos < min_n, "spec_few": n_neg < min_n})
     return rows
 
 
