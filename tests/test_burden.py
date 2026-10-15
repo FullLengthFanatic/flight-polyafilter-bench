@@ -573,6 +573,11 @@ def test_purity_acceptance():
     a = purity_acceptance(mol, want + 1e-9)
     assert not a["class_level_equal"] and not a["band_sum_equal"] and not a["pass"]
     assert purity_acceptance(mol, want + 2e-10)["pass"]
+    # templated label at a20 >= 10: the class-level value equals, the per-band sum (band 8-9 included) does not and no band
+    # is clipped, so the library fails
+    narrow = label_molecules(mol, {"templated_min": 10, "nontemplated_max": 4})
+    a = purity_acceptance(narrow, label_purity(narrow)["templated_share_corrected"])
+    assert a["class_level_equal"] and not a["band_sum_equal"] and a["clipped_bands"] == [] and not a["pass"]
     # rates 0.5 (0-4), 0, 0.3, 0.1 (14-20): band 8-9 lies below the reference and is clipped to 0, so the per-band sum
     # (25 / 40) parts from the class-level value (templated rate 4 / 30: 30 / 40 x (1 - 1 / 12)), which alone decides
     clip = label_molecules(pd.DataFrame({"a20": [2] * 10 + [8] * 10 + [11] * 10 + [16] * 10,
