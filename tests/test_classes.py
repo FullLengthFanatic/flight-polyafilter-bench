@@ -384,6 +384,21 @@ def test_donor_replicate(toy, trial):
     assert all(c["pearson_class_mean"] == pytest.approx(1.0) for c in same["classes"])
 
 
+def test_marker_plot_of_1179_shows_the_genes_of_two_classes_under_both(trial, tmp_path):
+    # VSX2, OTX2, FABP7 and DLL3 are panel genes of two classes each; the 1179 plot has a column for each class of a gene
+    classes.marker_plot(tmp_path / "plot.png", trial[3], CELLS[0])
+    assert (tmp_path / "plot.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_cell_ranger_clusters_must_cover_every_called_cell(toy, trial, tmp_path):
+    a = trial[2]
+    cr, lfc = classes.read_cell_ranger(a, toy.barcodes)
+    assert cr.tolist() == toy.cr.tolist() and list(lfc) == list(range(1, len(GROUPS) + 2))
+    assert lfc.index.tolist() == toy.diffexp["Feature ID"].tolist()
+    with pytest.raises(SystemExit, match="1 called cells have no Cell Ranger cluster"):
+        classes.read_cell_ranger(a, [*toy.barcodes, "TTTT-1"])
+
+
 def test_ambient_list_is_the_list_of_the_design():
     text = (REPO / "docs/specs/2026-10-12-polyafilter-bench-milestone3-design.md").read_text()
     start = text.index("(a) Rod-transcript share: UMIs of ") + len("(a) Rod-transcript share: UMIs of ")
@@ -433,6 +448,7 @@ def test_stage25_script_writes_the_outputs_and_the_same_seed_gives_the_same_file
                 "panel_genes_missing", "weak_classes", "classes", "split_classes", "rod_tf_renamed", "organoid_named"):
         assert key in js, key
     assert js["parameters"]["cluster"] == json.loads(json.dumps(CLUSTER)) and js["parameters"]["class_margin"] == CLASS_MARGIN
+    assert js["seeds"] == list(CLUSTER["seeds"])
     assert js["inputs"] == {"matrices": str(m), "clusters": str(a / "clustering" / "gene_expression_graphclust" / "clusters.csv"),
                             "differential_expression": str(a / "diffexp" / "gene_expression_graphclust" /
                                                            "differential_expression.csv")}

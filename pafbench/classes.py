@@ -63,6 +63,9 @@ WEAK = "two of its genes also mark mature classes (VSX2 bipolar, PAX6 amacrine)"
 # "Immune, vascular-associated, and choroidal cell types were not observed" in organoids (Cowan 2020,
 # https://pmc.ncbi.nlm.nih.gov/articles/PMC7505495/, design 3.3): a cluster of a library of CELLS named so is flagged
 ORGANOID_ABSENT = ("microglia", "vascular")
+# "If vascular or microglia cells exist but form no cluster, the report says that the collapse question cannot be asked for
+# that class in that library." (3.3, check 6): these classes without a cluster are listed, with their rare candidates
+COLLAPSE_CLASSES = ("microglia", "vascular")
 # The 13 genes of features.tsv whose names start with "MT-" (MT-ND1 to MT-CYB) are the mitochondrial genes of the
 # reference, the same 13 in all three libraries (our observation, 2026-10-15)
 MT_PREFIX = "MT-"
@@ -369,7 +372,7 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
             for k, c in zip(clusters.cluster, clusters["class"])}
     table = clusters.drop(columns=["class_with_rod_tf", "rod_share_median", "doublet_score_median"]).assign(
         class_best=named.class_best.to_numpy(), class_with_rod_tf=clusters.class_with_rod_tf,
-        rod_tf_renames=clusters.cluster.isin(renamed), score_rod=by[f"score_rod"].mean().to_numpy(),
+        rod_tf_renames=clusters.cluster.isin(renamed), score_rod=by["score_rod"].mean().to_numpy(),
         rod_tf_score=by.rod_tf_score.mean().to_numpy(), rod_share_median=clusters.rod_share_median,
         doublet_score_median=clusters.doublet_score_median, pct_mt_median=by.pct_mt.median().to_numpy(),
         umis_median=by.umis.median().to_numpy(), cr_cluster_main=main_cr.idxmax(axis=1).to_numpy(),
@@ -394,13 +397,13 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
                        "split_thresholds": {"min_in_group_fraction": MIN_IN_FRACTION,
                                             "max_out_group_fraction": MAX_OUT_FRACTION, "min_fold_change": MIN_FOLD_CHANGE},
                        "ambient_rod_transcripts": list(AMBIENT_ROD_TRANSCRIPTS), "rod_tf": list(ROD_TF)},
-        "classes_scored": names, "clusters": int(len(clusters)), "classes": per_class,
+        "seeds": list(seeds), "classes_scored": names, "clusters": int(len(clusters)), "classes": per_class,
         "unassigned": {"cells": int((cell_class == UNASSIGNED).sum()),
                        "clusters": [int(k) for k in clusters.cluster[clusters["class"] == UNASSIGNED]]},
         "cell_ranger": cell_ranger_check(labels, cell_class, cr, lfc, gene_ids, symbols, lib),
         "seed_stability": seed_stability({s: emb.labels[(s, resolution)] for s in seeds}, scores[names], resolution),
         "rare_candidates": rare,
-        "collapse_not_askable": [c for c in ORGANOID_ABSENT if c in rare],
+        "collapse_not_askable": [c for c in COLLAPSE_CLASSES if c in rare],
         "panel_genes_missing": list(dict.fromkeys(markers.gene[~markers.in_matrix])),
         **f, "split_classes": splits}
     return Classes(cells, clusters, markers, table, summary, emb)
