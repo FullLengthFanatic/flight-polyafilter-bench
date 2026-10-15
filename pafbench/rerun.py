@@ -116,7 +116,9 @@ def rerun_commands(run_dir, bam, transcriptome, folder):
     sample_names and reference_path.
     """
     check_rerun_dir(folder)
-    folder, flags = Path(folder), original_run(run_dir)
+    # absolute, as run_rerun runs both commands with folder as their working directory
+    folder, bam, transcriptome = (Path(p).resolve() for p in (folder, bam, transcriptome))
+    flags = original_run(run_dir)
     fastq = folder / "fastq"
     own = {"id": folder.name, "transcriptome": str(transcriptome), "fastqs": str(fastq / fastq_folder(bam)),
            "sample": "bamtofastq"}

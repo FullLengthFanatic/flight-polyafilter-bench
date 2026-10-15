@@ -14,11 +14,12 @@ compare: once <folder>/count/outs exists (or --outs), its raw_feature_bc_matrix 
   <rerun>/compare.json (or --out). Reads the outputs of stage 24 (OUT/1417/recount and OUT/1417/matrices, or --recount and
   --matrices) after recount.require_passed.
 
-Where the files go. Every path of the commands is absolute and under <folder>, which rerun.check_rerun_dir refuses inside
-the repository or inside the Cell Ranger run folder of any library, and both commands run with <folder> as their working
-directory: cellranger count writes __<id>.mro into the directory it runs in (our observation, a --dry run on synthetic
-FASTQs). bamtofastq stops when <folder>/fastq exists; a command whose <folder>/<name>.json exists (written after exit
-status 0) is not run again. The FASTQs stay until someone trashes them (gio trash <folder>/fastq).
+Where the files go. Every path of the commands is absolute (rerun.rerun_commands resolves a relative --rerun) and what they
+write is under <folder>, which rerun.check_rerun_dir refuses inside the repository or inside the Cell Ranger run folder of
+any library, and both commands run with <folder> as their working directory: cellranger count writes __<id>.mro into the
+directory it runs in (our observation, a --dry run on synthetic FASTQs). bamtofastq stops when <folder>/fastq exists; a
+command whose <folder>/<name>.json exists (written after exit status 0) is not run again. The FASTQs stay until someone
+trashes them (gio trash <folder>/fastq).
 
 Disk, 2026-10-15: /data has 6.1 TB free (df -h /data), the BAM is 6.1 GB; FASTQs and working files are estimated at a few
 times that while it runs, with about 12 GB kept, the size of the original outs (design 3.11). Time and memory are not

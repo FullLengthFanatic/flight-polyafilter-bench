@@ -5,6 +5,7 @@ import importlib.util
 import json
 import shlex
 import sys
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -391,6 +392,19 @@ def test_commands_carry_the_values_of_the_original_run(tmp_path, monkeypatch):
     assert str(rerun.CELLRANGER) == "/home/simone.picelli/cellranger-9.0.1/cellranger"
     with pytest.raises(ValueError, match="must not be under"):
         rerun.rerun_commands(run, bam, ref, run / "rerun")
+
+
+def test_commands_hold_absolute_paths_when_given_relative_ones(tmp_path, monkeypatch):
+    # run_rerun runs both commands in the rerun folder, so a relative path would resolve below it a second time
+    monkeypatch.setattr(rerun, "LIBRARIES", {"X": tmp_path / "X_run" / "outs" / "possorted_genome_bam.bam"})
+    run, _ = _run_dir(tmp_path / "X_run"), _bam(tmp_path / "out" / "original" / "c375_l3_m2_i.bam")
+    monkeypatch.chdir(tmp_path)
+    b2f, count = rerun.rerun_commands(run, Path("out/original/c375_l3_m2_i.bam"), Path("ref"), Path("trial/c375_l3_m2_i"))
+    folder = tmp_path / "trial" / "c375_l3_m2_i"
+    assert b2f[2:] == [str(tmp_path / "out" / "original" / "c375_l3_m2_i.bam"), str(folder / "fastq")]
+    flags = dict(w[2:].split("=", 1) for w in count[2:])
+    assert (flags["transcriptome"], flags["fastqs"], flags["output-dir"]) == (
+        str(tmp_path / "ref"), str(folder / "fastq" / FOLDER), str(folder / "count"))
 
 
 def test_run_rerun_runs_both_commands_in_the_rerun_folder_and_skips_one_that_finished(tmp_path, monkeypatch):
