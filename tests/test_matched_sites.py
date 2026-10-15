@@ -163,6 +163,7 @@ def test_exon_coord_counts_collapsed_exon_bases_before_a_boundary():
     pos = np.array([900, 1050, 1100, 1150, 1200, 1250, 1400])
     assert _exon_coord(s, e, pos).tolist() == [0, 50, 100, 100, 100, 150, 200]
 
+
 def test_end_bin():
     d = np.array([0, 100, 101, -1, -100, -101, 300, 301, 1000, 1001, 5000, 5001, -5001, np.nan])
     assert end_bin(d).tolist() == ["0-100", "0-100", "101-300", "past 0-100", "past 0-100", "past 101-300", "101-300",
@@ -324,6 +325,7 @@ def test_downsampling_summary():
     assert s["share_all"]["mean"] == pytest.approx(share_all.mean())
     assert s["share_first"]["mean"] == pytest.approx(0.5) and s["share_second"]["lo"] == pytest.approx(np.percentile(
         [1, 0.5, 0.75, 0.25], 2.5))
+
 
 def test_same_site_check_reproduces_same_site(tmp_path):
     gtf = _gtf(tmp_path)

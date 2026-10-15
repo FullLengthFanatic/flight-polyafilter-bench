@@ -257,7 +257,7 @@ def match_sites(a, b, tol=SITE_TOL):
     return _mutual(*_coords(a, b), tol)
 
 
-def site_sets(sa, sb, genes, tol=SITE_TOL):
+def site_sets(sa, sb, genes):
     """The sites of genes in two site tables (site_table) in three sets: shared (the match_sites pairs), first_only and
     second_only. One row per pair or unmatched site, sorted by ref, strand and position: gene and FEATURES of the first
     table's site on shared rows, of the site itself on the others; n and usage (usage within the gene in each table) of each
@@ -265,7 +265,7 @@ def site_sets(sa, sb, genes, tol=SITE_TOL):
     a = sa[sa.gene.isin(genes)].reset_index(drop=True)
     b = sb[sb.gene.isin(genes)].reset_index(drop=True)
     ua, ub = usage(a), usage(b)
-    ia, ib = match_sites(a, b, tol)
+    ia, ib = match_sites(a, b)
     oa, ob = np.setdiff1d(np.arange(len(a)), ia), np.setdiff1d(np.arange(len(b)), ib)
 
     def block(name, t, k, own_usage, other_site, other_n, other_usage, first):
@@ -348,7 +348,7 @@ def downsampling_summary(draws):
             **{k: {"mean": float(v.mean()), **dict(zip(("lo", "hi"), interval(v)[:2]))} for k, v in cols.items()}}
 
 
-def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0, tol=SITE_TOL):
+def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0):
     """Set sizes of site_sets after drawing, in each gene of genes, as many of the second table's molecules as the first table
     has there (all of them where it has fewer), without replacement; draws draws from numpy.random.default_rng(seed). The
     second table's sites of a draw are those with a drawn molecule. One row per draw: draw, molecules (drawn), shared,
@@ -368,17 +368,17 @@ def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0, tol=SITE_TOL)
         drawn = order[np.arange(len(g)) - np.searchsorted(g, g) < target[g]]
         kept = np.zeros(len(b), bool)
         kept[site[drawn]] = True
-        n = len(_mutual(ca, cb[kept], tol)[0])
+        n = len(_mutual(ca, cb[kept], SITE_TOL)[0])
         out.append((k, len(drawn), n, len(a) - n, int(kept.sum()) - n))
     return pd.DataFrame(out, columns=["draw", "molecules", "shared", "first_only", "second_only"])
 
 
-def same_site_check(sa, sb, expected, tol=SITE_TOL):
+def same_site_check(sa, sb, expected):
     """Acceptance of stage 31: the one-way nearest match of same_site redone on two site tables (site_table, no gene filter)
     against expected, the rows of one pair of burden/same_site.parquet (label_a, label_b, n). It passes when the label-pair
     counts are equal, and with them the number of sites of the first table and of matched ones."""
     jb, d = _nearest(*_coords(sa, sb))
-    label_b = np.where((d <= tol) & (jb >= 0), sb.label.to_numpy(object)[np.maximum(jb, 0)], "none")
+    label_b = np.where((d <= SITE_TOL) & (jb >= 0), sb.label.to_numpy(object)[np.maximum(jb, 0)], "none")
     got = pd.DataFrame({"label_a": sa.label.to_numpy(object), "label_b": label_b}).groupby(["label_a", "label_b"]).size()
     want = expected.groupby(["label_a", "label_b"]).n.sum()
     want = want[want > 0]
