@@ -26,9 +26,11 @@ Writes under --out (default OUT/burden):
   (shared, first_only, second_only), n_a, n_b (labeled molecules at the site), usage_a, usage_b (the site's share of its
   gene's labeled molecules in that group, 0 on the side without a site), label, a20, hexamer, region, dist_end, dist_mode.
   On shared rows gene and site features are those of site_a; site_b lies within SITE_TOL nt of it.
-- matched_sites_summary.parquet: pair, set, feature, bin, sites, molecules (n_a + n_b) per bin of label, a_band, a_pos (an A
-  at position 1 to 20 after the site, from down20), hexamer, region and dist_bin (burden.end_bin: |dist_end| at
-  DIST_END_BINS, "past" when the site lies downstream of its nearest end); every bin kept, zeros included.
+- matched_sites_summary.parquet: pair, set, feature, bin, sites, molecules (n_a + n_b), molecules_a and molecules_b per bin
+  of label, a_band, a_pos (an A at position 1 to 20 after the site, from down20), hexamer, region and dist_bin
+  (burden.end_bin: |dist_end| at DIST_END_BINS, "past" when the site lies downstream of its nearest end); every bin kept,
+  zeros included. molecules mixes the two groups on shared rows (nuclei against cells: 37,308 nuclei and 166,274 cell
+  molecules at full depth), so a molecule-weighted comparison across the sets reads molecules_a or molecules_b.
 - matched_sites.json: groups, sites and molecules per group; per pair the shared genes, sites and molecules per set with the
   shares of shared sites (among all, the first group's and the second group's sites), the Spearman correlation of usage_a
   and usage_b over shared sites with the quartiles of log2(usage_a / usage_b) by label and region, and for nuclei_vs_cells

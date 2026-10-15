@@ -236,7 +236,7 @@ def test_three_sites_give_one_of_each_set(tmp_path):
 def test_set_summary(tmp_path):
     a, b = _pair_tables(tmp_path)
     s = set_summary(site_sets(a, b, ["gP", "gQ"]))
-    assert list(s.columns) == ["set", "feature", "bin", "sites", "molecules"]
+    assert list(s.columns) == ["set", "feature", "bin", "sites", "molecules", "molecules_a", "molecules_b"]
     assert list(dict.fromkeys(s.set)) == list(SETS)
     assert list(dict.fromkeys(s.feature)) == ["label", "a_band", "a_pos", "hexamer", "region", "dist_bin"]
     n_bins = 3 + len(A_BANDS) + 20 + 2 + len(REGION_NAMES) + len(END_BINS)
@@ -252,6 +252,11 @@ def test_set_summary(tmp_path):
     assert got[("shared", "dist_bin", "0-100")] == (1, 10) and got[("shared", "dist_bin", "101-300")] == (1, 4)
     assert got[("first_only", "label", "nontemplated")] == (1, 1) and got[("first_only", "a_pos", "3")] == (0, 0)
     assert got[("second_only", "a_band", "5-7")] == (1, 2) and got[("second_only", "region", "3UTR")] == (1, 2)
+    # each group's molecules: shared gP 4 and 6, gQ 2 and 2
+    each = {(r.set, r.feature, r.bin): (r.molecules_a, r.molecules_b) for r in s.itertuples()}
+    assert each[("shared", "label", "templated")] == (6, 8) and each[("shared", "a_band", "10-13")] == (4, 6)
+    assert each[("first_only", "region", "intron")] == (1, 0) and each[("second_only", "region", "3UTR")] == (0, 2)
+    assert (s.molecules == s.molecules_a + s.molecules_b).all()
     for st in SETS:
         sub = s[s.set == st]
         totals = sub[sub.feature != "a_pos"].groupby("feature")[["sites", "molecules"]].sum()
@@ -400,7 +405,7 @@ def test_stage31_end_to_end(tmp_path):
     same = m[m.pair == "1417_vs_1419"]
     assert same[["gene", "set"]].values.tolist() == [["gP", "shared"], ["gP", "first_only"], ["gM", "shared"]]
     s = pd.read_parquet(out / "matched_sites_summary.parquet")
-    assert list(s.columns) == ["pair", "set", "feature", "bin", "sites", "molecules"]
+    assert list(s.columns) == ["pair", "set", "feature", "bin", "sites", "molecules", "molecules_a", "molecules_b"]
     assert set(s.pair) == {"1417_vs_1419", "nuclei_vs_cells"}
     j = json.loads((out / "matched_sites.json").read_text())
     p = j["pairs"]["nuclei_vs_cells"]

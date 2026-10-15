@@ -289,9 +289,10 @@ def _onehot(values, bins):
 
 
 def set_summary(rows):
-    """Sites and molecules (n_a + n_b) per set (SETS), feature and bin of site_sets rows, every bin kept: label, a_band,
-    a_pos (bin k: an A at position k of the 20 nt after the site, down20), hexamer, region and dist_bin (end_bin)."""
-    mols = (rows.n_a + rows.n_b).to_numpy(np.int64)
+    """Sites and molecules (n_a + n_b, and molecules_a and molecules_b of each group) per set (SETS), feature and bin of
+    site_sets rows, every bin kept: label, a_band, a_pos (bin k: an A at position k of the 20 nt after the site, down20),
+    hexamer, region and dist_bin (end_bin)."""
+    n_a, n_b = rows.n_a.to_numpy(np.int64), rows.n_b.to_numpy(np.int64)
     a_at = np.frombuffer("".join(rows.down20.str.ljust(20, "N").str[:20]).encode(), np.uint8).reshape(-1, 20) == ord("A")
     features = {"label": (LABELS, _onehot(rows.label, LABELS)),
                 "a_band": (tuple(name for name, _, _ in A_BANDS), _onehot(rows.a_band, [name for name, _, _ in A_BANDS])),
@@ -304,8 +305,9 @@ def set_summary(rows):
         m = (rows.set == name).to_numpy()
         for feature, (bins, hit) in features.items():
             h = hit[m]
-            out += [(name, feature, b, int(n), int(w)) for b, n, w in zip(bins, h.sum(axis=0), mols[m] @ h)]
-    return pd.DataFrame(out, columns=["set", "feature", "bin", "sites", "molecules"])
+            out += [(name, feature, b, int(n), int(x + y), int(x), int(y))
+                    for b, n, x, y in zip(bins, h.sum(axis=0), n_a[m] @ h, n_b[m] @ h)]
+    return pd.DataFrame(out, columns=["set", "feature", "bin", "sites", "molecules", "molecules_a", "molecules_b"])
 
 
 def _quartiles(x):
