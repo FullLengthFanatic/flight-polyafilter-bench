@@ -4,6 +4,7 @@ import gzip
 import importlib.util
 import json
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -95,6 +96,15 @@ def test_equal_matrices_in_another_order_differ_nowhere():
                                     "umis_excess_rerun": 0, "entries_differing": 0, "molecules_only_ours": 1,
                                     "molecules_only_rerun": 1}]
     assert swap == {k: v for k, v in got.items() if k != "by_gene"}
+
+
+def test_above_rerun_diff_only_beyond_one_umi_in_a_thousand():
+    # design section 6: "more than 1 UMI in 1,000"
+    ours, one = _csr([[1000]]), (["AAAC-1"], [("g1", "G1")])
+    at = rerun.compare_matrices(ours, *one, _csr([[999]]), *one, ([0], []))
+    assert at["umis_differing_share"] == RERUN_DIFF and at["above_rerun_diff"] is False
+    beyond = rerun.compare_matrices(ours, *one, _csr([[1002]]), *one, ([], [0, 0]))
+    assert beyond["umis_differing_share"] > RERUN_DIFF and beyond["above_rerun_diff"] is True
 
 
 def test_cells_the_rerun_calls_among_the_original_called_cells():
@@ -273,6 +283,8 @@ def test_compare_reads_the_outs_by_string_and_writes_every_part_of_the_design(li
     got = rerun.compare("X", "tB", TAGS, outs, rec, mat, "filtered_feature_bc_matrix")
     assert got["matrix"] == "filtered_feature_bc_matrix" and got["cells_absent_from_rerun_matrix"] == ["AAAG-1", "AACA-1"]
     assert (got["entries_compared"], got["umis_rerun"], got["umis_excess_rerun"]) == (4, 4, 1)
+    # the molecules are those of all original cells whichever matrix: the rerun's AAAG g3 stays, though it does not call AAAG-1
+    assert got["molecules"] == mol
 
 
 # _cmdline and _invocation of the Cell Ranger run of 1417 (/data/element_runs/1417_HsRetina_D28_3k), copied
@@ -450,6 +462,24 @@ def test_run_rerun_runs_both_commands_in_the_rerun_folder_and_skips_one_that_fin
     assert set(rerun.run_rerun(cmds, folder)) == {"cellranger"} and [c[0] for c in calls] == [["cr", "count"]]
     calls.clear()
     assert rerun.run_rerun(cmds, folder) == {} and calls == []
+
+
+def test_a_command_that_fails_is_not_marked_done_and_runs_again(tmp_path, monkeypatch):
+    calls = []
+
+    def fake(cmd, log, cwd):
+        calls.append(cmd[0])
+        if calls == ["b2f", "cr"]:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(rerun, "run_command", fake)
+    folder = tmp_path / "rerun" / "t"
+    cmds = (["b2f"], ["cr"])
+    with pytest.raises(subprocess.CalledProcessError):
+        rerun.run_rerun(cmds, folder)
+    assert (folder / "bamtofastq.json").exists() and not (folder / "cellranger.json").exists()
+    assert set(rerun.run_rerun(cmds, folder)) == {"cellranger"} and calls == ["b2f", "cr", "cr"]
+    assert (folder / "cellranger.json").exists()
 
 
 def test_run_command_sends_the_output_to_the_log_and_stops_on_failure(tmp_path):
