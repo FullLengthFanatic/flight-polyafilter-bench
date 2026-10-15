@@ -86,12 +86,14 @@ def few_molecules(u, kinds=KINDS, min_n=MIN_STRATUM):
     return rows
 
 
-def acceptance(strata, metrics, lib, cap=MEMBER_CAP, cutoffs="8/4"):
-    """Design 3.5, Acceptance: per setting, level and stratum kind, tp + fn and tn + fp summed over the strata equal the
+def acceptance(strata, metrics, lib, tags, levels=LEVELS, kinds=KINDS, cap=MEMBER_CAP, cutoffs="8/4"):
+    """Design 3.5, Acceptance: for every tag, level and stratum kind, tp + fn and tn + fp summed over the strata equal the
     "all" stratum of metrics (stage 17's eval/metrics.parquet) at cap and cutoffs, and the sensitivity and specificity of
-    the sums equal its. Returns passed, the rows compared, the differing ones and the units per level."""
-    s = strata[strata.lib == lib].groupby(["tag", "level", "stratum_kind"], sort=True)[["tp", "fn", "tn", "fp"]].sum()
-    s = s.reset_index()
+    the sums equal its; a combination missing from either table differs. Returns passed, the combinations compared, the
+    differing ones and the units per level."""
+    keys = ["tag", "level", "stratum_kind"]
+    s = strata[strata.lib == lib].groupby(keys, sort=True)[["tp", "fn", "tn", "fp"]].sum()
+    s = s.reindex(pd.MultiIndex.from_product([sorted(tags), levels, kinds], names=keys)).reset_index()
     sens, spec, _ = rates(s.tp.to_numpy(), s.fn.to_numpy(), s.tn.to_numpy(), s.fp.to_numpy())
     s = s.assign(templated=s.tp + s.fn, nontemplated=s.tn + s.fp, sens=sens, spec=spec)
     m = metrics[(metrics.lib == lib) & (metrics.cap == cap) & (metrics.cutoffs == cutoffs) & (metrics.stratum_kind == "all")]
@@ -104,8 +106,8 @@ def acceptance(strata, metrics, lib, cap=MEMBER_CAP, cutoffs="8/4"):
         same &= (a == b) | (np.isnan(a) & np.isnan(b) & j.templated_m2.notna().to_numpy())
     keep = ["tag", "level", "stratum_kind"] + cols + [f"{c}_m2" for c in cols]
     differing = [{k: (None if pd.isna(v) else v) for k, v in r.items()} for r in j.loc[~same, keep].to_dict("records")]
-    first = s.drop_duplicates("level").set_index("level")
-    return {"passed": bool(same.all()) and len(j) > 0, "compared": len(j), "differing": differing,
+    first = s.dropna().drop_duplicates("level").set_index("level")
+    return {"passed": bool(same.all()), "compared": len(j), "differing": differing,
             "units": {lv: {"templated": int(r.templated), "nontemplated": int(r.nontemplated)} for lv, r in first.iterrows()}}
 
 

@@ -109,7 +109,7 @@ def main():
                                    "no_umi": {"no_gene": int((no_umi & no_gene).sum()),
                                               "gene_without_umi": int((no_umi & ~no_gene).sum())}},
                      "join": join_summary(join, mol, gene_ids), "few_molecules": few_molecules(u),
-                     "acceptance": acceptance(strata[-1], metrics, lib)}
+                     "acceptance": acceptance(strata[-1], metrics, lib, TAGS)}
         print(f"{lib}: {len(u.mols)} molecule units, {int(join.joined.sum())} of {len(join)} molecules joined, expression "
               f"bins at {bounds.tolist()} UMIs, acceptance {libs[lib]['acceptance']['passed']}", flush=True)
     args.out.mkdir(parents=True, exist_ok=True)
