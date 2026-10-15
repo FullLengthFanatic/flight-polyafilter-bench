@@ -7,6 +7,11 @@ Starts only after stage 24 passed (recount.require_passed with the recount and m
 expression under <analysis> (default: outs/analysis next to the library's BAM). Writes under <cells>: cells.parquet,
 clusters.parquet, marker_table.parquet, model.npz and classes.json (3.3, outputs), and for the review gate class_table.csv
 and marker_plot.png.
+
+Measured on 1417 on 2026-10-15 (5,571 cells, 10 Leiden seeds, under /usr/bin/time -v and memwatch, one process limited to
+1 thread per pool): 2 min 16 s and 2 min 3 s wall, at most 3.10 GiB resident (/usr/bin/time; memwatch 2.96 and 2.84 GiB),
+the two runs giving the same files byte for byte. Under cProfile the scrublet doublet score took 107 s of 164 s and the
+pipeline with UMAP 52 s.
 """
 import argparse
 import json
