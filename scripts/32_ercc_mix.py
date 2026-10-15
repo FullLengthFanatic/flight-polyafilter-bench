@@ -10,7 +10,8 @@ ercc_with_concentration of ercc.json). When the acceptance fails, the json and t
 exits non-zero. Stage 15 files are not rewritten.
 
 Measured on 2026-10-14 (/usr/bin/time -v): 1417 and 1419 each 2.1 s wall and 0.24 GiB resident, most of it the imports.
-pafbench.memwatch samples every 2 s, so for a run this short its peak is the first sample, taken before the imports.
+pafbench.memwatch samples at the start, before the imports, and then every 2 s, so for a run this short its peak depends on
+whether the run outlasts 2 s: 0.013 GiB at 2.01 s on 2026-10-14, 0.237 GiB at 2.18 and 2.34 s on 2026-10-15.
 """
 import argparse
 import json
