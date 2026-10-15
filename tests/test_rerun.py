@@ -502,10 +502,17 @@ def test_stage33_compares_when_the_outs_exist(tmp_path, monkeypatch, capsys, lib
     monkeypatch.setattr(sys, "argv", args + ["--outs", str(outs)])
     stage.main()
     assert asked == [("1417", rec, mat)] * 2
-    got = json.loads((trial / "compare.json").read_text())
+    # a tag other than the one of D8 does not take the place of the D8 comparison, compare.json
+    assert not (trial / "compare.json").exists()
+    got = json.loads((trial / "compare_tB.json").read_text())
     want = rerun.compare("1417", "tB", TAGS, outs, rec, mat)
     assert got.pop("seconds") >= 0 and want.pop("seconds") >= 0 and got == json.loads(json.dumps(want))
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert summary == {"library": "1417", "tag": "tB", "compare": str(trial / "compare.json"), "entries_compared": 5,
+    assert summary == {"library": "1417", "tag": "tB", "compare": str(trial / "compare_tB.json"), "entries_compared": 5,
                        "entries_differing": 4, "umis_only_ours": 2, "umis_only_rerun": 2, "above_rerun_diff": True,
                        "cells_called": {"original": 4, "rerun": 3, "both": 2}, "seconds": summary["seconds"]}
+    # at the tag of D8 the default is compare.json
+    monkeypatch.setattr(rerun, "compare", lambda lib, tag, tags, o, r, m: want | {"tag": tag})
+    monkeypatch.setattr(sys, "argv", ["33", "compare", "--rerun", str(trial), "--outs", str(outs)])
+    stage.main()
+    assert json.loads((trial / "compare.json").read_text())["tag"] == "c375_l3_m2_i"

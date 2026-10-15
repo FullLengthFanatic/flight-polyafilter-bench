@@ -11,8 +11,9 @@ run: prints the two commands of the rerun and, with --execute, runs them, each l
   status 0 (recount.original_bams).
 compare: once <folder>/count/outs exists (or --outs), its raw_feature_bc_matrix on the called cells of the original run,
   its filtered_feature_bc_matrix and molecule_info.h5 against our matrix at the tag (pafbench.rerun.compare), written to
-  <rerun>/compare.json (or --out). Reads the outputs of stage 24 (OUT/1417/recount and OUT/1417/matrices, or --recount and
-  --matrices) after recount.require_passed.
+  <rerun>/compare.json (or --out); at a --tag other than c375_l3_m2_i the default is <rerun>/compare_<tag>.json, so a check
+  at another setting does not take the place of the D8 comparison. Reads the outputs of stage 24 (OUT/1417/recount and
+  OUT/1417/matrices, or --recount and --matrices) after recount.require_passed.
 
 Where the files go. Every path of the commands is absolute (rerun.rerun_commands resolves a relative --rerun) and what they
 write is under <folder>, which rerun.check_rerun_dir refuses inside the repository or inside the Cell Ranger run folder of
@@ -59,7 +60,7 @@ def run(args, tag):
                       "free_bytes": free, "executed": args.execute, "seconds": seconds}))
 
 
-def compare(args):
+def compare(args, tag):
     t0 = time.monotonic()
     root = args.rerun or OUT / LIB / "rerun"
     outs = args.outs or root / args.tag / "count" / "outs"
@@ -68,7 +69,7 @@ def compare(args):
     if not (outs / "raw_feature_bc_matrix").is_dir():
         sys.exit(f"{outs}: no raw_feature_bc_matrix; run scripts/33_rerun.py run --execute first")
     got = rerun.compare(LIB, args.tag, res["settings"], outs, recount_dir, matrix_dir)
-    out = args.out or root / "compare.json"
+    out = args.out or root / ("compare.json" if args.tag == tag else f"compare_{args.tag}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(got, indent=1))
     keys = ("entries_compared", "entries_differing", "umis_only_ours", "umis_only_rerun", "above_rerun_diff")
@@ -91,12 +92,13 @@ def main():
     c.add_argument("--outs", type=Path, help="Cell Ranger outs of the rerun (default <rerun>/<tag>/count/outs)")
     c.add_argument("--recount", type=Path, help="recount directory of stage 24 (default OUT/1417/recount)")
     c.add_argument("--matrices", type=Path, help="matrices directory of stage 24 (default OUT/1417/matrices)")
-    c.add_argument("--out", type=Path, help="output json (default <rerun>/compare.json)")
+    c.add_argument("--out", type=Path,
+                   help=f"output json (default <rerun>/compare.json at {tag}, <rerun>/compare_<tag>.json at another tag)")
     args = ap.parse_args()
     if args.part == "run":
         run(args, tag)
     else:
-        compare(args)
+        compare(args, tag)
 
 
 if __name__ == "__main__":
