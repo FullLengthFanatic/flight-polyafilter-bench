@@ -39,7 +39,6 @@ tests/test_scanpy_stack.py, which checks the calls on a toy matrix):
   https://scanpy.readthedocs.io/en/stable/api/generated/scanpy.pp.scrublet.html
 """
 import json
-import time
 from collections import namedtuple
 from itertools import combinations
 from pathlib import Path
