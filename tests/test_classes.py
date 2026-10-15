@@ -298,6 +298,16 @@ def test_seed_stability_reports_the_lowest_jaccard_of_each_class_against_seed_0(
     assert s["n_clusters"] == {"0": 2, "1": 2, "2": 2}
 
 
+def test_seed_stability_jaccard_is_intersection_over_union_when_a_class_loses_and_gains_cells():
+    # at seed 1 rod cell 3 goes to the cone cluster and cone cell 4 to the rod cluster: rod is {0, 1, 2, 3} at seed 0 and
+    # {0, 1, 2, 4} at seed 1, 3 cells shared of 5 (intersection over the larger set would give 3 / 4)
+    scores = pd.DataFrame({"rod": [1, 1, 1, 1, 0, 0, 0, 0.0], "cone": [0, 0, 0, 0, 1, 1, 1, 1.0]})
+    labels = {0: np.array([0, 0, 0, 0, 1, 1, 1, 1]), 1: np.array([0, 0, 0, 1, 0, 1, 1, 1])}
+    s = seed_stability(labels, scores, 1.0)
+    assert s["classes"] == {"rod": {"cells": 4, "lowest_jaccard": 3 / 5, "seed": 1},
+                            "cone": {"cells": 4, "lowest_jaccard": 3 / 5, "seed": 1}}
+
+
 def test_rare_class_candidates_are_the_planted_microglia_cells(toy, trial):
     res = trial[3]
     rare = res.summary["rare_candidates"]
