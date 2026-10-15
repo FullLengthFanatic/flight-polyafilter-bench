@@ -452,6 +452,8 @@ It never changes labels, the chosen settings or the selection rule. If no axis f
 
 **Run time and memory.** Minutes; memory set by the 1179 table of counted molecules (7.8 GiB as arrays with every column; a join copies the key columns and the result, so two to three times that, 16 to 23 GiB, is our estimate until the first run under memwatch).
 
+**Note of 2026-10-15 (stage 28 as built).** The category of labeled molecules "whose only read is the pa read" holds the molecules none of whose reads lacks a pa tag (`end3_nonpa` -1, 3.1), so also a molecule with two pa reads and no other read: it has no base to measure either. The rule reads axis 4 in the stratum with one read without pa, where the category cannot occur. The table of counted molecules is read in batches of seven columns and never held whole: on the trial outputs of stages 24, 25 and 27, the three libraries in one process took 5 min 58 s and 4.11 GiB peak tree memory under memwatch, in place of the estimate above.
+
 ### 3.7 Stage 29: burden corrected for label purity, by region
 
 **Purpose.** Milestone 2 corrected the templated share for label purity per library only (0.896 to 0.871 in 1417, 0.887 to 0.859 in 1419, 0.497 to 0.409 in 1179, [M2] section 10). This stage does it per region, with intervals.

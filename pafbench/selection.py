@@ -5,9 +5,10 @@ Population: the molecules of called cells that the counting rule of stage 24 cou
 (eval/truth_to_counted.parquet of stage 27, joined): the join goes through the read group (cell, UMI, GX of a pa read), so
 the gene is GX, not our own gene. The pass's n_pa above 0 is a second definition of labeled, cross-tabulated with it.
 
-Five axes (AXES), each a table of category shares among labeled and among unlabeled molecules, and a record table by RE.
-An axis fires when a share differs by more than BIAS_POINTS points between the two groups (rule); what that decides is
-decision.
+Five axes (AXES), each a table of category shares among labeled and among unlabeled molecules (tally, axis_table), and a
+record table by RE (records_table). An axis fires when a share differs by more than BIAS_POINTS points between the two
+groups (rule); what that decides is decision. The templated share among counted molecules reweighted over the fired axes
+among 1, 2, 3 and 5 is reweight; the acceptance of 3.6 is acceptance.
 """
 from dataclasses import dataclass
 
