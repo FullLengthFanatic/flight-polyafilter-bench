@@ -43,6 +43,12 @@ def test_read_body_cuts_at_the_site_and_keeps_deletions_inside_a_block():
         body = read_body(long_read(blocks, site, minus), G - site if minus else site)
         assert body == ([(1050 - G, 1100 - G), (1200 - G, 1300 - G), (1400 - G, 1490 - G)] if minus
                         else [(1050, 1100), (1200, 1300), (1400, 1490)])
+    # the run starts the block after a CIGAR N: that N is the last intron of the body, which ends with an empty block at the site
+    blocks, site, _ = DESIGNED["run_after_annotated_junction"]
+    for minus in (False, True):
+        body = read_body(long_read(blocks, site, minus), G - site if minus else site)
+        assert body == ([(1250 - G, 1300 - G), (1400 - G, 1500 - G), (1600 - G, 1600 - G)] if minus
+                        else [(1250, 1300), (1400, 1500), (1600, 1600)])
     # every aligned base in the run: no body
     a = long_read([(1050, 1090)], 1050)
     assert terminal_a_run(a)[0] == 1050 and read_body(a, 1050) == []

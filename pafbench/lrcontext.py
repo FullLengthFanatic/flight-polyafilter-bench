@@ -160,7 +160,9 @@ def load_models(gtf, refs=None):
 def read_body(a, site):
     """Aligned blocks of a read up to its site (the start of the terminal A run, bd67.terminal_a_run), in transcript
     sense; [] when every aligned base belongs to the run. A CIGAR N separates two blocks and a deletion stays inside its
-    block (our convention)."""
+    block (our convention). When the run starts at the first base of a block after a CIGAR N, that N ends at the site
+    and is the last intron of the read (design 3.8 step 1: the introns of the read are its CIGAR N operations): the body
+    then ends with the empty block (site, site), so that its end is the base before the site, as for every read."""
     blocks, pos, start = [], a.reference_start, None
     for op, n in a.cigartuples:
         if op in (0, 2, 7, 8):
@@ -175,8 +177,11 @@ def read_body(a, site):
     if start is not None:
         blocks.append((start, pos))
     if a.is_reverse:
-        return [(-e, -max(s, site)) for s, e in reversed(blocks) if e > site]
-    return [(s, min(e, site)) for s, e in blocks if s < site]
+        blocks, site = [(-e, -s) for s, e in reversed(blocks)], -site
+    body = [(s, min(e, site)) for s, e in blocks if s < site]
+    if any(s == site for s, _ in blocks[1:]):     # every block but the first follows a CIGAR N
+        body.append((site, site))
+    return body
 
 
 def _klass(t, p, spliced):

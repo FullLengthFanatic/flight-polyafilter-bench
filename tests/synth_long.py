@@ -64,6 +64,12 @@ DESIGNED = {
     # the terminal A run crosses the last junction: the body ends at 1490 and has two introns
     "run_across_junction": ([(1050, 1100), (1200, 1300), (1400, 1500), (1600, 1612)], 1490,
                             ctx("CDS", "TA", 2, complete_5p=True, covers_start=True)),
+    # the run starts the block after a CIGAR N: that N ends at the site and is the last intron of the read, and the end is
+    # the base before the site, as for every read. This N is novel and joins a block outside every transcript span to the
+    # intron of TS, TL and TN, the region of the site; without it the body lies in no span of either strand
+    "run_after_novel_junction": ([(2200, 2300), (3300, 3312)], 3300, ctx(NJ, sub_cause=NEITHER)),
+    # this N is the last intron of TA, so the end lies in that intron
+    "run_after_annotated_junction": ([(1250, 1300), (1400, 1500), (1600, 1612)], 1600, ctx("intron_after_junction", "TA", 2)),
     # TA, TB and TC have 40 exonic nt each and none ends here: the nearest annotated 3' end (TC, 1900) decides
     "unspliced_nearest_end": ([(1410, 1462)], 1450, ctx("ncexon", "TC", other_class=True)),
     # the reads of the prototype's self-test for the placement by the 3' part. The first one starts 20 nt from the 5' end

@@ -499,7 +499,7 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
                 v: {"sites": len(acc), "reads": n_reads} for v in ("placed", "strict")}
         # placed: 2 x 6 reads keep their class; strict: they are novel junction reads
         by = lambda v: summary[summary.version == v].groupby("context").reads.sum()
-        assert by("strict")[NJ] - by("placed")[NJ] == 12 and by("placed")[NJ] == 6
+        assert by("strict")[NJ] - by("placed")[NJ] == 12 and by("placed")[NJ] == 8
         assert by("placed")[AS] == 4 and by("placed")[IG] == 3
         assert set(region.region) == set(acc.region) and "intron" in set(acc.region)
         no_model = pd.read_parquet(d / "sites_no_model.parquet")
@@ -511,9 +511,10 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
             [("+", 1800, "novel_junction", "near_annotated_intron"), ("-", G - 1800, "novel_junction", "near_annotated_intron"),
              ("+", 8080, "antisense", ""), ("-", G - 8080, "antisense", ""), ("+", 8400, "antisense", ""),
              ("-", G - 8400, "antisense", ""), ("+", 5080, "intergenic", ""), ("-", G - 5080, "intergenic", ""),
-             ("+", 180, "intergenic", "")])
+             ("+", 180, "intergenic", ""), ("+", 3300, "novel_junction", "neither_site"),
+             ("-", G - 3300, "novel_junction", "neither_site")])
         merged = no_model.merge(sites, on=["ref", "strand", "site"], suffixes=("", "_s"))
-        assert (merged.region == merged.region_s).all() and (merged.label == merged.label_s).all() and len(merged) == 9
+        assert (merged.region == merged.region_s).all() and (merged.label == merged.label_s).all() and len(merged) == 11
         j = json.loads((d / "isoform_context.json").read_text())
         assert j["library"] == lib and j["refs"] == ["chrS", "chrE", "chrA"]
         assert j["accepted_reads"] == n_reads and j["sites"] == len(acc)
@@ -523,7 +524,7 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
                                    "NULL_SHIFT": 1000}
         assert j["acceptance"] == {"sites_and_accepted_reads_equal_stage16": True, "one_class_per_accepted_read": True,
                                    "intron_sites_off_model": 0}
-        assert j["placed"]["reads_by_class"][NJ] == 6 and j["strict"]["reads_by_class"][NJ] == 18
+        assert j["placed"]["reads_by_class"][NJ] == 8 and j["strict"]["reads_by_class"][NJ] == 20
         assert j["flagged_reads"]["chain_novel"] == 12
         assert j["per_ref"]["chrE"]["records"] == 0 and j["per_ref"]["chrS"]["seconds"] > 0
         # link to 1179: the molecules on the scanned references; 1340 is 10 nt from the site 1330, 1341 is 11 nt from it
@@ -552,20 +553,20 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         assert sum(v["without_splice"] for v in per_label.values()) == n_reads - n_spliced
         assert j["tecap"]["json_bytes"] == (d / "tecap" / "out" / f"{lib}_terminal_exon.json").stat().st_size
         assert j["tecap"]["sites_with_a_classified_read"] == buckets[["strand", "site"]].drop_duplicates().shape[0]
-        # top class a no_model reason: the nine sites of sites_no_model.parquet; strict, also the two sites at 1900, where both
+        # top class a no_model reason: the eleven sites of sites_no_model.parquet; strict, also the two sites at 1900, where both
         # reads are chain_novel, and the two at 1470, where the one read is (at 1550 one of two is, and the tie stays with
         # intron_after_junction)
         # tied, with a top class that holds half of the reads: placed, the two sites at 1900 (annotated_end and 3UTR, both reads
         # chain_novel, so the top class rests on chain_novel reads alone, as at 1470); strict, the two at 1550. The sites of the
-        # region intron are those at 1330 and 1550, none with a no_model top class
+        # region intron are those at 1330, 1550, 1600 and 3300; at 3300 the top class is novel junction
         link = {k: {x: j["vs_1179"][k][x] for x in ("share_matched_by_label", "agreement")} for k in ("real", "null")}
-        assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "reads_novel_junction": {"placed": 6, "strict": 18},
-                                "sites_top_no_model": {"placed": 9, "strict": 13},
-                                "intron_sites": 4, "intron_sites_top_no_model": {"placed": 0, "strict": 0},
+        assert printed[lib] == {"accepted_reads": n_reads, "sites": len(acc), "reads_novel_junction": {"placed": 8, "strict": 20},
+                                "sites_top_no_model": {"placed": 11, "strict": 15},
+                                "intron_sites": 8, "intron_sites_top_no_model": {"placed": 2, "strict": 2},
                                 "sites_tied": {"placed": 2, "strict": 2},
                                 "sites_top_share_at_most_half": {"placed": 2, "strict": 2},
                                 "sites_top_class_on_chain_novel_only": 4, "vs_1179": link, "tecap": per_label}
-        assert (acc.region == "intron").sum() == 4
+        assert (acc.region == "intron").sum() == 8
         assert at("+", 1900).context_without_chain_novel == NJ
         assert at("+", 1550).context_without_chain_novel == "intron_after_junction"
     # pigeon cross-check, BD70 only: ends at +1805 (5 nt from the site 1800), +1811 (11 nt), chrE (no site) and, on minus,
