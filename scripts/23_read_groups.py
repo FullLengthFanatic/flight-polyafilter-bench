@@ -32,7 +32,11 @@ got 100%, the BAM in the page cache: chr1 745 s, chr11 728 s, 63,000 to 68,000 r
 same bytes each time. Stage 13 took 740 s wall on chr1 (its docstring, which does not say where the BAM came from): on
 1179 this stage is not faster than stage 13, as it is on 1417.
 
-Not measured: a whole library at 8 workers. Estimates for 1179: 23 to 29 min wall, the 1,381 s of stage 13 scaled by
+1417 in full with 8 workers (2026-10-13, for the trial of stage 24; no file system inputs, the BAM in the page cache):
+83.1M records on 116 references, 23,158,211 read groups from 33,029,367 records, 230 s wall, 2.61 GiB in the largest
+process, and 13.8 GiB as the peak of the resident sizes summed over the process tree (pafbench.memwatch).
+
+Not measured: 1179 in full. Estimates for it: 23 to 29 min wall, the 1,381 s of stage 13 scaled by
 chr1 alone (745 s from the cache, 932 s from disk, against 740 s), where the design expected 19 to 23 min; at most
 8 x 3.97 = 31.8 GiB as a sum of worker peaks, reached only if eight workers peaked like chr11 at the same moment, where
 the design expected at most 2.7 GiB per worker.
