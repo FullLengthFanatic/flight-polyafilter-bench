@@ -257,6 +257,11 @@ def _mutual(ca, cb, tol):
     return ia.astype(np.int64), jb[ia]
 
 
+def _near(ca, cb):
+    """Number of coordinates of ca, and of cb, within SITE_TOL nt of one of the other."""
+    return int((_nearest(ca, cb)[1] <= SITE_TOL).sum()), int((_nearest(cb, ca)[1] <= SITE_TOL).sum())
+
+
 def match_sites(a, b, tol=SITE_TOL):
     """Sites of a and b (ref, strand, site) that are each other's nearest on the same ref and strand (equal distance: the
     lower coordinate) and at most tol nt apart, as positional indices (ia ascending, ib). match_sites(b, a) gives the same
@@ -342,17 +347,23 @@ def set_shares(c):
 
 
 def set_counts(rows):
-    """Sites and molecules of each group per set of site_sets rows, and their set_shares."""
+    """Sites and molecules of each group per set of site_sets rows, and their set_shares. near (first_only and second_only):
+    the sites of the set within SITE_TOL nt of a site of the other group, left unpaired because the match is one to one."""
     out = {}
     for name in SETS:
         m = rows.set == name
         out[name] = {"sites": int(m.sum()), "molecules_first": int(rows.n_a[m].sum()), "molecules_second": int(rows.n_b[m].sum())}
+    near = _near(*_coords(*(rows[rows[c].notna()].assign(site=rows[c]) for c in ("site_a", "site_b"))))
+    for name, n in zip(SETS[1:], near):
+        out[name]["near"] = n - out["shared"]["sites"]
     return out | {"shares": {k: float(v) for k, v in set_shares({k: out[k]["sites"] for k in SETS}).items()}}
 
 
 def downsampling_summary(draws):
-    """Mean and 95% range (evaluate.interval) over the draws of downsample_sets of each set size and of set_shares."""
-    cols = {k: draws[k].to_numpy(np.float64) for k in SETS} | {f"share_{k}": v for k, v in set_shares(draws).items()}
+    """Mean and 95% range (evaluate.interval) over the draws of downsample_sets of each set size, of the unpaired sites near
+    the other group and of set_shares."""
+    cols = {k: draws[k].to_numpy(np.float64) for k in SETS + ("first_only_near", "second_only_near")}
+    cols |= {f"share_{k}": v for k, v in set_shares(draws).items()}
     return {"draws": len(draws), "molecules": int(draws.molecules.iloc[0]),
             **{k: {"mean": float(v.mean()), **dict(zip(("lo", "hi"), interval(v)[:2]))} for k, v in cols.items()}}
 
@@ -361,7 +372,7 @@ def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0):
     """Set sizes of site_sets after drawing, in each gene of genes, as many of the second table's molecules as the first table
     has there (all of them where it has fewer), without replacement; draws draws from numpy.random.default_rng(seed). The
     second table's sites of a draw are those with a drawn molecule. One row per draw: draw, molecules (drawn), shared,
-    first_only, second_only."""
+    first_only, second_only, and first_only_near and second_only_near (set_counts' near)."""
     a = sa[sa.gene.isin(genes)].reset_index(drop=True)
     b = sb[sb.gene.isin(genes)].reset_index(drop=True)
     ca, cb = _coords(a, b)
@@ -378,8 +389,10 @@ def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0):
         kept = np.zeros(len(b), bool)
         kept[site[drawn]] = True
         n = len(_mutual(ca, cb[kept], SITE_TOL)[0])
-        out.append((k, len(drawn), n, len(a) - n, int(kept.sum()) - n))
-    return pd.DataFrame(out, columns=["draw", "molecules", "shared", "first_only", "second_only"])
+        near_a, near_b = _near(ca, cb[kept])
+        out.append((k, len(drawn), n, len(a) - n, int(kept.sum()) - n, near_a - n, near_b - n))
+    return pd.DataFrame(out, columns=["draw", "molecules", "shared", "first_only", "second_only", "first_only_near",
+                                      "second_only_near"])
 
 
 def same_site_check(sa, sb, expected):

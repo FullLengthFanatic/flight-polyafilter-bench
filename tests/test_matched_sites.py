@@ -324,8 +324,10 @@ def _depth_tables():
 def test_downsample_sets_keeps_the_first_group_count_per_gene_and_is_seeded():
     a, b = _depth_tables()
     d = downsample_sets(a, b, ["g1", "g2"], draws=40, seed=1)
-    assert list(d.columns) == ["draw", "molecules", "shared", "first_only", "second_only"] and d.draw.tolist() == list(range(40))
-    assert (d.molecules == 3 + 3).all()
+    assert list(d.columns)[:7] == ["draw", "molecules", "shared", "first_only", "second_only", "first_only_near", "second_only_near"]
+    assert d.draw.tolist() == list(range(40)) and (d.molecules == 3 + 3).all()
+    # no unpaired site lies within 5 nt of a site of the other group: 1050 is the nearest second-group site to 1000 after 1002
+    assert (d.first_only_near == 0).all() and (d.second_only_near == 0).all()
     # g1: 3 of its 12 cell molecules per draw, each at its own site; g2: both sites kept (3 molecules, fewer than 5)
     assert ((d.shared + d.second_only) == 3 + 2).all()
     assert (d.shared + d.first_only == 2).all()
@@ -343,16 +345,53 @@ def test_set_counts_and_shares(tmp_path):
     a, b = _pair_tables(tmp_path)
     c = set_counts(site_sets(a, b, ["gP", "gQ"]))
     assert c == {"shared": {"sites": 2, "molecules_first": 6, "molecules_second": 8},
-                 "first_only": {"sites": 1, "molecules_first": 1, "molecules_second": 0},
-                 "second_only": {"sites": 1, "molecules_first": 0, "molecules_second": 2},
+                 "first_only": {"sites": 1, "molecules_first": 1, "molecules_second": 0, "near": 0},
+                 "second_only": {"sites": 1, "molecules_first": 0, "molecules_second": 2, "near": 0},
                  "shares": {"all": 0.5, "first": 2 / 3, "second": 2 / 3}}
+
+
+def _near_tables(tmp_path):
+    """gP, first group 1050, 1060, 1064 and 1150 (3 molecules each), second 1048, 1053, 1063 and 1280 (6 molecules in all).
+    Pairs 1050 with 1048 and 1064 with 1063; 1060 (nearest 1063) and 1053 (nearest 1050) are left unpaired within 3 nt of a
+    site of the other group, 1150 and 1280 far from any."""
+    gtf = _gtf(tmp_path)
+    exons, ends = load_collapsed_exons(gtf), gene_ends(gtf)
+    a = site_table(_mols([("chr1", "+", x, "gP", 3, 12, "CDS") for x in (1050, 1060, 1064, 1150)]), exons, ends)
+    b = site_table(_mols([("chr1", "+", x, "gP", n, a20, "CDS")
+                          for x, n, a20 in ((1048, 1, 12), (1053, 2, 2), (1063, 1, 6), (1280, 2, 12))]), exons, ends)
+    return a, b
+
+
+def test_set_counts_count_unpaired_sites_near_the_other_group(tmp_path):
+    a, b = _near_tables(tmp_path)
+    r = site_sets(a, b, ["gP"])
+    assert r[r.set == "shared"][["site_a", "site_b"]].astype(int).values.tolist() == [[1050, 1048], [1064, 1063]]
+    c = set_counts(r)
+    assert [c[k]["sites"] for k in SETS] == [2, 2, 2] and c["first_only"]["near"] == 1 and c["second_only"]["near"] == 1
+    assert "near" not in c["shared"]
+    # the other way round the counts swap
+    c = set_counts(site_sets(b, a, ["gP"]))
+    assert c["first_only"]["near"] == 1 and c["second_only"]["near"] == 1
+
+
+def test_downsample_sets_without_downsampling_equal_the_full_depth_sets(tmp_path):
+    a, b = _near_tables(tmp_path)
+    d = downsample_sets(a, b, ["gP"], draws=3, seed=1)
+    c = set_counts(site_sets(a, b, ["gP"]))
+    # the second group has fewer molecules (6 against 12): every draw keeps all of them
+    assert (d.molecules == 6).all()
+    assert d[["shared", "first_only", "second_only", "first_only_near", "second_only_near"]].values.tolist() == [
+        [c["shared"]["sites"], c["first_only"]["sites"], c["second_only"]["sites"], c["first_only"]["near"],
+         c["second_only"]["near"]]] * 3
 
 
 def test_downsampling_summary():
     d = pd.DataFrame({"draw": range(4), "molecules": 9, "shared": [1, 2, 3, 2], "first_only": [3, 2, 1, 2],
-                      "second_only": [0, 2, 1, 6]})
+                      "second_only": [0, 2, 1, 6], "first_only_near": [0, 1, 0, 1], "second_only_near": [0, 0, 1, 3]})
     s = downsampling_summary(d)
-    assert list(s) == ["draws", "molecules", "shared", "first_only", "second_only", "share_all", "share_first", "share_second"]
+    assert list(s) == ["draws", "molecules", "shared", "first_only", "second_only", "first_only_near", "second_only_near",
+                       "share_all", "share_first", "share_second"]
+    assert s["first_only_near"]["mean"] == 0.5 and s["second_only_near"]["hi"] == pytest.approx(np.percentile([0, 0, 1, 3], 97.5))
     assert s["draws"] == 4 and s["molecules"] == 9
     assert s["shared"] == {"mean": 2.0, "lo": pytest.approx(np.percentile([1, 2, 3, 2], 2.5)),
                            "hi": pytest.approx(np.percentile([1, 2, 3, 2], 97.5))}
@@ -441,14 +480,16 @@ def test_stage31_end_to_end(tmp_path):
     p = j["pairs"]["nuclei_vs_cells"]
     assert (p["first"], p["second"], p["shared_genes"]) == ("nuclei", "cells", 2)
     assert p["sets"] == {"shared": {"sites": 2, "molecules_first": 55, "molecules_second": 80},
-                         "first_only": {"sites": 2, "molecules_first": 25, "molecules_second": 0},
-                         "second_only": {"sites": 1, "molecules_first": 0, "molecules_second": 30},
+                         "first_only": {"sites": 2, "molecules_first": 25, "molecules_second": 0, "near": 1},
+                         "second_only": {"sites": 1, "molecules_first": 0, "molecules_second": 30, "near": 0},
                          "shares": {"all": 0.4, "first": 0.5, "second": 2 / 3}}
     assert p["usage"]["n"] == 2 and p["usage"]["spearman_rho"] == pytest.approx(-1.0)
     # cells of gP drawn to the 40 of the nuclei, gM kept whole (20 against 40); 2250 with 2250 in every draw
     ds = p["downsampling"]
     assert ds["draws"] == DOWNSAMPLE_DRAWS and ds["seed"] == 0 and ds["molecules"] == 60
     assert ds["shared"]["lo"] >= 1 and ds["second_only"]["hi"] <= 1 and ds["first_only"]["lo"] >= 2
+    # 2253 (1419) is unpaired 3 nt from the cell site 2250 in every draw
+    assert ds["first_only_near"] == {"mean": 1.0, "lo": 1.0, "hi": 1.0} and ds["second_only_near"]["hi"] == 0
     assert j["acceptance"]["pass"] is True
     # one way, without the gene filter: 2253 matches 2250 and the intergenic 900 matches 904
     assert j["acceptance"]["nuclei_vs_cells"]["sites_a"] == 6 and j["acceptance"]["nuclei_vs_cells"]["matched"] == 5

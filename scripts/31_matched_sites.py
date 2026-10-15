@@ -21,7 +21,11 @@ transcript on the strand), so a site can be in a CDS of another gene and introni
 Shared genes: at least MIN_GENE labeled molecules in both groups (the threshold of burden.same_gene). Within them each pair
 of sites that are each other's nearest on the same ref and strand within SITE_TOL nt is shared (burden.match_sites); the
 other sites are first_only or second_only. Our observation on 2026-10-14: no shared pair has sites of two genes (0 of
-18,209 nuclei against cells, 0 of 4,076 for 1417 against 1419).
+18,209 nuclei against cells, 0 of 4,076 for 1417 against 1419). The match is one to one: where two sites of one group lie
+within SITE_TOL nt of one site of the other, one of them pairs and the other stays unpaired. first_only and second_only
+therefore mean unpaired, not absent from the other group; matched_sites.json counts the unpaired sites within SITE_TOL nt of
+a site of the other group as near (2026-10-15, nuclei against cells: 8,245 of 99,002 cells-only and 2,041 of 58,575
+nuclei-only sites; 1417 against 1419: 706 of 23,395 and 621 of 20,531; review S31-2).
 
 Writes under --out (default OUT/burden):
 - matched_sites.parquet: one row per shared pair or unmatched site of a shared gene, both pairs (pair 1417_vs_1419 and
@@ -34,12 +38,13 @@ Writes under --out (default OUT/burden):
   (burden.end_bin: |dist_end| at DIST_END_BINS, "past" when the site lies downstream of its nearest end); every bin kept,
   zeros included. molecules mixes the two groups on shared rows (nuclei against cells: 37,308 nuclei and 166,274 cell
   molecules at full depth), so a molecule-weighted comparison across the sets reads molecules_a or molecules_b.
-- matched_sites.json: groups, sites and molecules per group; per pair the shared genes, sites and molecules per set with the
-  shares of shared sites (among all, the first group's and the second group's sites), the Spearman correlation of usage_a
+- matched_sites.json: groups, sites and molecules per group; per pair the shared genes, sites and molecules per set (with
+  near for first_only and second_only) with the shares of shared sites (among all, the first group's and the second group's
+  sites), the Spearman correlation of usage_a
   and usage_b over shared sites with the quartiles of log2(usage_a / usage_b) by label and region, and for nuclei_vs_cells
   the downsampling: the cell molecules of each shared gene drawn without replacement to the nuclei count (all of them where
-  the cells have fewer), DOWNSAMPLE_DRAWS draws from numpy.random.default_rng(SEED), mean and 95% range of each set size
-  and share; the acceptance.
+  the cells have fewer), DOWNSAMPLE_DRAWS draws from numpy.random.default_rng(SEED), mean and 95% range of each set size,
+  of near and of each share; the acceptance.
 
 Acceptance (burden.same_site_check): on the site tables without the gene filter, the one-way nearest match of
 burden.same_site reproduces every label-pair count of <base>/burden/same_site.parquet. When it does not, the outputs are
