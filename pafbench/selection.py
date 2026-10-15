@@ -305,8 +305,9 @@ def gene_table(gene_ids, gene_names, umis, labeled, lib, min_umis=MIN_STRATUM, t
     with at least min_umis UMIs; on equal distance the gene with more UMIs first, then the gene id."""
     umis, labeled = np.asarray(umis, np.int64), np.asarray(labeled, np.int64)
     keep = umis > 0
-    t = pd.DataFrame({"lib": lib, "gene_id": np.asarray(gene_ids, object)[keep], "gene_name": np.asarray(gene_names, object)[keep],
-                      "umis": umis[keep], "labeled": labeled[keep], "labeled_fraction": labeled[keep] / umis[keep], "top": ""})
+    t = pd.DataFrame({"lib": lib, "gene_id": np.asarray(gene_ids, object)[keep],
+                      "gene_name": np.asarray(gene_names, object)[keep], "umis": umis[keep], "labeled": labeled[keep],
+                      "labeled_fraction": labeled[keep] / umis[keep], "top": ""})
     d = t.labeled_fraction - labeled.sum() / umis.sum()
     ranked = t.assign(d=d)[t.umis >= min_umis]
     for name, side, up in (("above", ranked.d > 0, False), ("below", ranked.d < 0, True)):
@@ -327,7 +328,8 @@ def acceptance(t, keys, m0_sum, gene_umis, join, n_called, records, stage13):
     genes_differing = int((t.by_gene.sum(axis=(1, 2, 3)) != np.asarray(gene_umis)).sum())
     mol = {"labeled": int(lab[1]), "unlabeled": int(lab[0]), "m0_sum": int(m0_sum), "joined_keys": len(keys),
            "genes_differing": genes_differing}
-    mol["passed"] = mol["labeled"] + mol["unlabeled"] == mol["m0_sum"] and mol["joined_keys"] == mol["labeled"] and not genes_differing
+    mol["passed"] = (mol["labeled"] + mol["unlabeled"] == mol["m0_sum"] and mol["joined_keys"] == mol["labeled"]
+                     and not genes_differing)
     joined = int(join.joined.sum())
     truth = {"joined": joined, "not_joined": len(join) - joined, "labeled_in_called_cells": int(n_called)}
     truth["passed"] = len(join) == truth["labeled_in_called_cells"]
@@ -375,7 +377,8 @@ def reweight(counted, labeled, axes, n_boot=1000, seed=0, min_n=POOL_MIN):
     of the unlabeled ones. Pooling: pool on the category of the first axis. Interval: gene bootstrap (n_boot resamples of
     evaluate.resample_counts from seed over the genes of counted and labeled), the counted and labeled molecules of a drawn
     gene drawn together and the weights recomputed in every resample over the pooled strata; a resample in which a pooled
-    stratum with counted molecules has no labeled one has no value and is left out (evaluate.interval, n_finite).
+    stratum with counted molecules has no labeled one has no value and is left out (evaluate.interval, n_finite); so has the
+    share itself, NaN, when a pooled stratum of the full data has none.
     strata: strata with counted molecules; strata_small: of them with fewer than min_n labeled; strata_pooled and
     pooled_share: the small ones merged with another stratum, and their share of the counted molecules; strata_final:
     strata after pooling."""
@@ -402,6 +405,6 @@ def reweight(counted, labeled, axes, n_boot=1000, seed=0, min_n=POOL_MIN):
     lo, hi, finite = interval(_reweighted(W @ Ng, W @ ng, W @ tg))
     share = float(_reweighted(Ng.sum(axis=0), ng.sum(axis=0), tg.sum(axis=0)))
     return {"axes": cols, "share_counted_unweighted": float(templated.mean()),
-            "share_counted_reweighted": None if np.isnan(share) else share, "lo": lo, "hi": hi, "n_boot": n_boot,
+            "share_counted_reweighted": share, "lo": lo, "hi": hi, "n_boot": n_boot,
             "n_finite": finite, "strata": n_strata, "strata_small": int((n < min_n).sum()), "strata_pooled": int(merged.sum()),
             "pooled_share": float(N[merged].sum() / N.sum()), "strata_final": F}

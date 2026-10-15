@@ -1,22 +1,30 @@
 """Stage 28 (pafbench.selection): selection bias, labeled against unlabeled molecules, on synthetic tables and on the
 synthetic 10x library of tests/synth.build_10x."""
+import importlib.util
+import json
+import shutil
+import sys
+
 import numpy as np
 import pandas as pd
-import pytest
-
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
+from pafbench import recount
 from pafbench.burden import END_BINS, _exon_coord, end_bin, end_distances, gene_ends
-from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, POOL_MIN
+from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, POOL_MIN, REPO
 from pafbench.evaluate import resample_counts
 from pafbench.exons import load_collapsed_exons
 from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS, RECORD_COLUMNS,
-                                REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end, end_index, exon_coord,
-                                expr_bins_counted, gene_strands, gene_table, labeled_keys, pool, position_codes,
+                                REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end, end_index,
+                                exon_coord, expr_bins_counted, gene_strands, gene_table, labeled_keys, pool, position_codes,
                                 records_table, reweight, rule, tally)
-from pafbench.strata import expr_bins
+from pafbench.strata import JOIN_COLUMNS, cell_classes, expr_bins, join_counted
+from tests.synth import CELLS_10X
 from tests.test_matched_sites import GTF, _gtf
+from tests.test_recount import stage13, stage24  # noqa: F401  (fixtures: stage 24 on the synthetic 10x library)
+from tests.test_strata import _stage27_tree
 
 # gL on chr3 plus: collapsed exons [1000, 2000) and [9000, 10000), one end at 10000; for the two widest bins
 LONG = [("chr3", "transcript", 1001, 10000, "+", 'gene_id "gL"; transcript_id "t8";'),
@@ -277,7 +285,7 @@ def test_records_table_sets_labeled_molecules_against_records_and_duplicate_free
     assert t.share_records.tolist() == pytest.approx([0.3, 0.6, 0.1])
     assert t.share_units.tolist() == pytest.approx([200 / 680, 400 / 680, 80 / 680])
     assert t.diff_points_records.tolist() == pytest.approx([0, 0, 0])
-    assert t.diff_points_units.tolist() == pytest.approx([100 * (0.3 - 200 / 680), 100 * (0.6 - 400 / 680), 100 * (0.1 - 80 / 680)])
+    assert t.diff_points_units.tolist() == pytest.approx([100 * (x - u / 680) for x, u in ((0.3, 200), (0.6, 400), (0.1, 80))])
     # units per read group with a record of that RE, printed next to the table; RE I is in no read group
     assert t.units_rg.tolist() == [140, 300, 0] and t.read_groups.tolist() == [120, 280, 0]
     assert t.units_per_read_group.tolist()[:2] == pytest.approx([140 / 120, 300 / 280]) and np.isnan(t.units_per_read_group[2])
@@ -419,3 +427,113 @@ def test_reweight_pools_on_the_first_fired_axis_in_the_merge_order():
     assert r["pooled_share"] == pytest.approx(500 / 1000)
     # E pooled: 900 of 1,000 counted molecules, 35 of 55 labeled templated; N: 0 of 35
     assert r["share_counted_reweighted"] == pytest.approx(0.9 * 35 / 55)
+
+
+def _stage28():
+    spec = importlib.util.spec_from_file_location("stage28", REPO / "scripts" / "28_selection_bias.py")
+    stage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage)
+    return stage
+
+
+def _stage28_tree(s, d, root):
+    """What stage 28 reads for the synthetic library X next to the outputs of stage 24 in d: stage 27's tree (truth tables,
+    classes) with the RE of each molecule's pa read and stage 13's cell_counts, and eval/truth_to_counted.parquet from
+    stage 27's join. Returns (base, cells template, eval folder, molecules of called cells, the join)."""
+    base, cells, mol, tr, _ = _stage27_tree(s, d, root)
+    rec = s.reads.assign(qname=s.reads.qname.astype(str)).set_index("qname")
+    path = base / "X" / "truth" / "molecules_labeled.parquet"
+    allm = pd.read_parquet(path)
+    first_pa = tr[tr.role == "pa"].drop_duplicates("mol").set_index("mol").qname
+    allm.assign(re=rec.re.reindex(first_pa.reindex(allm.mol)).to_numpy()).to_parquet(path)
+    shutil.copy(d / "grid" / "cell_counts.parquet", base / "X" / "grid" / "cell_counts.parquet")
+    join = join_counted(mol, tr, pd.read_parquet(base / "X" / "pa_sites.parquet"), sorted(CELLS_10X.values()),
+                        np.array(["g1", "g2", "g3", "g4"], object), d / "recount" / "counted_molecules.parquet", "X")
+    (root / "eval").mkdir()
+    join[JOIN_COLUMNS].to_parquet(root / "eval" / "truth_to_counted.parquet")
+    return base, cells, root / "eval", pd.read_parquet(path)[lambda m: m.in_cell].reset_index(drop=True), join
+
+
+def test_stage28_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monkeypatch, capsys):
+    d, _, _ = stage24
+    stage = _stage28()
+    monkeypatch.setattr(recount, "LIBRARIES", {"X": synth10x.bam})
+    base, cells, ev, mol, join = _stage28_tree(synth10x, d, tmp_path)
+    out = tmp_path / "burden"
+    argv = ["28", "X", "--base", str(base), "--cells", cells, "--matrices", str(d / "matrices"), "--recount", str(d / "recount"),
+            "--eval", str(ev), "--gtf", str(synth10x.gtf), "--out", str(out)]
+    monkeypatch.setattr(sys, "argv", argv)
+    stage.main()
+    js = json.loads((out / "selection_bias_m3.json").read_text())
+    x = js["libraries"]["X"]
+    assert x["acceptance"]["passed"] is True and js["acceptance_passed"] is True
+    # 20 counted molecules; four truth molecules join one each (A, B, C, D); E lies in a group that is not counted and F
+    # in none
+    assert x["acceptance"]["molecules"] == {"labeled": 4, "unlabeled": 16, "m0_sum": 20, "joined_keys": 4, "genes_differing": 0,
+                                            "passed": True}
+    assert x["acceptance"]["truth"] == {"joined": 4, "not_joined": 2, "labeled_in_called_cells": 6, "passed": True}
+    assert x["acceptance"]["records"]["passed"] is True and x["acceptance"]["records"]["cells"] == 5
+
+    # the join takes GX of the pa read: B (our gene g2, GX g1) labels the counted molecule of g1
+    genes = pd.read_parquet(out / "selection_bias_genes.parquet")
+    assert list(genes.columns) == GENE_COLUMNS
+    assert dict(zip(genes.gene_id, genes.labeled)) == {"g1": 3, "g2": 1, "g3": 0}
+    cm = pd.read_parquet(d / "recount" / "counted_molecules.parquet")
+    assert dict(zip(genes.gene_id, genes.umis)) == cm.gene.map({0: "g1", 1: "g2", 2: "g3", 3: "g4"}).value_counts().to_dict()
+
+    # the axis table equals the functions on the same inputs; A, whose only read has pa, has its own category
+    tab = pd.read_parquet(out / "selection_bias_m3.parquet")
+    assert list(tab.columns) == AXIS_COLUMNS and set(tab.axis) == set(AXES)
+    barcodes = sorted(CELLS_10X.values())
+    cls = cell_classes(np.array(barcodes, object), pd.read_parquet(tmp_path / "cells" / "X" / "cells.parquet"))
+    classes, code = np.unique(cls, return_inverse=True)
+    gt = pd.read_parquet(d / "matrices" / "gene_totals.parquet")
+    umis = gt[gt.tag == "unfiltered"].set_index("gene_id").umis.reindex(["g1", "g2", "g3", "g4"], fill_value=0).to_numpy()
+    gtf = synth10x.gtf
+    ix = end_index(["g1", "g2", "g3", "g4"], load_collapsed_exons(gtf), gene_ends(gtf), gene_strands(gtf))
+    t = tally(d / "recount" / "counted_molecules.parquet", labeled_keys(join), code, len(classes), ix)
+    pd.testing.assert_frame_equal(tab, axis_table(t, classes.tolist(), expr_bins_counted(umis)[0], "X"))
+    pa_only = tab[(tab.axis == "position") & (tab.category == PA_ONLY)]
+    assert pa_only.stratum.tolist() == ["all"] and pa_only.n_labeled.tolist() == [1] and pa_only.n_unlabeled.tolist() == [0]
+    assert set(tab[tab.axis == "cell_class"].category) == {"cone", "rod", "unassigned"}
+
+    rec = pd.read_parquet(out / "selection_bias_records.parquet")
+    ct = pd.read_parquet(d / "matrices" / "cell_totals.parquet")
+    pd.testing.assert_frame_equal(rec, records_table(mol.re.to_numpy(object), ct[ct.tag == "unfiltered"], "X"))
+
+    # burden numbers: the headline over the six labeled molecules of called cells (A, C, D templated), the unweighted share
+    # over the four joined (A, C, D of A to D); the reweighted share only when an axis among 1, 2, 3 and 5 fires
+    rw = pd.read_parquet(out / "templated_share_reweighted.parquet")
+    assert list(rw.columns) == ["lib", "axes", "share_headline", "share_counted_unweighted", "share_counted_reweighted", "lo",
+                                "hi", "strata", "strata_pooled", "pooled_share"]
+    assert rw.share_headline.tolist() == [0.5] and rw.share_counted_unweighted.tolist() == [0.75]
+    r = rule(tab, rec)
+    assert x["rule"] == json.loads(json.dumps(r)) and x["decision"] == decision(r["fired"], r["records"]["fired"])
+    fired = x["decision"]["reweight_axes"]
+    assert fired and rw["axes"].tolist() == [",".join(fired)]   # rw.axes is the DataFrame attribute
+    assert x["reweighting"]["axes"] == fired and rw.strata.tolist() == [x["reweighting"]["strata"]]
+    # four labeled molecules: every stratum is small and pools within its region; N has counted molecules (the intronic
+    # case) and no labeled one, so the reweighted share has no value
+    assert x["reweighting"]["strata_final"] == 3 and np.isnan(rw.share_counted_reweighted[0])
+    assert x["reweighting"]["share_counted_reweighted"] is None and x["burden"]["share_counted_reweighted"] is None
+    assert x["burden"]["share_headline"] == 0.5 and x["burden"]["share_counted_unweighted"] == 0.75
+    assert js["threshold_points"] == BIAS_POINTS and js["pool_min"] == POOL_MIN
+    assert x["join_by_region"] == {"3UTR": {"joined": 3, "not_joined": 0}, "CDS": {"joined": 1, "not_joined": 2}}
+    assert x["n_pa"] == {"labeled": {"n_pa_above_0": 3, "n_pa_0": 1}, "unlabeled": {"n_pa_above_0": 0, "n_pa_0": 16}}
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["libraries"] == ["X"] and line["acceptance_passed"] is True and "seconds" in line
+
+    # stage 13 with one record more in a cell: every output is written and the stage exits non-zero
+    cc = pd.read_parquet(base / "X" / "grid" / "cell_counts.parquet")
+    cc.iloc[0, cc.columns.get_loc("total")] += 1
+    cc.to_parquet(base / "X" / "grid" / "cell_counts.parquet")
+    (out / "selection_bias_m3.json").unlink()
+    with pytest.raises(SystemExit, match="acceptance failed for X"):
+        stage.main()
+    js = json.loads((out / "selection_bias_m3.json").read_text())
+    assert js["acceptance_passed"] is False and js["libraries"]["X"]["acceptance"]["records"]["cells_differing"] == 1
+
+    # stage 24 not passed: the stage refuses to start
+    monkeypatch.setattr(sys, "argv", argv[:8] + ["--recount", str(tmp_path / "none")] + argv[10:])
+    with pytest.raises(SystemExit, match="has not passed its acceptance checks for X"):
+        stage.main()
