@@ -89,8 +89,9 @@ NOT_ASKABLE = "no cluster before filtering, the collapse question cannot be aske
 COLUMNS = {
     "per_cell": ["cb", "class", "tag", "umis0", "umis", "lost", "gained", "genes0", "genes", "intronic0", "intronic",
                  "rec_sense_removed_share", "rec_en_removed_share", "knn_class"],
-    "per_class": ["class", "tag", "cells", "umis_median0", "umis_median", "umis_q1", "umis_q3", "genes_median0", "genes_median",
-                  "umis_lost_share", "umis_gained_share", "intronic0", "intronic", "cells_below_floor"],
+    "per_class": ["class", "tag", "cells", "umis_median0", "umis_median", "umis_q1", "umis_q3", "umis_q1_0", "umis_q3_0",
+                  "genes_median0", "genes_median", "genes_q1", "genes_q3", "genes_q1_0", "genes_q3_0", "umis_lost_share",
+                  "umis_gained_share", "intronic0", "intronic", "cells_below_floor"],
     "markers": ["class", "gene", "gene_id", "origin", "tag", "umis0", "umis", "lost_share", "detect0", "detect", "lfc0", "lfc"],
     "knn": ["class", "tag", "kind", "replicate", "retention", "cv_recall", "cv_balanced_accuracy", "cells"],
     "knn_confusion": ["tag", "kind", "replicate", "class_fixed", "class_projected", "cells"],
@@ -460,14 +461,17 @@ def per_cell(cell_totals, barcodes, fixed, results, tags):
 
 
 def per_class(cells, floor):
-    """Step 2 from per_cell, per tag and class: cells; median UMIs and genes before and after and the UMI quartiles after;
-    pooled shares of UMIs lost and gained and intronic share before and after; cells below floor UMIs after."""
+    """Step 2 from per_cell, per tag and class: cells; median and quartiles of UMIs and genes before (columns ending in 0)
+    and after; pooled shares of UMIs lost and gained and intronic share before and after; cells below floor UMIs after."""
     rows = []
     for tag, frame in cells.groupby("tag", sort=False):
         for c, g in frame.groupby("class"):
             rows.append({"class": c, "tag": tag, "cells": len(g), "umis_median0": g.umis0.median(),
                          "umis_median": g.umis.median(), "umis_q1": g.umis.quantile(0.25), "umis_q3": g.umis.quantile(0.75),
+                         "umis_q1_0": g.umis0.quantile(0.25), "umis_q3_0": g.umis0.quantile(0.75),
                          "genes_median0": g.genes0.median(), "genes_median": g.genes.median(),
+                         "genes_q1": g.genes.quantile(0.25), "genes_q3": g.genes.quantile(0.75),
+                         "genes_q1_0": g.genes0.quantile(0.25), "genes_q3_0": g.genes0.quantile(0.75),
                          "umis_lost_share": g.lost.sum() / g.umis0.sum(),
                          "umis_gained_share": g.gained.sum() / g.umis0.sum(), "intronic0": g.intr0.sum() / g.umis0.sum(),
                          "intronic": g.intr.sum() / g.umis.sum(), "cells_below_floor": int((g.umis < floor).sum())})

@@ -424,7 +424,10 @@ def test_per_cell_and_per_class(stage, toy, scenarios):
         u = ct.loc["unfiltered"].loc[frame.cb]
         assert row.cells == len(frame) and row.umis_median0 == frame.umis0.median() and row.umis_median == frame.umis.median()
         assert (row.umis_q1, row.umis_q3) == pytest.approx(tuple(frame.umis.quantile([0.25, 0.75])))
+        assert (row.umis_q1_0, row.umis_q3_0) == pytest.approx(tuple(frame.umis0.quantile([0.25, 0.75])))
         assert (row.genes_median0, row.genes_median) == (frame.genes0.median(), frame.genes.median())
+        assert (row.genes_q1, row.genes_q3) == pytest.approx(tuple(frame.genes.quantile([0.25, 0.75])))
+        assert (row.genes_q1_0, row.genes_q3_0) == pytest.approx(tuple(frame.genes0.quantile([0.25, 0.75])))
         assert row.umis_lost_share == frame.lost.sum() / frame.umis0.sum()
         assert row.umis_gained_share == frame.gained.sum() / frame.umis0.sum()
         assert row.intronic == pytest.approx((t.umis_N + t.umis_EN).sum() / t.umis.sum())
@@ -496,8 +499,9 @@ def test_every_call_names_its_resolution_and_whether_it_holds_at_the_other_two(s
 COLUMNS = {
     "per_cell": ["cb", "class", "tag", "umis0", "umis", "lost", "gained", "genes0", "genes", "intronic0", "intronic",
                  "rec_sense_removed_share", "rec_en_removed_share", "knn_class"],
-    "per_class": ["class", "tag", "cells", "umis_median0", "umis_median", "umis_q1", "umis_q3", "genes_median0", "genes_median",
-                  "umis_lost_share", "umis_gained_share", "intronic0", "intronic", "cells_below_floor"],
+    "per_class": ["class", "tag", "cells", "umis_median0", "umis_median", "umis_q1", "umis_q3", "umis_q1_0", "umis_q3_0",
+                  "genes_median0", "genes_median", "genes_q1", "genes_q3", "genes_q1_0", "genes_q3_0", "umis_lost_share",
+                  "umis_gained_share", "intronic0", "intronic", "cells_below_floor"],
     "markers": ["class", "gene", "gene_id", "origin", "tag", "umis0", "umis", "lost_share", "detect0", "detect", "lfc0", "lfc"],
     "knn": ["class", "tag", "kind", "replicate", "retention", "cv_recall", "cv_balanced_accuracy", "cells"],
     "knn_confusion": ["tag", "kind", "replicate", "class_fixed", "class_projected", "cells"],
