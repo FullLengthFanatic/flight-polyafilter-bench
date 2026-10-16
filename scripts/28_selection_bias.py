@@ -62,17 +62,22 @@ the labeled molecules of called cells; per called cell, the primary records summ
 (grid/cell_counts.parquet), and so do their sums. When it fails for a library, every output is written and the stage exits
 non-zero.
 
-Measured on 2026-10-15, the three libraries in one run (stage 24 outputs of the trial runs, classes of the stage 25 trial
-before the review gate, truth_to_counted.parquet of the stage 27 trial; BLAS and OpenMP limited to 8 threads; /usr/bin/time
--v and memwatch): 5 min 58 s wall and 4.11 GiB peak tree memory (4.26 GiB maximum resident size); 1417 alone 60 s and
-1.97 GiB. Reading genes.gtf three times takes 16 s of it. A second run of 1417 wrote the same four tables and the same json
-block. Acceptance passed for all three libraries: labeled plus unlabeled counted molecules 70,466 + 22,966,456,
-82,359 + 22,621,876 and 851,305 + 218,541,780, the sums of M0; joined plus not joined truth molecules 70,466 + 19,633,
-82,359 + 23,041 and 851,305 + 323,472, the 90,099, 105,400 and 1,174,777 labeled molecules of called cells; records summed
-over RE equal to stage 13 in every called cell (56,730,829, 56,602,795 and 491,713,467 in all). Two checks of our own on the
-same day: selection.downstream_end equals a per-molecule computation with burden._exon_coord on 3,000 random counted
-molecules of 1417 and 3,000 of 1179; and all 63,032 primary records with xf bit 1 and one GX in 1417 chr22:20,000,000 to
-24,000,000 lie on the strand of their gene, the strand downstream_end takes for the reads of a molecule.
+Measured on 2026-10-16, the three libraries in one run (stage 24 outputs of the trial runs, classes of the stage 25 trial
+before the review gate, truth_to_counted.parquet and strata_m3.json of the stage 27 trial; BLAS and OpenMP limited to 8
+threads; /usr/bin/time -v and memwatch): 4 min 14 s wall and 4.18 GiB peak tree memory (4.25 GiB maximum resident size);
+1417 alone 46 s and 1.96 GiB, with the same four tables and the same json block as in the run of three. Reading genes.gtf
+three times, once per run, takes 15 s of it. Acceptance passed for all three libraries: labeled plus unlabeled counted
+molecules 70,466 + 22,966,456, 82,359 + 22,621,876 and 851,305 + 218,541,780, the sums of M0; joined plus not joined truth
+molecules 70,466 + 19,633, 82,359 + 23,041 and 851,305 + 323,472, the 90,099, 105,400 and 1,174,777 labeled molecules of
+called cells; records summed over RE equal to stage 13 in every called cell (56,730,829, 56,602,795 and 491,713,467 in
+all). Two checks of our own on 2026-10-16, scripts and outputs in
+/tmp/claude-1001/-data-element-runs/98767f6a-d6d1-436e-a884-b6e8ed90f794/scratchpad/m3build/run_s28/checks:
+check_downstream_end.py finds selection.downstream_end and position_codes equal to a per-molecule computation from the
+transcript and exon lines of genes.gtf on 8,794, 8,772 and 7,000 counted molecules of 1417, 1419 and 1179 (5,000 at random
+and up to 200 more per strand, bin and exonic mode), none differing (downstream_end_<lib>.txt); check_strand.py finds every
+primary record with xf bit 1 and one GX on the strand of its gene, the strand downstream_end takes for the reads of a
+molecule: 63,032 in 1417 and 57,406 in 1419 on chr22:20,000,000 to 24,000,000, 309,666 in 1179 on chr22:20,000,000 to
+22,000,000 (strand_<lib>.txt).
 """
 import argparse
 import json
