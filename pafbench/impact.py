@@ -336,7 +336,9 @@ def analyse(lib, m0, load, tags, fixed, model, gene_ids, symbols, workers=1, clu
     """analyse_matrix on every matrix of jobs(tags), the unfiltered one first and alone, the others then in a pool of
     workers (module docstring); with workers 1 all in this process. load(tag): (L_tag, G_tag). clusters: stage 25's
     clusters, which the unfiltered labels at the first seed and cluster["resolution"] must reproduce (else SystemExit: the
-    cells folder was made from another matrix or with other code). Returns [Analysis] in job order."""
+    cells folder was made from another matrix or with other code). In that run the marker rule (the panel and CLASS_MARGIN
+    of this code) must give every class of fixed to all its cells (else SystemExit: the panel or the margin changed after
+    stage 25 ran). Returns [Analysis] in job order."""
     state = {"m0": m0, "load": load, "fixed": fixed, "model": model, "gene_ids": gene_ids, "symbols": symbols, "lib": lib,
              "cluster": cluster, "reference": None, "reference_labels": None, "markers": None}
     first, *rest = jobs(tags)
@@ -344,6 +346,14 @@ def analyse(lib, m0, load, tags, fixed, model, gene_ids, symbols, workers=1, clu
     if clusters is not None and not np.array_equal(u.labels0[cluster["resolution"]], clusters):
         raise SystemExit("the unfiltered matrix does not reproduce the clusters of stage 25 at the first seed and resolution "
                          f"{cluster['resolution']}: the cells folder belongs to another matrix or was made with other code")
+    j = u.class_jaccard
+    j = j[(j.seed == cluster["seeds"][0]) & (j.resolution == cluster["resolution"])]
+    renamed = j[(j.named_class != j["class"]) | (j.named_share != 1.0)]
+    if len(renamed):
+        raise SystemExit("the marker panel or CLASS_MARGIN differs from the one stage 25 used: on the unfiltered matrix at the "
+                         f"first seed and resolution {cluster['resolution']} the marker rule names most cells of "
+                         + ", ".join(f"{r['class']} {r.named_class} ({r.named_share:.2f} of them {r['class']})"
+                                     for _, r in renamed.iterrows()) + "; rerun stage 25")
     state |= {"reference": u.reference, "reference_labels": u.labels0, "markers": u.marker_list}
     return [u, *_map(rest, workers, state, workers > 1)]
 
@@ -503,8 +513,8 @@ def run(lib, matrix_dir, cells_dir, out_dir, settings=None, workers=1, cluster=C
 
     Stops (SystemExit) when a setting is not in the manifest, when cells.parquet does not list the barcodes of barcodes.tsv
     in their order, when a variable gene of model.npz is not the column of features.tsv it names, and when the unfiltered
-    matrix does not reproduce stage 25's clusters (analyse). Returns Impact: summary, the tables, and the seconds of every
-    matrix by step (not written, so that a rerun writes the same files).
+    matrix does not reproduce stage 25's clusters or the marker rule its classes (analyse). Returns Impact: summary, the
+    tables, and the seconds of every matrix by step (not written, so that a rerun writes the same files).
     """
     matrix_dir, cells_dir, out_dir = Path(matrix_dir), Path(cells_dir), Path(out_dir)
     made = json.loads((matrix_dir / "manifest.json").read_text())["tags"]

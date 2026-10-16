@@ -535,7 +535,7 @@ def test_output_schemas(stage):
     assert len(j) == 9 * 30 * 4 and j.jaccard.between(0, 1).all()
 
 
-def test_inputs_must_belong_together(stage, toy, tmp_path):
+def test_inputs_must_belong_together(stage, toy, tmp_path, monkeypatch):
     d = stage[0]
     other = tmp_path / "cells"
     other.mkdir()
@@ -550,6 +550,12 @@ def test_inputs_must_belong_together(stage, toy, tmp_path):
         impact.run("1417", d / "matrices", other, tmp_path / "out", settings=[DELETE])
     with pytest.raises(SystemExit, match="not in the manifest"):
         impact.run("1417", d / "matrices", d / "cells", tmp_path / "out", settings=["c180_l11_m2_e"])
+    # the marker panel edited after stage 25 ran (cone scored on the rod genes): the clusters still match, the names do not
+    rod = BY_NAME["rod"].genes
+    monkeypatch.setattr(classes, "PANEL", [c._replace(genes=rod) if c.name == "cone" else c for c in classes.PANEL])
+    with pytest.raises(SystemExit, match="marker panel or CLASS_MARGIN"):
+        impact.run("1417", d / "matrices", d / "cells", tmp_path / "out", settings=[DELETE])
+    assert not (tmp_path / "out").exists()
 
 
 def test_stage26_script_and_the_worker_pool_write_the_same_files(toy, scenarios, tmp_path, monkeypatch, capsys):
