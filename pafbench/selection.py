@@ -37,8 +37,10 @@ RE = ("E", "N", "I")
 RECORD_COLUMNS = ["lib", "re", "labeled", "records", "units", "share_labeled", "share_records", "share_units",
                   "diff_points_records", "diff_points_units", "units_rg", "read_groups", "units_per_read_group"]
 GENE_COLUMNS = ["lib", "gene_id", "gene_name", "umis", "labeled", "labeled_fraction", "top"]
-# the accuracy table of a fired axis that moves from the details block into the main text (design 3.6, point 3)
-PLACEMENT = {"region": "eval/metrics.parquet", "cell_class": "eval/strata_m3.parquet", "expr_bin": "eval/strata_m3.parquet"}
+# the accuracy table (file, stratum_kind) of a fired axis that moves from the details block into the main text (design 3.6,
+# point 3); the record table compares by region, as axis 1 does, and moves the region table of milestone 2
+PLACEMENT = {"region": ("eval/metrics.parquet", "region"), "cell_class": ("eval/strata_m3.parquet", "cell_class"),
+             "expr_bin": ("eval/strata_m3.parquet", "expr_bin"), "records": ("eval/metrics.parquet", "region")}
 _TOL = 1e-9  # a difference of exactly BIAS_POINTS, up to floating point rounding, does not fire
 
 
@@ -89,13 +91,18 @@ def decision(fired, records_fired):
     wording, every headline sentence on burden and accuracy says "among molecules with a polyA-trimmed read" and names
     axes_named; burden_numbers, the headline and the unweighted share among counted labeled molecules always, the share
     reweighted over reweight_axes (the fired axes among 1, 2, 3 and 5) when there is one; main_text_accuracy, the accuracy
-    tables of the fired axes among region, cell class and expression that move into the main text."""
-    named = [a for a in AXES if a in fired]
+    tables (PLACEMENT) of the fired axes among region, cell class and expression and of a fired record table that move into
+    the main text, each table once under the first of axes_named that moves it."""
+    named = [a for a in AXES if a in fired] + (["records"] if records_fired else [])
     reweight = [a for a in REWEIGHT_AXES if a in fired]
-    return {"wording": bool(named) or bool(records_fired), "axes_named": named + (["records"] if records_fired else []),
+    tables = {}
+    for a in named:
+        if a in PLACEMENT:
+            tables.setdefault(PLACEMENT[a], a)
+    return {"wording": bool(named), "axes_named": named,
             "burden_numbers": ["headline", "counted_unweighted"] + (["counted_reweighted"] if reweight else []),
             "reweight_axes": reweight,
-            "main_text_accuracy": [{"axis": a, "table": PLACEMENT[a], "stratum_kind": a} for a in named if a in PLACEMENT]}
+            "main_text_accuracy": [{"axis": a, "table": t, "stratum_kind": k} for (t, k), a in tables.items()]}
 
 
 def gene_strands(gtf):

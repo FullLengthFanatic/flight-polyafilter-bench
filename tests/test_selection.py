@@ -95,12 +95,18 @@ def test_what_a_fired_axis_decides():
                                              "main_text_accuracy": []}
     assert decision([], True)["axes_named"] == ["records"] and decision([], True)["burden_numbers"] == [
         "headline", "counted_unweighted"]
+    # the record table compares by region, as axis 1 does: it moves the region table of milestone 2
+    region = {"table": "eval/metrics.parquet", "stratum_kind": "region"}
+    assert decision([], True)["main_text_accuracy"] == [{"axis": "records"} | region]
     d = decision(["family_size", "position", "expr_bin", "region"], True)
     assert d["wording"] is True and d["axes_named"] == ["region", "expr_bin", "position", "family_size", "records"]
     assert d["burden_numbers"] == ["headline", "counted_unweighted", "counted_reweighted"]
     assert d["reweight_axes"] == ["region", "expr_bin", "family_size"]
-    # the accuracy tables that move into the main text: region from milestone 2, class and expression from stage 27
-    assert [x["axis"] for x in d["main_text_accuracy"]] == ["region", "expr_bin"]
+    # the accuracy tables that move into the main text, each once: region from milestone 2, class and expression from
+    # stage 27
+    assert d["main_text_accuracy"] == [{"axis": "region"} | region,
+                                       {"axis": "expr_bin", "table": "eval/strata_m3.parquet", "stratum_kind": "expr_bin"}]
+    assert [x["axis"] for x in decision(["cell_class"], True)["main_text_accuracy"]] == ["cell_class", "records"]
     assert decision(["cell_class"], False)["main_text_accuracy"] == [
         {"axis": "cell_class", "table": "eval/strata_m3.parquet", "stratum_kind": "cell_class"}]
     assert decision(["region"], False)["main_text_accuracy"] == [
