@@ -200,7 +200,14 @@ def marker_genes(norm, fixed, symbols, lib, n=TOP_GENES):
     """The marker genes of step 3 for every class of fixed but UNASSIGNED: its panel genes in the matrix (origin panel), then
     its n top genes by scanpy's Wilcoxon rank-sum of the class against all other cells on norm (classes.normalise of M0)
     that are not among them (origin ranking). A symbol listed twice in the features takes its last column, as in
-    classes.class_scores. Returns class, gene (symbol), gene_id, column and origin."""
+    classes.class_scores. Returns class, gene (symbol), gene_id, column and origin.
+
+    All other cells include the unassigned ones, although groups leaves them out: "Note that if `reference='rest'` all
+    groups will still be used as the reference, not just those specified in `groups`." (docstring of rank_genes_groups,
+    scanpy 1.11.5, scanpy/tools/_rank_genes_groups.py lines 543 to 546); in the source the Wilcoxon test with reference rest
+    ranks every row of the data ("n_cells = self.X.shape[0]" and "for ranks, left, right in _ranks(self.X):", lines 359
+    and 364, self.X being the X of the AnnData, lines 168 and 180) and the mean of the rest is over "mask_rest = ~mask_obs"
+    (line 242)."""
     names = [c for c in np.unique(fixed) if c != UNASSIGNED]
     gene_ids = np.asarray(norm.var_names)
     column = {s: i for i, s in enumerate(symbols)}
