@@ -19,7 +19,7 @@ from pafbench.exons import load_collapsed_exons
 from pafbench.selection import (AXES, AXIS_COLUMNS, EXPR, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS,
                                 RECORD_COLUMNS, REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end,
                                 end_index, exon_coord, gene_expr_bins, gene_strands, gene_table, labeled_keys,
-                                pa_read_only, pool, position_codes, records_table, reweight, rule, tally)
+                                pa_read_only, pool, position_codes, records_table, reweight, reweight_inputs, rule, tally)
 from pafbench.strata import JOIN_COLUMNS, cell_classes, expr_bins, join_counted
 from tests.synth import CELLS_10X
 from tests.test_matched_sites import GTF, _gtf
@@ -448,6 +448,47 @@ def test_reweight_pools_on_the_first_fired_axis_in_the_merge_order():
     assert r["share_counted_reweighted"] == pytest.approx(0.9 * 35 / 55)
 
 
+def test_a_small_stratum_alone_in_its_category_stays_alone_and_is_not_counted_as_pooled():
+    # E/2 (10 labeled) joins E/1 (40); EN/1 (10 labeled) is the only stratum of EN and stays a stratum of its own
+    counted = pd.DataFrame({"gene": [1, 1, 2], "region": ["E", "E", "EN"], "family_size": ["1", "2", "1"], "n": [600, 300, 100]})
+    labeled = pd.DataFrame({"gene": [1] * 50 + [2] * 10, "region": ["E"] * 50 + ["EN"] * 10,
+                            "family_size": ["1"] * 40 + ["2"] * 10 + ["1"] * 10,
+                            "templated": [True] * 30 + [False] * 10 + [True] * 10 + [True] * 5 + [False] * 5})
+    r = reweight(counted, labeled, ["region", "family_size"], n_boot=10)
+    assert (r["strata"], r["strata_small"], r["strata_pooled"], r["strata_final"]) == (3, 2, 1, 2)
+    assert r["pooled_share"] == pytest.approx(300 / 1000)
+    assert r["share_counted_reweighted"] == pytest.approx(0.9 * 40 / 50 + 0.1 * 5 / 10)
+
+
+def _reweight_toy():
+    """A Tally with counted molecules in two strata of three gene rows, two labeled counted molecules, the join of stage 27
+    (two joined truth molecules and one not joined) and their labels."""
+    by_gene = np.zeros((3, len(REGIONS), 2, len(FAMILY)), np.int64)
+    by_gene[0, 0, 1, 0] = 4   # gene row 0: E, class 1, family size 1
+    by_gene[2, 1, 0, 2] = 2   # gene row 2: N, class 0, family size 3+
+    lab = pd.DataFrame({"cell": np.array([7, 8], np.int32), "gene": np.array([0, 2], np.int32),
+                        "umi": np.array([11, 12], np.uint32), "region": [0, 1], "cell_class": [1, 0], "family_size": [0, 2]})
+    t = Tally(np.zeros((2, len(REGIONS), 2, len(FAMILY), len(NONPA), len(POSITIONS), 2), np.int64), by_gene, lab)
+    join = pd.DataFrame({"lib": "L", "mol": [100, 101, 102], "cell": np.array([7, 8, 9], np.int32),
+                         "gene": np.array([0, 2, -1], np.int32), "umi": np.array([11, 12, 13], np.uint32),
+                         "joined": [True, True, False], "region": "3UTR"})
+    mol = pd.DataFrame({"mol": [100, 101, 102, 103], "label": ["templated", "nontemplated", "templated", "ambiguous"]})
+    return t, join, mol
+
+
+def test_reweight_inputs_take_the_strata_of_the_tally_and_the_labels_of_the_joined_truth_molecules():
+    t, join, mol = _reweight_toy()
+    counted, labeled = reweight_inputs(t, join, mol, np.array([2, 3, 0]))
+    assert counted.to_dict("list") == {"gene": [0, 2], "region": [0, 1], "cell_class": [1, 0], "expr_bin": [2, 0],
+                                       "family_size": [0, 2], "n": [4, 2]}
+    assert labeled[["mol", "gene", "region", "cell_class", "expr_bin", "family_size", "templated"]].to_dict("list") == {
+        "mol": [100, 101], "gene": [0, 2], "region": [0, 1], "cell_class": [1, 0], "expr_bin": [2, 0], "family_size": [0, 2],
+        "templated": [True, False]}
+    # region fires: E holds 4 of the 6 counted molecules and its labeled molecule is templated, N 2 and not templated
+    r = reweight(counted, labeled, ["region"], n_boot=10, min_n=1)
+    assert r["share_counted_unweighted"] == 0.5 and r["share_counted_reweighted"] == pytest.approx(4 / 6)
+
+
 def _stage28():
     spec = importlib.util.spec_from_file_location("stage28", REPO / "scripts" / "28_selection_bias.py")
     stage = importlib.util.module_from_spec(spec)
@@ -547,6 +588,8 @@ def test_stage28_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monke
     fired = x["decision"]["reweight_axes"]
     assert fired and rw["axes"].tolist() == [",".join(fired)]   # rw.axes is the DataFrame attribute
     assert x["reweighting"]["axes"] == fired and rw.strata.tolist() == [x["reweighting"]["strata"]]
+    want = reweight(*reweight_inputs(t, join, mol, expr_code), fired, 1000, 0)
+    assert x["reweighting"] == {k: None if isinstance(v, float) and np.isnan(v) else v for k, v in want.items()}
     # four labeled molecules: every stratum is small and pools within its region; N has counted molecules (the intronic
     # case) and no labeled one, so the reweighted share has no value
     assert x["reweighting"]["strata_final"] == 3 and np.isnan(rw.share_counted_reweighted[0])

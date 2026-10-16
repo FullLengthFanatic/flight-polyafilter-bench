@@ -90,7 +90,8 @@ from pafbench.exons import load_collapsed_exons
 from pafbench.matrices import load
 from pafbench.recount import require_passed
 from pafbench.selection import (AXES, EXPR, acceptance, axis_table, decision, end_index, gene_expr_bins, gene_strands,
-                                gene_table, labeled_keys, pa_read_only, records_table, reweight, rule, tally)
+                                gene_table, labeled_keys, pa_read_only, records_table, reweight, reweight_inputs, rule,
+                                tally)
 from pafbench.strata import cell_classes
 from pafbench.truth import in_population
 
@@ -153,14 +154,7 @@ def main():
         r = rule(tab, rec)
         dec = decision(r["fired"], r["records"]["fired"])
 
-        # each joined truth molecule with its label and the strata of the counted molecule it joins
-        joined = join.loc[join.joined, ["mol", "cell", "gene", "umi"]].merge(mol[["mol", "label"]], on="mol", how="left",
-                                                                             validate="one_to_one")
-        lab = joined.merge(t.labeled, on=["cell", "gene", "umi"], validate="many_to_one")
-        lab = lab.assign(expr_bin=expr_code[lab.gene.to_numpy()], templated=(lab.label == "templated").to_numpy())
-        gene, region, cls, fam = np.nonzero(t.by_gene)
-        per_stratum = pd.DataFrame({"gene": gene, "region": region, "cell_class": cls, "expr_bin": expr_code[gene],
-                                    "family_size": fam, "n": t.by_gene[gene, region, cls, fam]})
+        per_stratum, lab = reweight_inputs(t, join, mol, expr_code)
         rw = reweight(per_stratum, lab, dec["reweight_axes"], BOOT_N, BOOT_SEED) if dec["reweight_axes"] else None
         headline = float((mol.label == "templated").mean())
         unweighted = float(lab.templated.mean())

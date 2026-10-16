@@ -371,6 +371,21 @@ def pool(first, n_labeled, min_n=POOL_MIN):
     return group
 
 
+def reweight_inputs(t, join, mol, expr_code):
+    """(counted, labeled), the inputs of reweight, from the Tally t. counted: the counted molecules n per gene row and
+    stratum, the codes of region, cell_class, expr_bin (expr_code: the EXPR index of each gene row) and family_size.
+    labeled: one row per truth molecule of join (the library's rows of truth_to_counted) that joins a counted molecule, with
+    the codes of that molecule and templated, whether its label in mol (molecules_labeled of called cells) is templated."""
+    joined = join.loc[join.joined.to_numpy(bool), ["mol", "cell", "gene", "umi"]].merge(
+        mol[["mol", "label"]], on="mol", how="left", validate="one_to_one")
+    lab = joined.merge(t.labeled, on=["cell", "gene", "umi"], validate="many_to_one")
+    labeled = lab.assign(expr_bin=expr_code[lab.gene.to_numpy()], templated=(lab.label == "templated").to_numpy())
+    gene, region, cls, fam = np.nonzero(t.by_gene)
+    counted = pd.DataFrame({"gene": gene, "region": region, "cell_class": cls, "expr_bin": expr_code[gene],
+                            "family_size": fam, "n": t.by_gene[gene, region, cls, fam]})
+    return counted, labeled
+
+
 def _reweighted(N, n, t):
     """sum over strata (last axis) of N_s / sum(N) x t_s / n_s; NaN where a stratum with counted molecules has no labeled
     one."""
