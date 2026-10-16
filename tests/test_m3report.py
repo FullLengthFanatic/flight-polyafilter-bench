@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 
 from pafbench import m2report, m3report
+from pafbench.config import LONG_READS, NUCLEI
+from pafbench.m2report import LIBS
 from pafbench.m3report import (Registry, _md_to_html, build, digits_in_prose, higher, lower, m2_block, render, SECTIONS)
 from tests.test_m2report import _full_base
 
@@ -16,15 +18,100 @@ from tests.test_m2report import _full_base
 REPO = Path(__file__).resolve().parents[1]
 
 
+def _m3_inputs(base):
+    """Add minimal versions of every file the design-4 table names for milestone 3 that `_full_base` does not already
+    write. One per-library row where the brief asks for a per-lib list; a handful of rows where the shape matters
+    (strata, bias). Keeps the real column names so a column typo in m3report would be caught."""
+    # section 2: <lib>/outs/metrics_summary.csv  (10x-style, quoted thousands)
+    for lib in LIBS:
+        p = base / lib / "outs" / "metrics_summary.csv"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('Estimated Number of Cells,Mean Reads per Cell\n"1,234","10,000"\n')
+
+    # section 6: burden/selection_bias_m3.parquet
+    rows = []
+    for lib in LIBS:
+        for axis in ("region", "a_band"):
+            rows.append((lib, axis, "all", 0.5, 0.52, 2.0))
+    pd.DataFrame(rows, columns=["lib", "axis", "stratum", "share_labeled", "share_unlabeled",
+                                "diff_points"]).to_parquet(base / "burden" / "selection_bias_m3.parquet", index=False)
+
+    # section 9: eval/strata_m3.parquet, eval/strata_m3_bootstrap.parquet, eval/matrix_outcome.parquet
+    rows = []
+    for lib in LIBS:
+        for kind in ("all", "class"):
+            rows.append((lib, "c300_l10_m1_i", "molecule", kind, "all", 0.6, 0.9))
+    strata = pd.DataFrame(rows, columns=["lib", "tag", "level", "stratum_kind", "stratum", "sens", "spec"])
+    strata.to_parquet(base / "eval" / "strata_m3.parquet", index=False)
+    strata.to_parquet(base / "eval" / "strata_m3_bootstrap.parquet", index=False)
+    pd.DataFrame({"lib": list(LIBS), "tag": "c300_l10_m1_i", "outcome": "kept"}).to_parquet(
+        base / "eval" / "matrix_outcome.parquet", index=False)
+
+    # section 11: <lib>/recount/recount.json
+    for lib in LIBS:
+        p = base / lib / "recount" / "recount.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"entries_compared": 1000, "entries_differ": 2}))
+
+    # section 12: <lib>/impact/per_cell.parquet
+    for lib in LIBS:
+        p = base / lib / "impact" / "per_cell.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"cb": ["AAAC-1", "AAAC-2"], "tag": ["c300_l10_m1_i", "c300_l10_m1_i"],
+                      "umis0": [100, 200], "umis": [95, 190], "lost": [5, 10],
+                      "gained": [0, 0]}).to_parquet(p, index=False)
+
+    # section 13: <lib>/cells/cells.parquet
+    for lib in LIBS:
+        p = base / lib / "cells" / "cells.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"cb": ["AAAC-1", "AAAC-2"], "class": ["neuron", "glia"], "cluster": [0, 1],
+                      "umap1": [0.1, 0.2], "umap2": [0.3, 0.4]}).to_parquet(p, index=False)
+
+    # section 14: <lib>/impact/per_class.parquet
+    for lib in LIBS:
+        p = base / lib / "impact" / "per_class.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"class": ["neuron", "glia"], "tag": ["c300_l10_m1_i", "c300_l10_m1_i"],
+                      "umis_lost_share": [0.05, 0.08], "cells": [100, 50]}).to_parquet(p, index=False)
+
+    # section 15: <lib>/impact/clustering.parquet
+    for lib in LIBS:
+        p = base / lib / "impact" / "clustering.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"tag": ["c300_l10_m1_i"] * 4, "kind": ["unfilt", "unfilt", "filt", "filt"],
+                      "replicate": [0, 1, 0, 1], "seed": [1, 2, 1, 2],
+                      "ari": [0.9, 0.88, 0.85, 0.83]}).to_parquet(p, index=False)
+
+    # section 16: burden/matched_sites.parquet
+    pd.DataFrame({"pair": ["1417_vs_1419"] * 3, "set": ["shared", "a_only", "b_only"],
+                  "gene": ["gA", "gB", "gC"], "site_a": [100.0, 200.0, np.nan],
+                  "site_b": [100.0, np.nan, 300.0],
+                  "label": ["templated", "templated", "templated"]}).to_parquet(
+        base / "burden" / "matched_sites.parquet", index=False)
+    return base
+
+
+def _full_m3_base(tmp_path):
+    return _m3_inputs(_full_base(tmp_path))
+
+
 @pytest.fixture
 def base(tmp_path):
-    return _full_base(tmp_path)
+    return _full_m3_base(tmp_path)
 
 
 # ---------------------------------------------------------------------------------------------- helpers for the digit test
 
 def _strip_m2_blocks(doc):
     return re.sub(r'<section[^>]*data-m2="[^"]*"[^>]*>.*?</section>', " ", doc, flags=re.DOTALL)
+
+
+def _section_body(text, num):
+    """The HTML between <section id="section-N"> and the next <section id="section-M"> (or </body>)."""
+    pattern = rf'<section id="section-{num}"[^>]*>(.*?)(?=<section id="section-\d+"|</body>)'
+    m = re.search(pattern, text, re.DOTALL)
+    return m.group(1) if m else ""
 
 
 # ---------------------------------------------------------------------------------------------- test cases
@@ -37,6 +124,11 @@ def test_build_on_synthetic(base, tmp_path):
     # every section 0..20 is rendered
     for i in range(21):
         assert f'id="section-{i}"' in text, f"section {i} missing"
+    # sections 2, 6, 9, 11..16 render the populated branch (not the _not_run paragraph) on the extended fixture
+    for i in (2, 6, 9, 11, 12, 13, 14, 15, 16):
+        body = _section_body(text, i)
+        assert "not run (missing" not in body, f"section {i} still rendered _not_run paragraph on the m3 fixture"
+        assert "<table>" in body or 'class="plotly"' in body, f"section {i} rendered neither a table nor a figure"
     # every digit in milestone 3 prose resolves to a registry entry (outside the wrapped m2 blocks and the allow list)
     bad = digits_in_prose(text)
     assert bad == [], f"unregistered digits in m3 prose: {bad[:5]}"
@@ -116,23 +208,45 @@ def test_registry_entries_name_stage_and_function(base, tmp_path):
         assert e["id"].startswith("n_")
 
 
-def test_section_missing_input_prints_not_run(base, tmp_path):
-    """For each m3 section whose input exists, remove one of its inputs and assert 'not run (missing <rel path>)'."""
-    # the exact relative paths this stage checks per section
-    cases = [
-        ("burden/templated_share.parquet", 5, "burden/templated_share.parquet"),
-        ("validation/exact_match_m2.json", 18, "validation/exact_match_m2.json"),
-    ]
-    for rel, section_num, missing_rel in cases:
+# every m3 section (2..18) with a missing-input branch, the files whose deletion triggers it, and extra files to delete
+# that are not printed in the missing list (section 10 only).
+_MISSING_CASES = [
+    (2,  [f"{lib}/outs/metrics_summary.csv" for lib in LIBS], []),
+    (3,  [f"{lib}/truth/molecules_labeled.parquet" for lib in LIBS], []),
+    (4,  ["eval/selection.json"], []),
+    (5,  ["burden/templated_share.parquet"], []),
+    (6,  ["burden/selection_bias_m3.parquet"], []),
+    (7,  [f"{lib}/truth/truth_reads.parquet" for lib in LIBS], []),
+    (8,  ["eval/metrics.parquet"], []),
+    (9,  ["eval/strata_m3.parquet", "eval/matrix_outcome.parquet"], []),
+    (10, ["eval/spikein_metrics.parquet"],
+         [f"{lib}/spikein/ercc.json" for lib in NUCLEI]),
+    (11, [f"{lib}/recount/recount.json" for lib in LIBS], []),
+    (12, [f"{lib}/impact/per_cell.parquet" for lib in LIBS], []),
+    (13, [f"{lib}/cells/cells.parquet" for lib in LIBS], []),
+    (14, [f"{lib}/impact/per_class.parquet" for lib in LIBS], []),
+    (15, [f"{lib}/impact/clustering.parquet" for lib in LIBS], []),
+    (16, ["burden/matched_sites.parquet"], []),
+    (17, [f"{lib}/long_read_acceptance.json" for lib in LONG_READS], []),
+    (18, ["validation/exact_match_m2.json"], []),
+]
+
+
+@pytest.mark.parametrize("section_num,missing_rels,extras", _MISSING_CASES,
+                         ids=[f"section_{c[0]}" for c in _MISSING_CASES])
+def test_section_missing_input_prints_not_run(tmp_path, section_num, missing_rels, extras):
+    """For every m3 section 2..18, remove its input(s) and assert 'not run (missing <rel paths>)' with the exact
+    relative paths in the section's own body."""
+    base = _full_m3_base(tmp_path)
+    for rel in list(missing_rels) + list(extras):
         p = base / rel
-        assert p.exists(), rel
-        p.unlink()
-        text = render(base)[0]
-        assert f'id="section-{section_num}"' in text
-        want = f"not run (missing {missing_rel})"
-        assert want in text, f"section {section_num} did not print {want!r}"
-        # restore so later cases do not cascade
-        _full_base(base.parent)  # rebuild siblings; the fixture is independent per test
+        if p.exists():
+            p.unlink()
+    text = render(base)[0]
+    body = _section_body(text, section_num)
+    assert body, f"section {section_num} did not render"
+    want = f"not run (missing {', '.join(missing_rels)})"
+    assert want in body, f"section {section_num} did not print {want!r} in its body:\n{body[:400]}"
 
 
 def test_markdown_converter_on_m2_shapes(base):

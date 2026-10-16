@@ -4,18 +4,19 @@ import json
 import time
 from pathlib import Path
 
-from pafbench.config import OUT, REPORT_DIR
+from pafbench.config import OUT
 from pafbench.m3report import build
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", type=Path, default=OUT)
-    ap.add_argument("--out", type=Path, default=REPORT_DIR)
+    ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--memwatch", action="store_true", help="placeholder; the pipeline wraps this in memwatch itself")
     args = ap.parse_args()
+    out = args.out or (args.base / "report")
     t0 = time.time()
-    paths = build(args.base, args.out)
+    paths = build(args.base, out)
     text = paths["html"].read_text()
     n_sections = text.count('class="s-m3"')
     n_not_run = text.count("not run (missing")

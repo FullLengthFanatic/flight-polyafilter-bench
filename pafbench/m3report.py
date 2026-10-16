@@ -27,8 +27,6 @@ from .flags import setting_tag
 from .m2report import LIBS
 
 CDN_PLOTLY = "https://cdnjs.cloudflare.com/ajax/libs/plotly.js/3.0.1/plotly.min.js"
-POP_NAMES = m2report.POP_NAMES
-LABEL_NAMES = m2report.LABEL_NAMES
 
 # the eleven m2 functions and the headline wrapped here, named for the digit test's exemption
 WRAPPED_M2 = tuple(f.__name__ for f in m2report.SECTIONS) + ("headline",)
@@ -378,7 +376,8 @@ def section_1(base, reg):
     the protected 3' end; the chosen setting's values are read from selection.json."""
     base = Path(base)
     sel = _json_load(base / "eval" / "selection.json")
-    chosen_tag = next((t for t in (sel or {}).get("modes", {}).values() for t in [t.get("selection", {}).get("tag")] if t), None)
+    chosen_tag = next((tag for mode in (sel or {}).get("modes", {}).values()
+                       for tag in [mode.get("selection", {}).get("tag")] if tag), None)
     # the drawing: a simple SVG box, the COVLEN window and the protected end, labelled with the chosen tag
     svg = (f'<svg viewBox="0 0 400 80" width="100%" style="max-width:600px">'
            f'<rect x="20" y="30" width="300" height="20" fill="#dde"/>'
