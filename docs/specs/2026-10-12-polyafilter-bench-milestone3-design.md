@@ -454,6 +454,8 @@ It never changes labels, the chosen settings or the selection rule. If no axis f
 
 **Note of 2026-10-15 (stage 28 as built).** The category of labeled molecules "whose only read is the pa read" holds the molecules none of whose reads lacks a pa tag (`end3_nonpa` -1, 3.1), so also a molecule with two pa reads and no other read: it has no base to measure either. The rule reads axis 4 in the stratum with one read without pa, where the category cannot occur. The table of counted molecules is read in batches of seven columns and never held whole: on the trial outputs of stages 24, 25 and 27, the three libraries in one process took 5 min 58 s and 4.11 GiB peak tree memory under memwatch, in place of the estimate above.
 
+**Note of 2026-10-16 (stage 28 after review).** The genes furthest above and below the library's labeled fraction f are ranked by their binomial z score against it, (labeled - UMIs f) / sqrt(UMIs f (1 - f)), among the genes with at least 50 UMIs and at least `MIN_EXPECTED` (5) expected labeled molecules (UMIs f), in place of the difference in fraction: with f at 0.3% to 0.4%, that difference put genes with less than one expected labeled molecule at the top of the list above, and genes without a labeled molecule, in the order of their UMIs, in the list below (trial outputs of 2026-10-15). A fired record table compares by region, as axis 1 does, and moves the region accuracy table of milestone 2 into the main text; point 3 names the axes only.
+
 ### 3.7 Stage 29: burden corrected for label purity, by region
 
 **Purpose.** Milestone 2 corrected the templated share for label purity per library only (0.896 to 0.871 in 1417, 0.887 to 0.859 in 1419, 0.497 to 0.409 in 1179, [M2] section 10). This stage does it per region, with intervals.
