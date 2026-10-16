@@ -80,5 +80,8 @@ RERUN_DIFF = 0.001
 # ERCCs with a UMI than ERCC_MIX_MIN, or when ERCC length differs between the subgroups at Kruskal-Wallis p < ERCC_LENGTH_ALPHA
 ERCC_MIX_MIN = 5
 ERCC_LENGTH_ALPHA = 0.05
+# Stage 28 (design 3.6, note of 2026-10-16; our proposal, not in the list of 3.0): a gene enters the ranking against the
+# library's labeled fraction when its expected labeled molecules (UMIs times that fraction) reach MIN_EXPECTED
+MIN_EXPECTED = 5
 PIGEON_DIR = Path("/data/long_read_annotation_tool/test_dataset/input_files")
 REPORT_DIR = OUT / "report"
