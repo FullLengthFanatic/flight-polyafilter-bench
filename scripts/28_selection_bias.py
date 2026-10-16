@@ -10,10 +10,11 @@ Axes (shares of labeled and of unlabeled molecules per category):
 1. region: E, N, EN from re_class (records of the molecule exonic only, intronic only, both).
 2. cell_class: the class of the barcode in <cells>/cells.parquet of stage 25, "unassigned" without one; the classes are
    read from that file at run time.
-3. expr_bin: quartile q1 to q4 of the gene's unfiltered UMIs in called cells (<matrices>/gene_totals.parquet), cut over the
-   counted molecules so that each bin holds about a quarter of them (selection.expr_bins_counted; stage 27 cuts the same
-   quantity over its truth molecule units). Per gene, the labeled fraction (selection_bias_genes.parquet), with the
-   TOP_GENES genes furthest above and below the library's fraction among the genes with at least MIN_STRATUM UMIs.
+3. expr_bin: the expression bin q1 to q4 of stage 27 of the gene's unfiltered UMIs in called cells
+   (<matrices>/gene_totals.parquet), at the boundaries of <eval>/strata_m3.json, which stage 27 cuts over its truth
+   molecule units (selection.gene_expr_bins); the bins are those of stage 27's accuracy table by expression. Per gene, the
+   labeled fraction (selection_bias_genes.parquet), with the TOP_GENES genes furthest above and below the library's
+   fraction among the genes with at least MIN_STRATUM UMIs.
 4. position: end3_nonpa, the 3'-most base of the reads without a pa tag, against the nearest annotated transcript end of
    the gene at or downstream (selection.downstream_end: collapsed-exon bases when the base is exonic, genomic bases
    otherwise; ends and exons from genes.gtf as in stage 31), in the bins of DIST_END_BINS, "past every annotated end", and
@@ -33,8 +34,9 @@ resamples, seed BOOT_SEED) with the weights recomputed in every resample.
 Reads, per library LIB (the folders of --cells, --matrices and --recount are templates in which {lib} is replaced):
 <recount>/counted_molecules.parquet (cell, gene, umi, n_reads, n_pa, re_class, end3_nonpa), <matrices>/barcodes.tsv,
 features.tsv, gene_totals.parquet, cell_totals.parquet, unfiltered.npz (the acceptance), <cells>/cells.parquet,
-<eval>/truth_to_counted.parquet, <base>/LIB/truth/molecules_labeled.parquet, <base>/LIB/grid/cell_counts.parquet (the
-acceptance) and --gtf. The stage starts only when stage 24 has passed for LIB with these two folders (recount.require_passed).
+<eval>/truth_to_counted.parquet, <eval>/strata_m3.json, <base>/LIB/truth/molecules_labeled.parquet,
+<base>/LIB/grid/cell_counts.parquet (the acceptance) and --gtf. The stage starts only when stage 24 has passed for LIB with
+these two folders (recount.require_passed).
 
 Writes under --out (default OUT/burden), one block of rows per library:
 - selection_bias_m3.parquet: lib, axis, stratum, category, n_labeled, n_unlabeled, share_labeled, share_unlabeled,
@@ -83,7 +85,7 @@ from pafbench.config import (BIAS_POINTS, CELLS, DIST_END_BINS, EXPR_BINS, GTF, 
 from pafbench.exons import load_collapsed_exons
 from pafbench.matrices import load
 from pafbench.recount import require_passed
-from pafbench.selection import (AXES, EXPR, acceptance, axis_table, decision, end_index, expr_bins_counted, gene_strands,
+from pafbench.selection import (AXES, EXPR, acceptance, axis_table, decision, end_index, gene_expr_bins, gene_strands,
                                 gene_table, labeled_keys, records_table, reweight, rule, tally)
 from pafbench.strata import cell_classes
 from pafbench.truth import in_population
@@ -105,13 +107,15 @@ def main():
     ap.add_argument("--cells", default=str(OUT / "{lib}" / "cells"), help="stage 25 folder, {lib} replaced")
     ap.add_argument("--matrices", default=str(OUT / "{lib}" / "matrices"), help="stage 24 matrices folder, {lib} replaced")
     ap.add_argument("--recount", default=str(OUT / "{lib}" / "recount"), help="stage 24 recount folder, {lib} replaced")
-    ap.add_argument("--eval", type=Path, default=OUT / "eval", help="stage 27 folder with truth_to_counted.parquet")
+    ap.add_argument("--eval", type=Path, default=OUT / "eval",
+                    help="stage 27 folder with truth_to_counted.parquet and strata_m3.json")
     ap.add_argument("--gtf", type=Path, default=GTF)
     ap.add_argument("--out", type=Path, default=OUT / "burden")
     args = ap.parse_args()
     t0 = time.monotonic()
     joins = pd.read_parquet(args.eval / "truth_to_counted.parquet",
                             columns=["lib", "mol", "cell", "gene", "umi", "joined", "region"])
+    strata27 = json.loads((args.eval / "strata_m3.json").read_text())["libraries"]
     exons, ends, strands = load_collapsed_exons(args.gtf), gene_ends(args.gtf), gene_strands(args.gtf)
     axes, records, genes, shares, libs = [], [], [], [], {}
     for lib in args.libraries:
@@ -121,7 +125,8 @@ def main():
         truth = args.base / lib / "truth" / "molecules_labeled.parquet"
         stage13 = args.base / lib / "grid" / "cell_counts.parquet"
         inputs = {"counted_molecules": str(counted), "matrices": str(matrix_dir), "cells": str(cells_dir / "cells.parquet"),
-                  "truth_to_counted": str(args.eval / "truth_to_counted.parquet"), "molecules_labeled": str(truth),
+                  "truth_to_counted": str(args.eval / "truth_to_counted.parquet"),
+                  "strata_m3": str(args.eval / "strata_m3.json"), "molecules_labeled": str(truth),
                   "cell_counts": str(stage13), "gtf": str(args.gtf)}
         barcodes = (matrix_dir / "barcodes.tsv").read_text().split()
         features = [line.split("\t") for line in (matrix_dir / "features.tsv").read_text().splitlines()]
@@ -130,7 +135,8 @@ def main():
         classes, class_code = np.unique(of_barcode, return_inverse=True)
         gt = pd.read_parquet(matrix_dir / "gene_totals.parquet", columns=["gene_id", "tag", "umis"])
         umis = gt[gt.tag == "unfiltered"].set_index("gene_id").umis.reindex(gene_ids, fill_value=0).to_numpy(np.int64)
-        expr_code, bounds = expr_bins_counted(umis)
+        bounds = np.asarray(strata27[lib]["expr_bins"]["boundaries"], np.float64)
+        expr_code = gene_expr_bins(umis, bounds)
         join = joins[joins.lib == lib].reset_index(drop=True)
         keys = labeled_keys(join)
         t = tally(counted, keys, class_code, len(classes), end_index(gene_ids, exons, ends, strands))

@@ -16,10 +16,10 @@ from pafbench.burden import END_BINS, _exon_coord, end_bin, end_distances, gene_
 from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, POOL_MIN, REPO
 from pafbench.evaluate import resample_counts
 from pafbench.exons import load_collapsed_exons
-from pafbench.selection import (AXES, AXIS_COLUMNS, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS, RECORD_COLUMNS,
-                                REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end, end_index,
-                                exon_coord, expr_bins_counted, gene_strands, gene_table, labeled_keys, pool, position_codes,
-                                records_table, reweight, rule, tally)
+from pafbench.selection import (AXES, AXIS_COLUMNS, EXPR, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS,
+                                RECORD_COLUMNS, REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end,
+                                end_index, exon_coord, gene_expr_bins, gene_strands, gene_table, labeled_keys, pool,
+                                position_codes, records_table, reweight, rule, tally)
 from pafbench.strata import JOIN_COLUMNS, cell_classes, expr_bins, join_counted
 from tests.synth import CELLS_10X
 from tests.test_matched_sites import GTF, _gtf
@@ -196,23 +196,19 @@ def test_downstream_end_against_the_nearest_end_of_stage_31(tmp_path):
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
-def test_expr_bins_are_those_of_stage_27_cut_over_the_counted_molecules(seed):
+def test_a_gene_takes_the_expression_bin_its_truth_molecules_have_in_stage_27(seed):
     rng = np.random.default_rng(seed)
     umis = np.where(rng.random(60) < 0.2, 0, rng.integers(1, 400, 60))
-    code, bounds = expr_bins_counted(umis)
     genes = np.array([f"g{i}" for i in range(len(umis))], object)
-    # one molecule per counted UMI, carrying its gene's UMIs: the bins of strata.expr_bins over them
-    ref, ref_bounds = expr_bins(np.repeat(genes, umis), pd.Series(umis, index=genes))
-    assert bounds.tolist() == ref_bounds.tolist() and len(bounds) == EXPR_BINS - 1
-    assert [f"q{c + 1}" for c in np.repeat(code, umis)] == ref.tolist()
+    # stage 27 cuts the bins over its truth molecules (strata.expr_bins), here 500 of random genes and 20 without a gene
+    row = rng.integers(0, len(genes), 500)
+    ref, bounds = expr_bins(np.concatenate([genes[row], [""] * 20]), pd.Series(umis, index=genes))
+    code = gene_expr_bins(umis, bounds)
+    has = umis[row] > 0
+    assert [EXPR[c] for c in code[row[has]]] == ref[:500][has].tolist()
     assert (code[umis == 0] == -1).all() and (code[umis > 0] >= 0).all()
-    # each bin holds about a quarter of the counted molecules
-    assert np.bincount(np.repeat(code, umis)).max() < umis.sum() / EXPR_BINS + umis.max()
-
-
-def test_expr_bins_of_one_gene():
-    code, bounds = expr_bins_counted(np.array([0, 5]))
-    assert code.tolist() == [-1, 0] and bounds.tolist() == [5.0] * (EXPR_BINS - 1)
+    # right-closed: a gene at a boundary falls in the lower bin
+    assert gene_expr_bins(np.array([0, 10, 11, 30, 31, 100]), np.array([10.0, 30.0, 50.0])).tolist() == [-1, 0, 1, 1, 2, 3]
 
 
 COUNTED_SCHEMA = pa.schema([("cell", pa.int32()), ("gene", pa.int32()), ("umi", pa.uint32()), ("ref", pa.string()),
@@ -444,8 +440,9 @@ def _stage28():
 
 def _stage28_tree(s, d, root):
     """What stage 28 reads for the synthetic library X next to the outputs of stage 24 in d: stage 27's tree (truth tables,
-    classes) with the RE of each molecule's pa read and stage 13's cell_counts, and eval/truth_to_counted.parquet from
-    stage 27's join. Returns (base, cells template, eval folder, molecules of called cells, the join)."""
+    classes) with the RE of each molecule's pa read and stage 13's cell_counts, and from stage 27 eval/truth_to_counted.parquet
+    (its join) and eval/strata_m3.json with the expression bin boundaries (strata.expr_bins over the truth molecules of
+    called cells). Returns (base, cells template, eval folder, molecules of called cells, the join)."""
     base, cells, mol, tr, _ = _stage27_tree(s, d, root)
     rec = s.reads.assign(qname=s.reads.qname.astype(str)).set_index("qname")
     path = base / "X" / "truth" / "molecules_labeled.parquet"
@@ -457,6 +454,10 @@ def _stage28_tree(s, d, root):
                         np.array(["g1", "g2", "g3", "g4"], object), d / "recount" / "counted_molecules.parquet", "X")
     (root / "eval").mkdir()
     join[JOIN_COLUMNS].to_parquet(root / "eval" / "truth_to_counted.parquet")
+    gt = pd.read_parquet(d / "matrices" / "gene_totals.parquet")
+    _, bounds = expr_bins(mol.gene.to_numpy(object), gt[gt.tag == "unfiltered"].set_index("gene_id").umis)
+    (root / "eval" / "strata_m3.json").write_text(
+        json.dumps({"libraries": {"X": {"expr_bins": {"boundaries": bounds.tolist()}}}}))
     return base, cells, root / "eval", pd.read_parquet(path)[lambda m: m.in_cell].reset_index(drop=True), join
 
 
@@ -498,7 +499,14 @@ def test_stage28_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monke
     gtf = synth10x.gtf
     ix = end_index(["g1", "g2", "g3", "g4"], load_collapsed_exons(gtf), gene_ends(gtf), gene_strands(gtf))
     t = tally(d / "recount" / "counted_molecules.parquet", labeled_keys(join), code, len(classes), ix)
-    pd.testing.assert_frame_equal(tab, axis_table(t, classes.tolist(), expr_bins_counted(umis)[0], "X"))
+    # axis 3 has the expression bins of stage 27, which here are not the quartiles over the counted molecules
+    bounds = json.loads((ev / "strata_m3.json").read_text())["libraries"]["X"]["expr_bins"]["boundaries"]
+    assert x["expr_bins"]["boundaries"] == bounds and x["inputs"]["strata_m3"] == str(ev / "strata_m3.json")
+    expr_code = gene_expr_bins(umis, np.array(bounds))
+    per_molecule = np.repeat(umis, umis)
+    assert gene_expr_bins(umis, np.quantile(per_molecule, np.arange(1, EXPR_BINS) / EXPR_BINS)).tolist() != expr_code.tolist()
+    assert x["expr_bins"]["molecules"] == dict(zip(EXPR, np.bincount(np.repeat(expr_code, umis), minlength=EXPR_BINS).tolist()))
+    pd.testing.assert_frame_equal(tab, axis_table(t, classes.tolist(), expr_code, "X"))
     pa_only = tab[(tab.axis == "position") & (tab.category == PA_ONLY)]
     assert pa_only.stratum.tolist() == ["all"] and pa_only.n_labeled.tolist() == [1] and pa_only.n_unlabeled.tolist() == [0]
     assert set(tab[tab.axis == "cell_class"].category) == {"cone", "rod", "unassigned"}

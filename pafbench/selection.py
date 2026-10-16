@@ -27,7 +27,7 @@ REWEIGHT_AXES = ("region", "cell_class", "expr_bin", "family_size")       # the 
 REGIONS = ("E", "N", "EN")      # re_class 1, 2 and 3 of stage 23: exonic records only, intronic only, both
 FAMILY = ("1", "2", "3+")       # n_reads
 NONPA = ("0", "1", "2", "3+")   # reads of the molecule without a pa tag, n_reads - n_pa
-EXPR = tuple(f"q{i}" for i in range(1, EXPR_BINS + 1))   # the names of strata.expr_bins
+EXPR = tuple(f"q{i}" for i in range(1, EXPR_BINS + 1))   # the bins of strata.expr_bins (stage 27)
 PAST, PA_ONLY = "past every annotated end", "pa read only"
 POSITIONS = END_BINS[:len(DIST_END_BINS) + 1] + (PAST, PA_ONLY)   # categories of axis 4
 RULE_STRATUM = {"position": "1"}  # the rule reads axis 4 among molecules with one read without a pa tag, the others in "all"
@@ -199,24 +199,13 @@ def position_codes(ix, gene, end3_nonpa):
     return code
 
 
-def expr_bins_counted(umis):
-    """(bin of each gene as an index into EXPR, the EXPR_BINS - 1 boundaries in UMIs): the bins of stage 27
-    (strata.expr_bins) cut over the counted molecules, each of which carries the unfiltered UMIs of its gene, so that each
-    bin holds about a quarter of them. umis: unfiltered UMIs per gene in called cells (gene_totals); a gene with u UMIs has u
-    counted molecules, so the quantiles come from the gene totals by numpy.quantile's default method without the repeated
-    array: virtual index (n - 1) q ("'get_virtual_index': lambda n, quantiles: (n - 1) * quantiles", numpy 2.4.6,
-    numpy/lib/_function_base_impl.py line 132), the values at its floor and at the next index (lines 4691 to 4697) and
-    numpy's _lerp between them (lines 4596 to 4599). A gene goes to its bin by numpy.searchsorted with side left, as in
-    strata.expr_bins; -1 for a gene without UMIs."""
-    x = np.asarray(umis, np.int64)
-    v = np.sort(x[x > 0])
-    cum = np.cumsum(v)  # index k of the sorted molecules holds the value v[i] of the first i with cum[i] > k
-    h = (cum[-1] - 1) * (np.arange(1, EXPR_BINS) / EXPR_BINS)
-    lo = np.floor(h)
-    a, b = (v[np.searchsorted(cum, np.minimum(i, cum[-1] - 1), side="right")] for i in (lo, lo + 1))
-    t = h - lo
-    bounds = np.where(t >= 0.5, b - (b - a) * (1 - t), a + (b - a) * t)
-    return np.where(x > 0, np.searchsorted(bounds, x, side="left"), -1), bounds
+def gene_expr_bins(umis, bounds):
+    """Index into EXPR of each gene from its unfiltered UMIs in called cells (umis, gene_totals) at the expression bin
+    boundaries of stage 27 (bounds, eval/strata_m3.json), so that a gene has the bin its truth molecules have there: by
+    numpy.searchsorted with side left as in strata.expr_bins (right-closed bins, a gene at a boundary in the lower one); -1 for
+    a gene without UMIs, which has no counted molecule."""
+    umis = np.asarray(umis, np.int64)
+    return np.where(umis > 0, np.searchsorted(np.asarray(bounds, np.float64), umis, side="left"), -1)
 
 
 COUNTED_COLUMNS = ["cell", "gene", "umi", "n_reads", "n_pa", "re_class", "end3_nonpa"]
@@ -263,7 +252,7 @@ def tally(counted_path, keys, cell_class, n_classes, ix, batch_rows=1 << 22):
 
 def axis_table(t, classes, expr_code, lib):
     """The five axes of one library from its Tally t, in AXIS_COLUMNS: region, cell class (classes: the names of the
-    codes), expression bin (expr_code: the EXPR index of each gene row, expr_bins_counted) and family size in stratum "all";
+    codes), expression bin (expr_code: the EXPR index of each gene row, gene_expr_bins) and family size in stratum "all";
     position in stratum "all" with every category of POSITIONS, and in the strata 1, 2 and 3+ of NONPA without PA_ONLY,
     which has a read without pa there."""
     f = t.full
@@ -327,7 +316,7 @@ def gene_table(gene_ids, gene_names, umis, labeled, lib, min_umis=MIN_STRATUM, t
 def acceptance(t, keys, m0_sum, gene_umis, join, n_called, records, stage13):
     """Design 3.6, Acceptance, for one library. molecules: labeled plus unlabeled counted molecules (the Tally t) equal the
     sum of M0 (m0_sum); every joined key (keys, labeled_keys) is a counted molecule; and the counted molecules per gene
-    equal gene_umis, the unfiltered UMIs of gene_totals that the expression bins are cut on. truth: joined plus not joined
+    equal gene_umis, the unfiltered UMIs of gene_totals that place a gene in its expression bin. truth: joined plus not joined
     truth molecules (join, the library's rows of truth_to_counted) equal the labeled molecules of called cells (n_called).
     records: per called cell, the primary records summed over RE (records: by barcode, rec_E + rec_N + rec_I + rec_none of
     cell_totals at unfiltered) equal the total of stage 13 (stage13: grid/cell_counts.parquet total, by barcode), and so do
