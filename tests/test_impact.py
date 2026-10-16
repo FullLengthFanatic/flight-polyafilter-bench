@@ -4,7 +4,8 @@ The toy library has 400 cells in four planted groups with Poisson counts: rod, c
 panel class and 40 genes of their own outside the panel, and a group without either, which stage 25 leaves unassigned. Every
 cell has 200 housekeeping genes, 600 background genes and every panel gene at a low rate. Stage 25 is run on it as the stage
 does (pipeline, class_scores, name_clusters at seed 0 and resolution 1.0). Four filtered matrices, one per setting tag:
-- DELETE: the cone panel genes lose every UMI in the cone cells (the cone cells keep their own genes);
+- DELETE: the cone panel genes lose every UMI in the cone cells (the cone cells keep their own genes) and in every other
+  rod cell;
 - SCRAMBLE: each cone cell is drawn from the expression of a rod or bipolar cell taken at random;
 - UNIFORM: every cell drawn without replacement down to its total under DELETE, blind to the gene;
 - SHIFT: every cell keeps 1 in 10 of its UMIs, blind to the gene and the class, a change common to all cells.
@@ -23,8 +24,9 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 from sklearn.metrics import adjusted_rand_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
+from threadpoolctl import threadpool_limits
 
 from pafbench import classes, impact
 from pafbench.config import (CHOSEN_SETTINGS, CLUSTER, IMPACT_SETTINGS, JACCARD_DISSOLVED, JACCARD_STABLE, KNN_FOLDS, KNN_K,
@@ -71,6 +73,7 @@ def _scenarios(toy):
     m = toy.counts.toarray()
     delete = m.copy()
     delete[np.ix_(cone, [col[g] for g in BY_NAME["cone"].genes])] = 0
+    delete[np.ix_(np.flatnonzero(toy.group == "rod")[::2], [col[g] for g in BY_NAME["cone"].genes])] = 0
     scramble = m.copy()
     pick = rng.choice(np.flatnonzero(np.isin(toy.group, ["rod", "bipolar"])), cone.sum())
     scramble[cone] = rng.poisson(toy.lam[pick])
@@ -141,11 +144,26 @@ def scenarios(toy):
 
 
 @pytest.fixture(scope="module")
-def stage(toy, scenarios, tmp_path_factory):
-    """impact.run on the toy and the four scenarios, in this process (workers 1)."""
+def votes():
+    """(reference, labels, query, k, result) of every knn_vote call of the run of the stage fixture, in call order."""
+    return []
+
+
+@pytest.fixture(scope="module")
+def stage(toy, scenarios, votes, tmp_path_factory):
+    """impact.run on the toy and the four scenarios, in this process (workers 1), with the calls of knn_vote in votes."""
     d = tmp_path_factory.mktemp("stage26")
     m, c = _stage24(d, toy, scenarios), _stage25(d, toy)
-    summary = impact.run("1417", m, c, d / "impact").summary
+    vote = impact.knn_vote
+
+    def recorded(reference, labels, query, k=KNN_K):
+        result = vote(reference, labels, query, k)
+        votes.append((reference.copy(), labels.copy(), query.copy(), k, result))
+        return result
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(impact, "knn_vote", recorded)
+        summary = impact.run("1417", m, c, d / "impact").summary
     out = {name: pd.read_parquet(d / "impact" / f"{name}.parquet") for name in impact.COLUMNS}
     return d, summary, out
 
@@ -164,7 +182,7 @@ def test_the_toy_gives_the_planted_classes(toy, stage):
 def test_deleting_the_marker_umis_of_a_class_loses_its_name_while_its_cells_stay_together(stage):
     _, summary, out = stage
     e = _call(summary, "cone", DELETE)
-    assert e["call"] == impact.UNNAMED != impact.APART
+    assert e["call"] == impact.UNNAMED
     j = out["class_jaccard"]
     cone = j[(j["class"] == "cone") & (j.tag == DELETE) & (j.resolution == CLUSTER["resolution"])]
     f, t = cone[cone.kind == "filtered"], cone[cone.kind == "thinned"]
@@ -251,6 +269,24 @@ def test_best_union_takes_the_shortest_prefix_and_counts_its_clusters():
     # class b: {1}: 2/4, {1, 3}: 4/6, {1, 3, 7}: 4/10
     assert got.loc["b", "jaccard"] == pytest.approx(4 / 6) and got.loc["b", "clusters_in_union"] == 2
     assert list(got.index) == ["a", "b"]
+    # a tie: class a has 6 cells, cluster 7 holds 4 of them alone and cluster 3 the other 2 with 3 b cells; {7}: 4/6 and
+    # {7, 3}: 6/9, the shorter union is taken
+    got = impact.best_union(np.array(["a"] * 6 + ["b"] * 3), np.array([7, 7, 7, 7, 3, 3, 3, 3, 3])).set_index("class")
+    assert got.loc["a", "jaccard"] == pytest.approx(2 / 3) and got.loc["a", "clusters_in_union"] == 1
+
+
+def test_named_share_is_the_share_of_a_class_in_clusters_the_marker_rule_names_with_it():
+    # class a: 3 cells in cluster 0, which the rule names a, and 1 in cluster 1, named b with the 4 b cells (no run of the toy
+    # library gives a share between 0 and 1)
+    fixed = np.array(["a"] * 4 + ["b"] * 4)
+    labels = np.array([0, 0, 0, 1, 1, 1, 1, 1])
+    scores = pd.DataFrame({"a": np.where(labels == 0, 1.0, 0.0), "b": np.where(labels == 1, 1.0, 0.0)})
+    name = classes.name_clusters(scores, labels)["class"]
+    assert name.tolist() == ["a", "b"]
+    got = impact.named(fixed, scores, labels).set_index("class")
+    for c in ("a", "b"):
+        assert got.loc[c, "named_share"] == (name.loc[labels[fixed == c]].to_numpy() == c).mean()
+    assert got.loc["a", "named_share"] == 0.75 and got.loc["a", "named_class"] == "a" and got.loc["b", "named_share"] == 1.0
 
 
 def test_thinned_cell_totals_equal_the_targets_exactly(toy):
@@ -294,13 +330,25 @@ def test_seeds_are_honoured(stage, toy, scenarios):
     assert (impact.build(impact.Job("thinned", SHIFT, 1), toy.counts, load)[0] != thinned).nnz > 0
     filtered, lost = impact.build(impact.Job("filtered", SHIFT, 0), toy.counts, load)
     assert (filtered != scenarios[SHIFT]).nnz == 0 and (lost != sp.load_npz(m / "lost" / f"{SHIFT}.npz")).nnz == 0
-    # the folds of the cross-validation are those of StratifiedKFold at SEED
-    fixed = pd.read_parquet(d / "cells" / "cells.parquet")["class"].to_numpy()
-    emb = classes.pipeline(toy.counts, toy.gene_ids)
-    pred = np.empty(len(fixed), object)
-    for train, test in StratifiedKFold(KNN_FOLDS, shuffle=True, random_state=impact.SEED).split(emb.pca, fixed):
-        pred[test] = KNeighborsClassifier(n_neighbors=KNN_K).fit(emb.pca[train], fixed[train]).predict(emb.pca[test])
-    assert np.array_equal(impact.cv_predict(emb.pca, fixed), pred)
+
+
+def test_the_cross_validation_folds_are_stratified_and_seeded():
+    # three classes of 72, 37 and 11 cells on noise, where the predictions depend on the folds (on the toy the recall is 1.0
+    # whatever the folds)
+    rng = np.random.default_rng(0)
+    pca = rng.normal(size=(120, 5))
+    fixed = rng.choice(np.array(["a", "b", "c"]), 120, p=[0.6, 0.3, 0.1])
+
+    def by_folds(cv):
+        pred = np.empty(len(fixed), object)
+        for train, test in cv.split(pca, fixed):
+            pred[test] = KNeighborsClassifier(n_neighbors=KNN_K).fit(pca[train], fixed[train]).predict(pca[test])
+        return pred
+
+    got = impact.cv_predict(pca, fixed)
+    assert np.array_equal(got, by_folds(StratifiedKFold(KNN_FOLDS, shuffle=True, random_state=impact.SEED)))
+    assert not np.array_equal(got, by_folds(KFold(KNN_FOLDS, shuffle=True, random_state=impact.SEED)))
+    assert not np.array_equal(got, by_folds(StratifiedKFold(KNN_FOLDS, shuffle=True, random_state=impact.SEED + 1)))
 
 
 def test_knn_vote_counts_each_cells_own_unfiltered_copy_among_the_references():
@@ -323,6 +371,30 @@ def test_projection_uses_the_unfiltered_genes_scaling_and_loadings(toy, stage):
     x = classes.normalise(f, toy.gene_ids).X[:, model["genes"]].toarray()
     assert np.array_equal(impact.project(classes.normalise(f, toy.gene_ids), model),
                           ((x - model["mean"]) / model["sd"]) @ model["loadings"])
+
+
+def test_every_matrix_votes_among_all_unfiltered_cells_each_cells_own_copy_included(stage, votes, toy):
+    d, _, out = stage
+    model = dict(np.load(d / "cells" / "model.npz"))
+    fixed = pd.read_parquet(d / "cells" / "cells.parquet")["class"].to_numpy()
+    with threadpool_limits(limits=CLUSTER["blas_threads"]):
+        unfiltered = impact.project(classes.normalise(toy.counts, toy.gene_ids), model)
+    jobs = impact.jobs([DELETE, SCRAMBLE, UNIFORM, SHIFT])
+    assert len(votes) == len(jobs)
+    # the references: the unfiltered cells on the unfiltered PCA, one row per cell in barcode order, for every matrix
+    for job, (reference, labels, query, k, _) in zip(jobs, votes):
+        assert np.array_equal(reference, unfiltered) and np.array_equal(labels, fixed) and k == KNN_K, job
+        assert query.shape == unfiltered.shape
+    # the unfiltered matrix votes with its own cells as the query, so each cell's own copy is among its references
+    assert np.array_equal(votes[0][2], unfiltered)
+    # the votes are the projected classes of the tables
+    pc, k = out["per_cell"], out["knn"]
+    for job, (*_, result) in zip(jobs, votes):
+        if job.kind != "thinned":
+            assert pc[pc.tag == job.tag].knn_class.tolist() == result.tolist(), job
+        rows = k[(k.tag == job.tag) & (k.kind == job.kind) & (k.replicate == job.replicate)].set_index("class")
+        for c in np.unique(fixed):
+            assert rows.loc[c, "retention"] == (result[fixed == c] == c).mean(), (job, c)
 
 
 def _runs(ju, jf, jt, nf=None, nt=None):
@@ -456,6 +528,9 @@ def test_marker_genes_are_the_panel_and_the_top_genes_of_the_wilcoxon_ranking(st
         before = toy.counts[:, col[gene]].toarray().ravel()
         assert row.gene_id == toy.gene_ids[col[gene]] and row.umis0 == before[cone].sum() and row.umis == 0
         assert row.lost_share == 1.0 and row.detect0 == (before[cone] > 0).mean() and row.detect == 0.0
+        # the share lost within the class: DELETE also takes the gene's UMIs in rod cells
+        lost = (toy.counts - scenarios[DELETE])[:, col[gene]].toarray().ravel()
+        assert row.lost_share == lost[cone].sum() / before[cone].sum() and lost.sum() > lost[cone].sum()
         x = classes.normalise(toy.counts, toy.gene_ids).X[:, col[gene]].toarray().ravel()
         lfc = np.log2((np.expm1(x[cone].mean()) + 1e-9) / (np.expm1(x[~cone].mean()) + 1e-9))
         assert row.lfc0 == pytest.approx(lfc, rel=1e-5) and row.lfc < 0 < row.lfc0
@@ -464,6 +539,21 @@ def test_marker_genes_are_the_panel_and_the_top_genes_of_the_wilcoxon_ranking(st
     assert listed[("cone", DELETE)] == set(BY_NAME["cone"].genes)
     assert all(g["lost_share"] > MARKER_LOSS for e in summary["marker_loss"] for g in e["genes"])
     assert set(mk[mk.lost_share > MARKER_LOSS][["class", "tag"]].itertuples(index=False, name=None)) == set(listed)
+
+
+def test_marker_genes_rank_each_class_against_all_other_cells_unassigned_included():
+    # 20 rod, 20 cone and 20 unassigned cells of 100 UMIs each. G0: 5 UMIs in every rod and every unassigned cell; G1: 2 UMIs
+    # in 15 of the 20 rod cells. Wilcoxon z of rod (scanpy, our computation agrees): G1 4.70 and G0 3.14 against all other
+    # cells, G0 5.41 and G1 4.06 against the cone cells alone
+    fixed = np.repeat(["rod", "cone", classes.UNASSIGNED], 20)
+    counts = np.zeros((60, 3), np.int32)
+    counts[(fixed == "rod") | (fixed == classes.UNASSIGNED), 0] = 5
+    counts[np.flatnonzero(fixed == "rod")[:15], 1] = 2
+    counts[:, 2] = 100 - counts.sum(axis=1)
+    norm = classes.normalise(sp.csr_matrix(counts), np.array(["ENSG0", "ENSG1", "ENSG2"]))
+    got = impact.marker_genes(norm, fixed, np.array(["G0", "G1", "FILL"]), "1417", n=1)
+    assert got[got["class"] == "rod"][["gene", "gene_id", "column", "origin"]].values.tolist() == [["G1", "ENSG1", 1, "ranking"]]
+    assert classes.UNASSIGNED not in set(got["class"])
 
 
 def test_confusion_and_retention_agree(stage):
@@ -550,12 +640,47 @@ def test_inputs_must_belong_together(stage, toy, tmp_path, monkeypatch):
         impact.run("1417", d / "matrices", other, tmp_path / "out", settings=[DELETE])
     with pytest.raises(SystemExit, match="not in the manifest"):
         impact.run("1417", d / "matrices", d / "cells", tmp_path / "out", settings=["c180_l11_m2_e"])
+    cells.to_parquet(other / "cells.parquet", index=False)
+    model = dict(np.load(d / "cells" / "model.npz"))
+    np.savez(other / "model.npz", **(model | {"genes": model["genes"] + 1}))
+    with pytest.raises(SystemExit, match="variable genes"):
+        impact.run("1417", d / "matrices", other, tmp_path / "out")
     # the marker panel edited after stage 25 ran (cone scored on the rod genes): the clusters still match, the names do not
     rod = BY_NAME["rod"].genes
     monkeypatch.setattr(classes, "PANEL", [c._replace(genes=rod) if c.name == "cone" else c for c in classes.PANEL])
     with pytest.raises(SystemExit, match="marker panel or CLASS_MARGIN"):
         impact.run("1417", d / "matrices", d / "cells", tmp_path / "out", settings=[DELETE])
     assert not (tmp_path / "out").exists()
+
+
+def test_a_failed_acceptance_is_written_and_the_script_exits_non_zero(toy, scenarios, tmp_path, monkeypatch, capsys):
+    # cell_totals of stage 24 with a row more at DELETE, for a cell that is not called: the per-tag sum differs from per_cell
+    # while every per-cell check holds
+    m = _stage24(tmp_path, toy, {DELETE: scenarios[DELETE]})
+    _stage25(tmp_path, toy)
+    ct = pd.read_parquet(m / "cell_totals.parquet")
+    extra = ct[ct.tag == DELETE].iloc[[0]].assign(cb="TTTT000000000000-1", umis=5)
+    pd.concat([ct, extra], ignore_index=True).to_parquet(m / "cell_totals.parquet", index=False)
+    spec = importlib.util.spec_from_file_location("stage26", REPO / "scripts" / "26_impact.py")
+    stage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage)
+    monkeypatch.setattr(stage, "require_passed", lambda *args: {"passed": True})
+    # one seed is enough here: the acceptance does not look at the runs
+    monkeypatch.setattr(stage, "run", partial(impact.run, cluster=dict(CLUSTER, seeds=(0,))))
+    out = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", ["26", "1417", "--cells", str(tmp_path / "cells"), "--matrices", str(m), "--recount",
+                                      str(tmp_path / "rc"), "--out", str(out), "--workers", "1"])
+    with pytest.raises(SystemExit) as e:
+        stage.main()
+    # sys.exit with a message: "If it is another kind of object, it will be printed and the system exit status will be one
+    # (i.e., failure)." (docstring of sys.exit, Python 3.11.15)
+    assert isinstance(e.value.code, str) and e.value.code.startswith("acceptance failed for 1417")
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["acceptance_passed"] is False
+    a = json.loads((out / "summary.json").read_text())["acceptance"]
+    total = int(scenarios[DELETE].sum())
+    assert a["passed"] is False
+    assert a["umis_sum_per_tag"] == {"unfiltered": [int(toy.counts.sum())] * 2, DELETE: [total, total + 5]}
+    assert a["cells_once_per_tag"] and a["umis_and_genes_equal_cell_totals"] and a["lost_and_gained_add_up"]
 
 
 def test_stage26_script_and_the_worker_pool_write_the_same_files(toy, scenarios, tmp_path, monkeypatch, capsys):
