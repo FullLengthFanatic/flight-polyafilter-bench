@@ -9,12 +9,12 @@ them), with --workers processes. Writes under <out>: per_cell, per_class, marker
 class_jaccard (.parquet) and summary.json (design 3.4, Outputs); prints the seconds of every matrix by step on stderr and a
 json line at the end. Exits non-zero after writing when the acceptance of summary.json failed.
 
-Measured on 2026-10-15 on the trial outputs of stages 24 and 25 (/usr/bin/time -v and memwatch, every setting, 33 matrices):
-1417 (5,571 cells) 2 min 52 s wall with 8 workers, memwatch 9.81 GiB, the largest process 1.48 GB; again with 4 workers
-3 min 42 s and 5.67 GiB, the same files byte for byte; 1419 (5,114 cells) 2 min 43 s with 8 workers, 9.66 GiB; 1179
-(24,378 cells) 15 min 9 s with 7 workers, 25.15 GiB, the largest process 4.29 GB. A matrix takes about 15 s (nuclei) or
-115 s (1179) in a worker that has run one before; the first in a worker adds the numba compilation (about 25 s and 60 s),
-and the unfiltered matrix the Wilcoxon ranking of the marker genes (34 s and about 140 s).
+Measured on 2026-10-16 on the trial outputs of stages 24 and 25 (/usr/bin/time -v and memwatch, every setting, 33 matrices):
+1417 (5,571 cells) 2 min 51 s wall with 8 workers, memwatch 10.02 GiB, the largest process 1.48 GB; again with 4 workers
+3 min 47 s and 5.67 GiB, the same files byte for byte; 1419 (5,114 cells) 2 min 45 s with 8 workers, 9.79 GiB; 1179
+(24,378 cells) 15 min 10 s with 7 workers, 26.50 GiB, the largest process 4.28 GB. A matrix takes about 15 s (nuclei) or
+117 s (1179) in a worker that has run one before; the first in a worker adds the numba compilation (about 25 s and 65 s),
+and the unfiltered matrix the Wilcoxon ranking of the marker genes (35 s and 140 s).
 """
 import argparse
 import json
