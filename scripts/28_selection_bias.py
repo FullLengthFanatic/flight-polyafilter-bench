@@ -17,9 +17,10 @@ Axes (shares of labeled and of unlabeled molecules per category):
    fraction among the genes with at least MIN_STRATUM UMIs.
 4. position: end3_nonpa, the 3'-most base of the reads without a pa tag, against the nearest annotated transcript end of
    the gene at or downstream (selection.downstream_end: collapsed-exon bases when the base is exonic, genomic bases
-   otherwise; ends and exons from genes.gtf as in stage 31), in the bins of DIST_END_BINS, "past every annotated end", and
-   "pa read only" for the molecules none of whose reads lacks a pa tag (end3_nonpa -1). Stratum "all", and the strata 1, 2
-   and 3+ of the number of reads without a pa tag; the rule reads stratum 1.
+   otherwise; ends and exons from genes.gtf as in stage 31), in the bins of DIST_END_BINS and "past every annotated end".
+   Stratum "all", and the strata 1, 2 and 3+ of the number of reads without a pa tag; the rule reads stratum 1. The
+   molecules none of whose reads lacks a pa tag (end3_nonpa -1) have no base: they are left out of the bins and counted
+   in the json as "pa read only" with their share of all labeled and of all unlabeled molecules.
 5. family_size: n_reads 1, 2, 3+.
 Record table: labeled molecules of called cells by the RE of their pa read (<base>/LIB/truth/molecules_labeled.parquet)
 against the called-cell primary records and the duplicate-free units of stage 23 (<matrices>/cell_totals.parquet at
@@ -40,7 +41,8 @@ these two folders (recount.require_passed).
 
 Writes under --out (default OUT/burden), one block of rows per library:
 - selection_bias_m3.parquet: lib, axis, stratum, category, n_labeled, n_unlabeled, share_labeled, share_unlabeled,
-  diff_points (share_labeled - share_unlabeled in points).
+  diff_points (share_labeled - share_unlabeled in points). The shares of a library, axis and stratum are over its
+  categories; for position over the molecules with a base.
 - selection_bias_records.parquet: lib, re, labeled, records, units, share_labeled, share_records, share_units,
   diff_points_records, diff_points_units, units_rg, read_groups, units_per_read_group.
 - selection_bias_genes.parquet: lib, gene_id, gene_name, umis, labeled, labeled_fraction, top ("above", "below" or "").
@@ -49,8 +51,8 @@ Writes under --out (default OUT/burden), one block of rows per library:
   molecules that join a counted molecule), share_counted_reweighted, lo, hi (NaN when no such axis fires), strata,
   strata_pooled, pooled_share.
 - selection_bias_m3.json: threshold, parameters, and per library the inputs, counts, classes, expression bin boundaries,
-  the join by region, the n_pa cross-tabulation, the rule outcome per axis and for the record table, the decision, the
-  reweighting, the burden numbers, the gene ranking and the acceptance.
+  the join by region, the n_pa cross-tabulation, the pa read only molecules, the rule outcome per axis and for the record
+  table, the decision, the reweighting, the burden numbers, the gene ranking and the acceptance.
 
 Acceptance (selection.acceptance): labeled plus unlabeled counted molecules equal the sum of M0, every joined key is a
 counted molecule and the counted molecules per gene equal the gene totals; joined plus not joined truth molecules equal
@@ -86,7 +88,7 @@ from pafbench.exons import load_collapsed_exons
 from pafbench.matrices import load
 from pafbench.recount import require_passed
 from pafbench.selection import (AXES, EXPR, acceptance, axis_table, decision, end_index, gene_expr_bins, gene_strands,
-                                gene_table, labeled_keys, records_table, reweight, rule, tally)
+                                gene_table, labeled_keys, pa_read_only, records_table, reweight, rule, tally)
 from pafbench.strata import cell_classes
 from pafbench.truth import in_population
 
@@ -182,6 +184,7 @@ def main():
             "join_by_region": {k: {"joined": int(v[True]), "not_joined": int(v[False])} for k, v in by_region.iterrows()},
             "n_pa": {g: {"n_pa_above_0": int(npa[i, 1]), "n_pa_0": int(npa[i, 0])}
                      for i, g in ((1, "labeled"), (0, "unlabeled"))},
+            "pa_read_only": {k: _json(v) for k, v in pa_read_only(t).items()},
             "rule": r, "decision": dec, "reweighting": {k: _json(v) for k, v in rw.items()} if rw else None,
             "max_abs_diff_points": max((v["max_abs_diff_points"] for v in r["axes"].values()
                                         if v["max_abs_diff_points"] is not None), default=None),

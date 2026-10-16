@@ -18,8 +18,8 @@ from pafbench.evaluate import resample_counts
 from pafbench.exons import load_collapsed_exons
 from pafbench.selection import (AXES, AXIS_COLUMNS, EXPR, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS,
                                 RECORD_COLUMNS, REGIONS, Tally, acceptance, axis_rows, axis_table, decision, downstream_end,
-                                end_index, exon_coord, gene_expr_bins, gene_strands, gene_table, labeled_keys, pool,
-                                position_codes, records_table, reweight, rule, tally)
+                                end_index, exon_coord, gene_expr_bins, gene_strands, gene_table, labeled_keys,
+                                pa_read_only, pool, position_codes, records_table, reweight, rule, tally)
 from pafbench.strata import JOIN_COLUMNS, cell_classes, expr_bins, join_counted
 from tests.synth import CELLS_10X
 from tests.test_matched_sites import GTF, _gtf
@@ -261,8 +261,13 @@ def test_tally_counts_each_counted_molecule_once_by_axis(tmp_path, batch_rows):
     assert get("cell_class") == {"cone": (1, 2), "rod": (1, 1)}
     assert get("expr_bin") == {"q1": (0, 1), "q2": (1, 1), "q3": (0, 0), "q4": (1, 1)}
     assert get("family_size") == {"1": (1, 0), "2": (1, 1), "3+": (0, 2)}
+    # pa read only is left out of the bins (design 3.6, axis 4), so in stratum all the shares are over the molecules with a
+    # base: the one labeled molecule with a base lies in 101-300
     assert get("position") == {"0-100": (0, 1), "101-300": (1, 0), "301-1000": (0, 1), "1001-5000": (0, 0), ">5000": (0, 0),
-                               PAST: (0, 1), PA_ONLY: (1, 0)}
+                               PAST: (0, 1)}
+    pos = tab[(tab.axis == "position") & (tab.stratum == "all")]
+    assert dict(zip(pos.category, pos.share_labeled))["101-300"] == 1.0 and pos.share_unlabeled.sum() == pytest.approx(1)
+    assert pa_read_only(t) == {"labeled": 1, "unlabeled": 0, "share_labeled": 0.5, "share_unlabeled": 0.0}
     # at equal numbers of reads without pa the pa read only category has no place
     assert get("position", "1") == {"0-100": (0, 0), "101-300": (1, 0), "301-1000": (0, 0), "1001-5000": (0, 0),
                                     ">5000": (0, 0), PAST: (0, 1)}
@@ -488,7 +493,7 @@ def test_stage28_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monke
     cm = pd.read_parquet(d / "recount" / "counted_molecules.parquet")
     assert dict(zip(genes.gene_id, genes.umis)) == cm.gene.map({0: "g1", 1: "g2", 2: "g3", 3: "g4"}).value_counts().to_dict()
 
-    # the axis table equals the functions on the same inputs; A, whose only read has pa, has its own category
+    # the axis table equals the functions on the same inputs; A, whose only read has pa, is counted apart from the bins
     tab = pd.read_parquet(out / "selection_bias_m3.parquet")
     assert list(tab.columns) == AXIS_COLUMNS and set(tab.axis) == set(AXES)
     barcodes = sorted(CELLS_10X.values())
@@ -507,8 +512,8 @@ def test_stage28_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monke
     assert gene_expr_bins(umis, np.quantile(per_molecule, np.arange(1, EXPR_BINS) / EXPR_BINS)).tolist() != expr_code.tolist()
     assert x["expr_bins"]["molecules"] == dict(zip(EXPR, np.bincount(np.repeat(expr_code, umis), minlength=EXPR_BINS).tolist()))
     pd.testing.assert_frame_equal(tab, axis_table(t, classes.tolist(), expr_code, "X"))
-    pa_only = tab[(tab.axis == "position") & (tab.category == PA_ONLY)]
-    assert pa_only.stratum.tolist() == ["all"] and pa_only.n_labeled.tolist() == [1] and pa_only.n_unlabeled.tolist() == [0]
+    assert PA_ONLY not in set(tab.category)
+    assert x["pa_read_only"] == {"labeled": 1, "unlabeled": 0, "share_labeled": 0.25, "share_unlabeled": 0.0}
     assert set(tab[tab.axis == "cell_class"].category) == {"cone", "rod", "unassigned"}
 
     rec = pd.read_parquet(out / "selection_bias_records.parquet")

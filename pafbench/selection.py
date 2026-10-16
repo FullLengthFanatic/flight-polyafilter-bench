@@ -29,7 +29,7 @@ FAMILY = ("1", "2", "3+")       # n_reads
 NONPA = ("0", "1", "2", "3+")   # reads of the molecule without a pa tag, n_reads - n_pa
 EXPR = tuple(f"q{i}" for i in range(1, EXPR_BINS + 1))   # the bins of strata.expr_bins (stage 27)
 PAST, PA_ONLY = "past every annotated end", "pa read only"
-POSITIONS = END_BINS[:len(DIST_END_BINS) + 1] + (PAST, PA_ONLY)   # categories of axis 4
+POSITIONS = END_BINS[:len(DIST_END_BINS) + 1] + (PAST, PA_ONLY)   # codes of axis 4; PA_ONLY is kept out of the bins
 RULE_STRATUM = {"position": "1"}  # the rule reads axis 4 among molecules with one read without a pa tag, the others in "all"
 AXIS_COLUMNS = ["lib", "axis", "stratum", "category", "n_labeled", "n_unlabeled", "share_labeled", "share_unlabeled",
                 "diff_points"]
@@ -253,8 +253,8 @@ def tally(counted_path, keys, cell_class, n_classes, ix, batch_rows=1 << 22):
 def axis_table(t, classes, expr_code, lib):
     """The five axes of one library from its Tally t, in AXIS_COLUMNS: region, cell class (classes: the names of the
     codes), expression bin (expr_code: the EXPR index of each gene row, gene_expr_bins) and family size in stratum "all";
-    position in stratum "all" with every category of POSITIONS, and in the strata 1, 2 and 3+ of NONPA without PA_ONLY,
-    which has a read without pa there."""
+    position in stratum "all" and in the strata 1, 2 and 3+ of NONPA, over the molecules with a base: PA_ONLY has none,
+    is left out of the bins (design 3.6, axis 4) and is counted by pa_read_only."""
     f = t.full
 
     def counts(*keep):
@@ -268,10 +268,20 @@ def axis_table(t, classes, expr_code, lib):
     pos_l, pos_u = counts(4, 5)
     rows = [axis_rows(lib, "region", "all", REGIONS, *counts(1)), axis_rows(lib, "cell_class", "all", classes, *counts(2)),
             axis_rows(lib, "expr_bin", "all", EXPR, *expr),
-            axis_rows(lib, "position", "all", POSITIONS, pos_l.sum(axis=0), pos_u.sum(axis=0))]
+            axis_rows(lib, "position", "all", POSITIONS[:-1], pos_l.sum(axis=0)[:-1], pos_u.sum(axis=0)[:-1])]
     rows += [axis_rows(lib, "position", s, POSITIONS[:-1], pos_l[k, :-1], pos_u[k, :-1]) for k, s in enumerate(NONPA) if k]
     rows.append(axis_rows(lib, "family_size", "all", FAMILY, *counts(3)))
     return pd.concat(rows, ignore_index=True)
+
+
+def pa_read_only(t):
+    """The counted molecules of the Tally t in the category PA_ONLY of axis 4, which has no base and is left out of the
+    bins: per group the number and its share of all counted molecules of the group (NaN when the group is empty)."""
+    n = t.full.sum(axis=(1, 2, 3, 4, 6))
+    share = [_share(n[k]) for k in (1, 0)]
+    k = POSITIONS.index(PA_ONLY)
+    return {"labeled": int(n[1, k]), "unlabeled": int(n[0, k]), "share_labeled": float(share[0][k]),
+            "share_unlabeled": float(share[1][k])}
 
 
 def records_table(re, totals, lib):
