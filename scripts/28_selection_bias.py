@@ -14,7 +14,8 @@ Axes (shares of labeled and of unlabeled molecules per category):
    (<matrices>/gene_totals.parquet), at the boundaries of <eval>/strata_m3.json, which stage 27 cuts over its truth
    molecule units (selection.gene_expr_bins); the bins are those of stage 27's accuracy table by expression. Per gene, the
    labeled fraction (selection_bias_genes.parquet), with the TOP_GENES genes furthest above and below the library's
-   fraction among the genes with at least MIN_STRATUM UMIs.
+   fraction by their binomial z score against it, among the genes with at least MIN_STRATUM UMIs and MIN_EXPECTED expected
+   labeled molecules (selection.gene_table).
 4. position: end3_nonpa, the 3'-most base of the reads without a pa tag, against the nearest annotated transcript end of
    the gene at or downstream (selection.downstream_end: collapsed-exon bases when the base is exonic, genomic bases
    otherwise; ends and exons from genes.gtf as in stage 31), in the bins of DIST_END_BINS and "past every annotated end".
@@ -45,7 +46,8 @@ Writes under --out (default OUT/burden), one block of rows per library:
   categories; for position over the molecules with a base.
 - selection_bias_records.parquet: lib, re, labeled, records, units, share_labeled, share_records, share_units,
   diff_points_records, diff_points_units, units_rg, read_groups, units_per_read_group.
-- selection_bias_genes.parquet: lib, gene_id, gene_name, umis, labeled, labeled_fraction, top ("above", "below" or "").
+- selection_bias_genes.parquet: lib, gene_id, gene_name, umis, labeled, labeled_fraction, z (NaN for a gene not ranked),
+  top ("above", "below" or "").
 - templated_share_reweighted.parquet: lib, axes (the fired axes among 1, 2, 3 and 5, comma-separated, "" when none),
   share_headline (templated share of the labeled molecules of called cells), share_counted_unweighted (of the truth
   molecules that join a counted molecule), share_counted_reweighted, lo, hi (NaN when no such axis fires), strata,
@@ -82,8 +84,8 @@ import numpy as np
 import pandas as pd
 
 from pafbench.burden import gene_ends
-from pafbench.config import (BIAS_POINTS, CELLS, DIST_END_BINS, EXPR_BINS, GTF, MIN_STRATUM, NUCLEI, OUT, POOL_MIN,
-                             TOP_GENES)
+from pafbench.config import (BIAS_POINTS, CELLS, DIST_END_BINS, EXPR_BINS, GTF, MIN_EXPECTED, MIN_STRATUM, NUCLEI, OUT,
+                             POOL_MIN, TOP_GENES)
 from pafbench.exons import load_collapsed_exons
 from pafbench.matrices import load
 from pafbench.recount import require_passed
@@ -189,8 +191,9 @@ def main():
             "max_abs_diff_points": max((v["max_abs_diff_points"] for v in r["axes"].values()
                                         if v["max_abs_diff_points"] is not None), default=None),
             "burden": {k: _json(shares[-1][k]) for k in SHARE_COLUMNS[2:7]},
-            "genes": {"library_fraction": float(n_lab.sum() / umis.sum()), "min_umis": MIN_STRATUM, "top": TOP_GENES,
-                      "ranked": int((gtab.umis >= MIN_STRATUM).sum())},
+            "genes": {"library_fraction": float(n_lab.sum() / umis.sum()), "min_umis": MIN_STRATUM,
+                      "min_expected": MIN_EXPECTED, "top": TOP_GENES, "ranked": int(gtab.z.notna().sum()),
+                      "rank_by": "z = (labeled - umis f) / sqrt(umis f (1 - f)), f the library fraction"},
             "acceptance": acc}
         axes.append(tab)
         records.append(rec)

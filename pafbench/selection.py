@@ -17,7 +17,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from .burden import END_BINS, _exon_coord
-from .config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, MIN_STRATUM, POOL_MIN, TOP_GENES
+from .config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, MIN_EXPECTED, MIN_STRATUM, POOL_MIN, TOP_GENES
 from .evaluate import interval, resample_counts
 from .recount import _in_sorted
 from .strata import _key
@@ -36,7 +36,7 @@ AXIS_COLUMNS = ["lib", "axis", "stratum", "category", "n_labeled", "n_unlabeled"
 RE = ("E", "N", "I")
 RECORD_COLUMNS = ["lib", "re", "labeled", "records", "units", "share_labeled", "share_records", "share_units",
                   "diff_points_records", "diff_points_units", "units_rg", "read_groups", "units_per_read_group"]
-GENE_COLUMNS = ["lib", "gene_id", "gene_name", "umis", "labeled", "labeled_fraction", "top"]
+GENE_COLUMNS = ["lib", "gene_id", "gene_name", "umis", "labeled", "labeled_fraction", "z", "top"]
 # the accuracy table (file, stratum_kind) of a fired axis that moves from the details block into the main text (design 3.6,
 # point 3); the record table compares by region, as axis 1 does, and moves the region table of milestone 2
 PLACEMENT = {"region": ("eval/metrics.parquet", "region"), "cell_class": ("eval/strata_m3.parquet", "cell_class"),
@@ -305,22 +305,28 @@ def records_table(re, totals, lib):
                          "units_per_read_group": np.where(rg["rg"] > 0, per_group, np.nan)})
 
 
-def gene_table(gene_ids, gene_names, umis, labeled, lib, min_umis=MIN_STRATUM, top=TOP_GENES):
+def gene_table(gene_ids, gene_names, umis, labeled, lib, min_umis=MIN_STRATUM, min_expected=MIN_EXPECTED, top=TOP_GENES):
     """Per gene with a counted molecule, in GENE_COLUMNS and gene row order: unfiltered UMIs (umis, the counted molecules
-    of the gene), labeled counted molecules and their fraction. top marks the top genes furthest above ("above") and below
-    ("below") the library's fraction (all labeled over all counted molecules) by labeled_fraction minus it, among the genes
-    with at least min_umis UMIs; on equal distance the gene with more UMIs first, then the gene id."""
+    of the gene), labeled counted molecules and their fraction. A gene with at least min_umis UMIs and at least min_expected
+    expected labeled molecules (UMIs times the library's fraction f, all labeled over all counted molecules) has z, its
+    binomial z score against f, (labeled - UMIs f) / sqrt(UMIs f (1 - f)); the others are not ranked (z NaN): with fewer
+    expected molecules z rests on a count of a few molecules. top marks the top genes with the largest z ("above", z > 0)
+    and the smallest ("below", z < 0); on equal z the gene with more UMIs first, then the gene id."""
     umis, labeled = np.asarray(umis, np.int64), np.asarray(labeled, np.int64)
     keep = umis > 0
+    f = labeled.sum() / umis.sum()
+    n, k = umis[keep], labeled[keep]
+    e = n * f
+    with np.errstate(invalid="ignore", divide="ignore"):
+        z = np.where((n >= min_umis) & (e >= min_expected), (k - e) / np.sqrt(e * (1 - f)), np.nan)
     t = pd.DataFrame({"lib": lib, "gene_id": np.asarray(gene_ids, object)[keep],
-                      "gene_name": np.asarray(gene_names, object)[keep], "umis": umis[keep], "labeled": labeled[keep],
-                      "labeled_fraction": labeled[keep] / umis[keep], "top": ""})
-    d = t.labeled_fraction - labeled.sum() / umis.sum()
-    ranked = t.assign(d=d)[t.umis >= min_umis]
-    for name, side, up in (("above", ranked.d > 0, False), ("below", ranked.d < 0, True)):
-        r = ranked[side].sort_values(["d", "umis", "gene_id"], ascending=[up, False, True])
+                      "gene_name": np.asarray(gene_names, object)[keep], "umis": n, "labeled": k, "labeled_fraction": k / n,
+                      "z": z, "top": ""})
+    ranked = t[t.z.notna()]
+    for name, side, up in (("above", ranked.z > 0, False), ("below", ranked.z < 0, True)):
+        r = ranked[side].sort_values(["z", "umis", "gene_id"], ascending=[up, False, True])
         t.loc[r.index[:top], "top"] = name
-    return t.reset_index(drop=True)
+    return t
 
 
 def acceptance(t, keys, m0_sum, gene_umis, join, n_called, records, stage13):

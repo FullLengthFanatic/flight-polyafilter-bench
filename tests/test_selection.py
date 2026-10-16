@@ -13,7 +13,7 @@ import pytest
 
 from pafbench import recount
 from pafbench.burden import END_BINS, _exon_coord, end_bin, end_distances, gene_ends
-from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, POOL_MIN, REPO
+from pafbench.config import BIAS_POINTS, DIST_END_BINS, EXPR_BINS, MIN_EXPECTED, MIN_STRATUM, POOL_MIN, REPO, TOP_GENES
 from pafbench.evaluate import resample_counts
 from pafbench.exons import load_collapsed_exons
 from pafbench.selection import (AXES, AXIS_COLUMNS, EXPR, FAMILY, GENE_COLUMNS, NONPA, PA_ONLY, PAST, POSITIONS,
@@ -298,17 +298,29 @@ def test_records_table_sets_labeled_molecules_against_records_and_duplicate_free
     assert t.units_per_read_group.tolist()[:2] == pytest.approx([140 / 120, 300 / 280]) and np.isnan(t.units_per_read_group[2])
 
 
-def test_gene_table_ranks_the_genes_furthest_from_the_library_fraction():
-    ids = [f"g{i}" for i in range(7)]
-    umis = np.array([100, 60, 40, 200, 500, 0, 80])
-    labeled = np.array([10, 30, 40, 0, 0, 0, 8])
-    t = gene_table(ids, [f"N{i}" for i in range(7)], umis, labeled, "L", min_umis=50, top=2)
-    assert list(t.columns) == GENE_COLUMNS and set(t.lib) == {"L"}
-    # g5 has no counted molecule; g2 has fewer than min_umis and is not ranked
-    assert t.gene_id.tolist() == ["g0", "g1", "g2", "g3", "g4", "g6"] and t.gene_name.tolist()[0] == "N0"
-    assert t.labeled_fraction.tolist() == pytest.approx([0.1, 0.5, 1.0, 0.0, 0.0, 0.1])
-    # library fraction 88 / 980: above, g1 and then g0 (g0 and g6 tie, more UMIs first); below, g4 and g3 (a tie at 0)
-    assert dict(zip(t.gene_id, t.top)) == {"g0": "above", "g1": "above", "g2": "", "g3": "below", "g4": "below", "g6": ""}
+def test_gene_table_ranks_genes_by_their_binomial_z_score_against_the_library_fraction():
+    assert MIN_EXPECTED == 5
+    ids = [f"g{i}" for i in range(10)]
+    umis = np.array([50, 1000, 5000, 600, 2000, 88_050, 400, 0, 900, 2000])
+    labeled = np.array([5, 30, 80, 12, 0, 864, 0, 0, 9, 0])
+    t = gene_table(ids, [f"N{i}" for i in range(10)], umis, labeled, "L", top=2)
+    assert list(t.columns) == GENE_COLUMNS and set(t.lib) == {"L"} and t.gene_name.tolist()[0] == "N0"
+    # g7 has no counted molecule
+    assert t.gene_id.tolist() == ["g0", "g1", "g2", "g3", "g4", "g5", "g6", "g8", "g9"]
+    assert t.labeled_fraction.tolist() == pytest.approx(labeled[umis > 0] / umis[umis > 0])
+    # library fraction 1,000 / 100,000; z = (labeled - expected) / sqrt(expected x 0.99) with expected = umis / 100. g0 (10
+    # times the fraction) and g6 (none of 4 expected) have fewer than 5 expected labeled molecules and are not ranked
+    ranked = [1, 2, 3, 4, 5, 8, 9]
+    e = umis[ranked] / 100
+    z = dict(zip(t.gene_id, t.z))
+    assert np.isnan(z["g0"]) and np.isnan(z["g6"])
+    assert [z[f"g{i}"] for i in ranked] == pytest.approx((labeled[ranked] - e) / np.sqrt(e * 0.99))
+    # above: g1 (z 6.4) and g2 (4.3), not g3 (2.5); below: g4 and g9 (-4.5, equal UMIs: the gene id first), not g5 (-0.6);
+    # g8 lies at the library fraction
+    assert dict(zip(t.gene_id, t.top)) == {"g0": "", "g1": "above", "g2": "above", "g3": "", "g4": "below", "g5": "",
+                                           "g6": "", "g8": "", "g9": "below"}
+    # at least min_umis UMIs as well
+    assert np.isnan(gene_table(ids, ids, umis, labeled, "L", min_umis=1000).set_index("gene_id").z["g3"])
 
 
 def _accept(**kw):
@@ -492,6 +504,10 @@ def test_stage28_on_the_synthetic_10x_library(synth10x, stage24, tmp_path, monke
     assert dict(zip(genes.gene_id, genes.labeled)) == {"g1": 3, "g2": 1, "g3": 0}
     cm = pd.read_parquet(d / "recount" / "counted_molecules.parquet")
     assert dict(zip(genes.gene_id, genes.umis)) == cm.gene.map({0: "g1", 1: "g2", 2: "g3", 3: "g4"}).value_counts().to_dict()
+    # no gene has MIN_STRATUM UMIs: none is ranked
+    assert x["genes"] == {"library_fraction": 0.2, "min_umis": MIN_STRATUM, "min_expected": MIN_EXPECTED, "top": TOP_GENES,
+                          "ranked": 0, "rank_by": "z = (labeled - umis f) / sqrt(umis f (1 - f)), f the library fraction"}
+    assert genes.z.isna().all() and set(genes.top) == {""}
 
     # the axis table equals the functions on the same inputs; A, whose only read has pa, is counted apart from the bins
     tab = pd.read_parquet(out / "selection_bias_m3.parquet")
