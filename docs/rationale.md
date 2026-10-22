@@ -41,7 +41,11 @@ Mode-i inverts between nuclei and cells. On nuclei it eats the intronic reads th
 
 The pipeline was tested on four retina organoid libraries and one human reference build (GRCh38-2024-A). It makes no claim about:
 - Non-human organisms. The A-run geometry of a mouse genome is different and the 20 nt window may want a different cutoff.
-- Full-length chemistries (SMART-seq, PIP-seq) where 3' bias is not present. polyAfilter does not apply there.
+- Non-oligo-dT chemistries (random hexamer RT, pseudo-bulk random-primed). The whole label system is specific to oligo-dT priming geometry, so neither the templated nor the non-templated label is informative without poly-T priming at the RT step.
 - Spatial transcriptomics or multiome. The cell type we tune on changes the base rate of each label.
-- Non-oligo-dT 3' chemistries (not that there are many in production). The whole label system is specific to oligo-dT priming geometry.
 - Datasets where the reference annotation is incomplete. A missed real 3' end looks like internal priming by this rule, because its downstream A-run has no annotation to the contrary.
+
+What the pipeline DOES apply to, including some cases that may look like exceptions:
+- 3' chemistries from any oligo-dT RT: 10x 3' v3/v4, GEM-X, Fluent PIP-seq, BD Rhapsody standard. All share the same priming geometry.
+- 3' libraries built from SMART-seq-family full-length cDNA. SMART-seq2, FLASH-seq, and FLIGHT-seq (FLASH-seq chemistry done on BD Rhapsody beads) all use oligo-dT RT and inherit the same internal-priming risk as 10x. When the full-length cDNA is sequenced only at its 3' end (BD67's short-read library, this benchmark), polyAfilter applies exactly as to 10x.
+- Full-length long-read sequencing of the same cDNA (BD67 long-read, 10x_FL Kinnex). The internal-priming artefact is still there in the molecules, but the manifestation is different: a full-length read misassigned to a short truncated isoform rather than a 3' end at the wrong position. polyAfilter's read-level filter does not directly apply at this scale, but the same 20 nt downstream A-count labelling logic does, and is what this benchmark uses for long-read corroboration in stages 16 and 30.
