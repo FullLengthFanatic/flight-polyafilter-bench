@@ -1,5 +1,7 @@
 # flight-polyafilter-bench
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23562409.svg)](https://doi.org/10.5281/zenodo.23562409)
+
 A reproducible evaluation of polyAfilter (Shulman and Elkon 2019) on retina organoid single-cell libraries. Compares four preps on the same differentiation batch: nuclei (10x 3' v4), dissociated cells (10x 3' v4), and FLIGHT-seq (BD Rhapsody) on week-26 and week-28 organoids. Cross-checked with two independent PacBio Kinnex long-read runs on the matched week-26 cells.
 
 Companion to the FLIGHT-seq manuscript. Sister tools:
@@ -64,7 +66,7 @@ Tested on retina organoid 10x 3' v4 (cells and nuclei) and FLIGHT-seq (BD Rhapso
 
 ## Citation
 
-See `CITATION.cff`. On submission, this repo gets a Zenodo DOI via the GitHub Releases integration.
+Zenodo DOI: [10.5281/zenodo.23562409](https://doi.org/10.5281/zenodo.23562409). See `CITATION.cff` for full metadata.
 
 ## License
 

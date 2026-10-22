@@ -8,6 +8,11 @@ authors:
 version: "1.0.0"
 date-released: "2026-10-22"
 repository-code: "https://github.com/FullLengthFanatic/flight-polyafilter-bench"
+doi: "10.5281/zenodo.23562409"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23562409"
+    description: "Zenodo archive of v1.0.0"
 license: MIT
 keywords:
   - polyAfilter
