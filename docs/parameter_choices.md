@@ -25,9 +25,9 @@ Performance on the four libraries:
 
 | Library | Sens | Spec | UMI cost | ARI |
 |---|---|---|---|---|
-| 1417 (nuclei) | 0.093 | 0.956 | 15.7% | 0.42 |
+| 1417 (nuclei) | 0.093 | 0.956 | 15.7% | 0.40 |
 | 1419 (nuclei) | 0.094 | 0.962 | 15.1% | 0.49 |
-| 1179 (cells) | 0.164 | 0.975 | 15.7% | 0.66 |
+| 1179 (cells) | 0.164 | 0.975 | 15.7% | 0.61 |
 | BD67 (cells) | 0.193 | 0.968 | 24.0% | 0.65 |
 
 ### mode-i: `c200_l10_m2_i`
@@ -52,9 +52,9 @@ Kept as a sanity row.
 
 | Library | UMI cost | ARI |
 |---|---|---|
-| 1417 (nuclei) | 4.7% | 0.40 |
-| 1419 (nuclei) | 3.5% | 0.49 |
-| 1179 (cells) | 7.3% | 0.61 |
+| 1417 (nuclei) | 4.7% | 0.50 |
+| 1419 (nuclei) | 3.5% | 0.55 |
+| 1179 (cells) | 7.3% | 0.70 |
 | BD67 (cells) | 6.8% | 0.71 |
 
 Light-touch filter. If you have no idea where to start and no long reads to tune against, this is a defensible default.

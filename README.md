@@ -27,6 +27,8 @@ uv sync --extra report     # also installs beautifulsoup4 + cairosvg for figure 
 
 polyAfilter is vendored at a pinned commit (`5ce0098`) in `vendor/`. If you clone without `--recurse-submodules`, run `git submodule update --init` after cloning.
 
+Stage 30 (long-read context classification) calls [`tecap`](https://github.com/FullLengthFanatic/tecap) for 3' end structural buckets. Install it on PATH or run stage 30 with `--no-tecap` to skip that step; the rest of the long-read corroboration still runs.
+
 Reference data: GRCh38-2024-A (10x Genomics), PolyASite 2.0 (GRCh38, Gencode v42). Download instructions in `data/README.md` once you fetch the sample BAMs from GEO (accessions in the manuscript).
 
 ## Running the pipeline
