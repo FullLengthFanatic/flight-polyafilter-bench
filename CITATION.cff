@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this benchmark, please cite the FLIGHT-seq manuscript and this archive."
+title: "flight-polyafilter-bench: a reproducible evaluation of polyAfilter on retina organoid single-cell libraries"
+authors:
+  - family-names: Picelli
+    given-names: Simone
+    orcid: "https://orcid.org/0000-0002-1747-614X"
+version: "1.0.0"
+date-released: "2026-10-22"
+repository-code: "https://github.com/FullLengthFanatic/flight-polyafilter-bench"
+license: MIT
+keywords:
+  - polyAfilter
+  - internal priming
+  - single-cell RNA-seq
+  - FLIGHT-seq
+  - retina organoid
+  - PacBio Kinnex
+references:
+  - type: article
+    authors:
+      - family-names: Shulman
+        given-names: Eyal D.
+      - family-names: Elkon
+        given-names: Ran
+    title: "Cell-type-specific analysis of alternative polyadenylation using single-cell transcriptomics data"
+    journal: "Nucleic Acids Research"
+    year: 2019
+    doi: "10.1093/nar/gkz867"
+  - type: software
+    title: "polyAfilter"
+    repository-code: "https://github.com/EyalShulman/polyAfilter"
+    notes: "Vendored at commit 5ce0098"
