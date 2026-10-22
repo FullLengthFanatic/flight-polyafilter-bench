@@ -20,4 +20,4 @@ Short-read libraries 1417, 1419, 1416, 1179, and BD67 are deposited at GEO acces
 
 Benchmark code and documentation: [github.com/FullLengthFanatic/flight-polyafilter-bench](https://github.com/FullLengthFanatic/flight-polyafilter-bench), archived at Zenodo DOI [10.5281/zenodo.23562409](https://doi.org/10.5281/zenodo.23562409).
 
-Companion tools: [flightcollapse](https://github.com/FullLengthFanatic/flightcollapse) for long-read collapsing and barcode recovery, [scNoiseMeter](https://github.com/FullLengthFanatic/scNoiseMeter) for single-cell noise quantification, [tecap](https://github.com/FullLengthFanatic/tecap) for 3' end structural bucket classification.
+Companion tools: [flightcollapse](https://github.com/irinakhven/flightcollapse) (I. Khven) for long-read collapsing and barcode recovery, [scNoiseMeter](https://github.com/FullLengthFanatic/scNoiseMeter) for single-cell noise quantification, [tecap](https://github.com/FullLengthFanatic/tecap) for 3' end structural bucket classification.

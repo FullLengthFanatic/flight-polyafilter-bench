@@ -5,7 +5,7 @@
 A reproducible evaluation of polyAfilter (Shulman and Elkon 2019) on retina organoid single-cell libraries. Compares four preps on the same differentiation batch: nuclei (10x 3' v4), dissociated cells (10x 3' v4), and FLIGHT-seq (BD Rhapsody) on week-26 and week-28 organoids. Cross-checked with two independent PacBio Kinnex long-read runs on the matched week-26 cells.
 
 Companion to the FLIGHT-seq manuscript. Sister tools:
-- [flightcollapse](https://github.com/FullLengthFanatic/flightcollapse) — long-read collapsing and barcode recovery
+- [flightcollapse](https://github.com/irinakhven/flightcollapse) — long-read collapsing and barcode recovery (maintained by Irina Khven)
 - [scNoiseMeter](https://github.com/FullLengthFanatic/scNoiseMeter) — single-cell noise quantification
 
 ## What this benchmark shows
