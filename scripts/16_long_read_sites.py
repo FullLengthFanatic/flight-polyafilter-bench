@@ -9,7 +9,7 @@ import pandas as pd
 import pysam
 
 from pafbench.bd67 import OUTCOMES, annotate_sites, compare_labels, count_duplicates, hexamer_summary, scan_long_reads
-from pafbench.config import FASTA, GTF, LABEL_CUTOFFS, LONG_READS, OUT
+from pafbench.config import FASTA, GTF, LABEL_CUTOFFS, LONG_READS, MIN_AFTER, OUT
 from pafbench.genes import load_gene_segments
 from pafbench.pool import map_forked
 from pafbench.regions import load_region_segments
@@ -30,7 +30,7 @@ def _work(job):
     t0 = time.monotonic()
     with pysam.FastaFile(str(FASTA)) as fa:
         seq = fa.fetch(ref).upper()
-    sites, counts, digests = scan_long_reads(LONG_READS[lib], ref)
+    sites, counts, digests = scan_long_reads(LONG_READS[lib], ref, min_after=MIN_AFTER[lib])
     sites = annotate_sites(sites, ref, seq, *_SEG)
     return lib, ref, sites, counts | {"seconds": time.monotonic() - t0}, digests
 

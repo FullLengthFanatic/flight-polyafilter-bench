@@ -406,7 +406,7 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
     cells["rod_tf_score"] = rod_tf
     cells["rod_share"] = _share(counts, symbols, AMBIENT_ROD_TRANSCRIPTS)
     cells["doublet_score"] = doublet_scores(counts, cluster)
-    cells["cr_cluster"] = cr
+    cells["cr_cluster"] = cr if cr is not None else -1
     cells["umap1"], cells["umap2"] = emb.umap[:, 0], emb.umap[:, 1]
 
     by = cells.groupby("cluster")
@@ -426,7 +426,13 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
     renamed = {r["cluster"] for r in f["rod_tf_renamed"]}
     organoid = {r["cluster"] for r in f["organoid_named"]}
     below = {r["cluster"] for r in f["markers_below_rest"]}
-    main_cr = pd.crosstab(labels, cr)
+    if cr is not None:
+        main_cr = pd.crosstab(labels, cr)
+        cr_main = main_cr.idxmax(axis=1).to_numpy()
+        cr_main_share = (main_cr.max(axis=1) / main_cr.sum(axis=1)).to_numpy()
+    else:
+        cr_main = np.full(len(clusters), -1)
+        cr_main_share = np.full(len(clusters), np.nan)
     note = {k: "; ".join([*([f"weak class: {'; '.join(f['weak_classes'][c])}"] if c in f["weak_classes"] else []),
                           *(["named with the full rod score only"] if k in renamed else []),
                           *([f"{c} is not expected in organoids (Cowan 2020)"] if k in organoid else []),
@@ -439,8 +445,8 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
         rod_tf_renames=clusters.cluster.isin(renamed), score_rod=by["score_rod"].mean().to_numpy(),
         rod_tf_score=by.rod_tf_score.mean().to_numpy(), rod_share_median=clusters.rod_share_median,
         doublet_score_median=clusters.doublet_score_median, pct_mt_median=by.pct_mt.median().to_numpy(),
-        umis_median=by.umis.median().to_numpy(), cr_cluster_main=main_cr.idxmax(axis=1).to_numpy(),
-        cr_cluster_main_share=(main_cr.max(axis=1) / main_cr.sum(axis=1)).to_numpy(), flags=clusters.cluster.map(note))
+        umis_median=by.umis.median().to_numpy(), cr_cluster_main=cr_main,
+        cr_cluster_main_share=cr_main_share, flags=clusters.cluster.map(note))
     for c in names:
         table[f"score_{c}"] = by[f"score_{c}"].mean().to_numpy()
 
@@ -465,7 +471,8 @@ def classify(lib, counts, barcodes, gene_ids, symbols, cr, lfc, cluster=CLUSTER)
         "seeds": list(seeds), "classes_scored": names, "clusters": int(len(clusters)), "classes": per_class,
         "unassigned": {"cells": int((cell_class == UNASSIGNED).sum()),
                        "clusters": [int(k) for k in clusters.cluster[clusters["class"] == UNASSIGNED]]},
-        "cell_ranger": cell_ranger_check(labels, cell_class, cr, lfc, gene_ids, symbols, lib),
+        "cell_ranger": (cell_ranger_check(labels, cell_class, cr, lfc, gene_ids, symbols, lib)
+                        if cr is not None else {"skipped": "no Cell Ranger analysis dir"}),
         "seed_stability": seed_stability({s: emb.labels[(s, resolution)] for s in seeds}, scores, resolution),
         "rare_candidates": rare,
         "panel_genes_missing": list(dict.fromkeys(markers.gene[~markers.in_matrix])),
@@ -507,16 +514,25 @@ def write(cells_dir, res, lib):
 
 def run(lib, matrix_dir, cells_dir, analysis_dir, cluster=CLUSTER):
     """Read M0 with its barcodes and features (stage 24) and Cell Ranger's clusters and fold changes, classify, write.
-    Returns the Classes, its summary with the inputs."""
+    Returns the Classes, its summary with the inputs. When analysis_dir does not exist (library has no Cell Ranger output,
+    e.g. BD Rhapsody BD67), the Cell Ranger cross-check is skipped and classification runs on scanpy's own clustering alone.
+    """
     matrix_dir, analysis_dir = Path(matrix_dir), Path(analysis_dir)
     m0 = matrices.load(lib, "unfiltered", matrix_dir)
     barcodes = (matrix_dir / "barcodes.tsv").read_text().split()
     features = pd.read_csv(matrix_dir / "features.tsv", sep="\t", header=None, dtype=str, keep_default_na=False)
-    cr, lfc = read_cell_ranger(analysis_dir, barcodes)
+    if analysis_dir.exists():
+        cr, lfc = read_cell_ranger(analysis_dir, barcodes)
+        inputs = {
+            "matrices": str(matrix_dir),
+            "clusters": str(analysis_dir / "clustering" / "gene_expression_graphclust" / "clusters.csv"),
+            "differential_expression": str(analysis_dir / "diffexp" / "gene_expression_graphclust" / "differential_expression.csv")}
+    else:
+        cr, lfc = None, None
+        inputs = {"matrices": str(matrix_dir), "clusters": None, "differential_expression": None,
+                  "cell_ranger": "skipped (no analysis dir)"}
     res = classify(lib, m0, barcodes, features[0].to_numpy(), features[1].to_numpy(), cr, lfc, cluster)
-    res.summary["inputs"] = {
-        "matrices": str(matrix_dir), "clusters": str(analysis_dir / "clustering" / "gene_expression_graphclust" / "clusters.csv"),
-        "differential_expression": str(analysis_dir / "diffexp" / "gene_expression_graphclust" / "differential_expression.csv")}
+    res.summary["inputs"] = inputs
     write(cells_dir, res, lib)
     return res
 

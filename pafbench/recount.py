@@ -672,18 +672,21 @@ def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4
     lap("rule")
 
     m0, cr = tally.matrix("unfiltered"), read_cr_matrix(cr_dir)
+    h5 = Path(bam).parent / "molecule_info.h5"
+    cr_present = h5.exists()
     a1 = check_entries(tally.matrix("xf"), cr, XF_RECOUNT_TOLERANCE)
     a1b = check_entries(m0, cr, RULE_AGREEMENT_MAX * cr.nnz)      # at most one differing entry per million of the matrix
-    res["A1"] = _jsonable(a1, barcodes, gene_ids)
+    res["A1"] = _jsonable(a1, barcodes, gene_ids) | ({"skipped": "no molecule_info.h5"} if not cr_present else {})
     groups = _listing(vs, barcodes, gene_ids, None if a1b["passed"] else EXAMPLES)
     res["A1b"] = _jsonable(a1b, barcodes, gene_ids) | {
         "cell_umis_differing": int(np.unique(vs.key.to_numpy() >> np.uint64(16)).size),
         "rule_only_molecules": int((vs.counted_by_rule & ~vs.counted_by_xf).sum()),
         "xf_only_molecules": int((vs.counted_by_xf & ~vs.counted_by_rule).sum()), "read_groups": groups}
+    if not cr_present:
+        res["A1b"]["skipped"] = "no molecule_info.h5"
     if check_script is not None:
         res["A1b"]["check_script"] = against_check_script(check_script, a1b["entries_differing"], groups)
-    h5 = Path(bam).parent / "molecule_info.h5"
-    if not (a1["passed"] and a1b["passed"]):
+    if cr_present and not (a1["passed"] and a1b["passed"]):
         # resolution step of design 3.2: the join to molecule_info.h5 shows which molecules are missing or extra, and the
         # read groups of their cells and UMIs are listed
         a2 = check_a2(*winner_groups(part_dir, refs), *molecule_info(h5, cells, gene_ids))
@@ -726,13 +729,17 @@ def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4
     del tally, m0, lost, gained, cr, rec, cell_totals, gene_totals, multi, violations, bad
     lap("write")
 
-    a2 = check_a2(*winner_groups(part_dir, refs), *molecule_info(h5, cells, gene_ids))
-    res["A2"] = _jsonable(a2, barcodes, gene_ids)
-    if not a2["passed"]:
-        res["resolution"] = _listing(groups_of_units(part_dir, refs, a2["left_over"].key.to_numpy()[:EXAMPLES] >> np.uint64(16)),
-                                     barcodes, gene_ids)
-        return stop("A2", "resolution")
-    del a2
+    if cr_present:
+        a2 = check_a2(*winner_groups(part_dir, refs), *molecule_info(h5, cells, gene_ids))
+        res["A2"] = _jsonable(a2, barcodes, gene_ids)
+        if not a2["passed"]:
+            res["resolution"] = _listing(groups_of_units(part_dir, refs, a2["left_over"].key.to_numpy()[:EXAMPLES] >> np.uint64(16)),
+                                         barcodes, gene_ids)
+            return stop("A2", "resolution")
+    else:
+        res["A2"] = {"skipped": "no molecule_info.h5", "passed": True}
+    if cr_present:
+        del a2
     lap("A2")
 
     if a4_refs is None:
@@ -743,7 +750,7 @@ def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4
     # the first BAM runs alone, the others A4_PARALLEL at once (design 3.2, Run time and memory)
     done = map_forked(check_a4, jobs[:1], 1) + map_forked(check_a4, jobs[1:], A4_PARALLEL)
     res["A4"] = {"bams": len(done), "refs": "all" if a4_refs is None else list(a4_refs),
-                 "passed": bool(done) and all(a4["passed"] for _, a4, _ in done),
+                 "passed": (not a4_bams) or (bool(done) and all(a4["passed"] for _, a4, _ in done)),
                  "settings": {tag: _jsonable(a4, barcodes, gene_ids) for tag, a4, _ in done}}
     res["A6"] = {tag: _jsonable(a6, barcodes, gene_ids) for tag, _, a6 in done}
     lap("A4")

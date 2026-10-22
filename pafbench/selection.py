@@ -135,14 +135,22 @@ class EndIndex:
 
 def end_index(gene_ids, exons, ends, strands):
     """EndIndex of the genes gene_ids (features.tsv order) from exons.load_collapsed_exons, burden.gene_ends and
-    gene_strands."""
+    gene_strands. A feature with no GTF entry (Rhapsody's v49 features.tsv includes genes not in the v44 GTF) contributes
+    no exons or ends but keeps its row number so later lookups by row stay aligned with gene_ids."""
     keys = [[] for _ in range(5)]
+    empty = np.empty(0, np.int64)
     for row, gid in enumerate(gene_ids):
-        (s, e), g, x = exons[gid], np.int64(row) << 32, ends[gid]
+        base = gid.split(".", 1)[0]  # Rhapsody features.tsv keeps the Gencode version suffix (ENSG...N); GTF dicts drop it
+        if base not in exons or base not in ends:
+            for k in range(5):
+                keys[k].append(empty)
+            continue
+        (s, e), g, x = exons[base], np.int64(row) << 32, ends[base]
         for k, v in enumerate((g | s, e, np.concatenate([[0], np.cumsum(e - s)[:-1]]), g | x,
                                g | np.unique(_exon_coord(s, e, x)))):
             keys[k].append(v)
-    return EndIndex(np.array([strands[g] for g in gene_ids], bool), *(np.concatenate(k).astype(np.int64) for k in keys))
+    plus = np.array([strands.get(gid.split(".", 1)[0], True) for gid in gene_ids], bool)
+    return EndIndex(plus, *(np.concatenate(k).astype(np.int64) for k in keys))
 
 
 def exon_coord(ix, gene, x):

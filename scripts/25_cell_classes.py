@@ -42,7 +42,7 @@ def main():
     s = res.summary
     print(json.dumps({"library": lib, "cells": s["cells"], "clusters": s["clusters"],
                       "classes": {c: v["cells"] for c, v in s["classes"].items() if c != UNASSIGNED},
-                      "unassigned_cells": s["unassigned"]["cells"], "ari_cell_ranger": s["cell_ranger"]["ari"],
+                      "unassigned_cells": s["unassigned"]["cells"], "ari_cell_ranger": s["cell_ranger"].get("ari"),
                       "seed_ari_min": s["seed_stability"]["ari_min"], "panel_genes_missing": s["panel_genes_missing"],
                       "seconds": round(time.monotonic() - t0, 1)}))
 

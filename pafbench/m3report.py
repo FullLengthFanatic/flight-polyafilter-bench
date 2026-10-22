@@ -21,8 +21,8 @@ import pandas as pd
 
 from . import m2report
 from .config import (A_BANDS, BIAS_POINTS, CELLS, CELLS_TUNED_SETTINGS, CHOSEN_SETTINGS, CLASS_MARGIN, CLUSTER,
-                     IMPACT_SETTINGS, JACCARD_DISSOLVED, JACCARD_STABLE, LABEL_CUTOFFS, LONG_READS, MEMBER_CAP, NUCLEI,
-                     SITE_TOL)
+                     IMPACT_SETTINGS, JACCARD_DISSOLVED, JACCARD_STABLE, LABEL_CUTOFFS, LIBRARIES, LONG_READS, MEMBER_CAP,
+                     NUCLEI, SITE_TOL)
 from .flags import setting_tag
 from .m2report import LIBS
 
@@ -397,7 +397,8 @@ def section_2(base, reg):
     base = Path(base)
     rows, present = [], False
     for lib in LIBS:
-        p = base / lib / "outs" / "metrics_summary.csv"
+        p = LIBRARIES[lib].parent / "metrics_summary.csv"
+        src = f"{LIBRARIES[lib].parent.parent.name}/outs/metrics_summary.csv"
         if p.exists():
             present = True
             try:
@@ -405,7 +406,7 @@ def section_2(base, reg):
                 if not df.empty:
                     r = df.iloc[0]
                     cells = reg.num(int(str(r.get("Estimated Number of Cells", "0")).replace(",", "")),
-                                    source={"file": f"{lib}/outs/metrics_summary.csv", "column": "Estimated Number of Cells",
+                                    source={"file": src, "column": "Estimated Number of Cells",
                                             "function": "section_2"}, fmt="{:,}")
                     rows.append([lib, cells])
             except Exception:
@@ -413,9 +414,11 @@ def section_2(base, reg):
         else:
             rows.append([lib, "n/a"])
     if not present:
-        return _not_run_section(2, "Libraries", base, [base / lib / "outs" / "metrics_summary.csv" for lib in LIBS])
+        return _not_run_section(2, "Libraries", base, [LIBRARIES[lib].parent / "metrics_summary.csv" for lib in LIBS])
     body = _html_table(["Library", "Called cells"], rows)
-    return _section(2, "Libraries", body, [(f"{lib}/outs/metrics_summary.csv", ["Estimated Number of Cells"]) for lib in LIBS])
+    return _section(2, "Libraries", body,
+                    [(f"{LIBRARIES[lib].parent.parent.name}/outs/metrics_summary.csv", ["Estimated Number of Cells"])
+                     for lib in LIBS])
 
 
 def section_3(base, reg):

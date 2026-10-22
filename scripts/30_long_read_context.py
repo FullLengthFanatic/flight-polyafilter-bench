@@ -53,8 +53,8 @@ from pathlib import Path
 import pandas as pd
 import pysam
 
-from pafbench.config import (FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT, OUT,
-                             PIGEON_DIR)
+from pafbench.config import (FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_AFTER, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT,
+                             OUT, PIGEON_DIR)
 from pafbench.lrcontext import (CONTEXT_COLUMNS, NOVEL_JUNCTION, VERSIONS, attach_stage16, context_tables, intron_sites_off_model,
                                 isoform_ends, link_1179, load_models, pigeon_crosscheck, reduce_sites, scan_context, totals)
 from pafbench.pool import map_forked
@@ -75,7 +75,7 @@ def _init(models):
 def _work(job):
     lib, ref, part = job
     t0 = time.monotonic()
-    reads, counts = scan_context(LONG_READS[lib], ref, _MODELS[ref], tagged=part)
+    reads, counts = scan_context(LONG_READS[lib], ref, _MODELS[ref], min_after=MIN_AFTER[lib], tagged=part)
     return (lib, ref, *reduce_sites(reads, ref), counts | {"seconds": time.monotonic() - t0})
 
 

@@ -257,7 +257,7 @@ def classify(models, minus, body):
                        len(cands) > 1 and any(_klass(tx[k], p, bool(introns)) != klass for k in cands))
 
 
-def scan_context(bam_path, ref, models, min_mapq=20, tagged=None):
+def scan_context(bam_path, ref, models, min_mapq=20, min_after=30, tagged=None):
     """Class and flags of every accepted read of one reference (READ_COLUMNS, in BAM order), and the record counts.
 
     The reads and their sites are those of stage 16 (bd67.scan_long_reads): primary records with MAPQ >= min_mapq whose
@@ -280,7 +280,7 @@ def scan_context(bam_path, ref, models, min_mapq=20, tagged=None):
                 continue
             counts["used"] += 1
             site, aligned_a, clip_a, after_len = terminal_a_run(a)
-            if not accept_long_read(aligned_a, clip_a, after_len):
+            if not accept_long_read(aligned_a, clip_a, after_len, min_after=min_after):
                 continue
             counts["accepted"] += 1
             minus = a.is_reverse

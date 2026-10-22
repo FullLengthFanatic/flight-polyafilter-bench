@@ -127,7 +127,7 @@ def _digest(name):
     return int.from_bytes(hashlib.blake2b(name.encode(), digest_size=8).digest(), "little")
 
 
-def scan_long_reads(bam_path, ref, min_mapq=20):
+def scan_long_reads(bam_path, ref, min_mapq=20, min_after=30):
     """Terminal A run (tolerance 1) of every primary record with MAPQ >= min_mapq on one reference.
 
     Returns the unique sites (strand, site, n_reads, n_accepted), record and read outcome counts, and a 64-bit
@@ -145,7 +145,7 @@ def scan_long_reads(bam_path, ref, min_mapq=20):
                 counts["low_mapq"] += 1
                 continue
             s, aligned_a, clip_a, after_len = terminal_a_run(a)
-            outcome = read_outcome(aligned_a, clip_a, after_len)
+            outcome = read_outcome(aligned_a, clip_a, after_len, min_after=min_after)
             counts[outcome] += 1
             strand.append(a.is_reverse)
             site.append(s)

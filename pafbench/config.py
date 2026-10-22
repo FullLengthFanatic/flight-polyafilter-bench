@@ -17,10 +17,15 @@ LIBRARIES = {
     "1419": RUNS / "1419_HsRetina_D29_3k" / "outs" / "possorted_genome_bam.bam",
     "1179": RUNS / "1179_organoid_wk26_10xv4" / "outs" / "possorted_genome_bam.bam",
     "1416": RUNS / "1416_HsRetina_D28_20k" / "outs" / "possorted_genome_bam.bam",
+    "BD67": RUNS / "BD67" / "short_read" / "BD067_as10x.bam",
 }
 BD67_BAM = RUNS / "BD67" / "BD67_2x_RT.fltnc.aligned.bam"
 BD70_BAM = RUNS / "BD70" / "BD70.fltnc.aligned.bam"
-LONG_READS = {"BD67": BD67_BAM, "BD70": BD70_BAM}
+TENX_FL_BAM = RUNS / "10x_FL_Kinnex" / "10x_FL.fltnc.aligned.bam"
+LONG_READS = {"BD67": BD67_BAM, "10x_FL": TENX_FL_BAM}
+# BD67 fltnc keeps the bead-tail bases (bt/bl tags, sequence retained); 10x_FL fltnc has PR1+CB+UMI stripped by
+# isoseq refine into CB/XM tags, so after_len is 0 by construction. min_after drops to 0 for 10x_FL.
+MIN_AFTER = {"BD67": 30, "10x_FL": 0}
 SIRV_DIR = OUT / "ref" / "sirv"
 SIRV_FASTA = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta_20250402.fasta"
 SIRV_GTF = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta-annotation_20250402.gtf"
@@ -33,7 +38,7 @@ POPULATIONS = ("all", "cells", "noncells")
 SEL_POPULATION = "cells"  # barcodes the headline selection and burden are computed on
 SEL_UNITS = "with_member"  # molecule units of the headline selection
 NUCLEI = ("1417", "1419")
-CELLS = ("1179",)
+CELLS = ("1179", "BD67")
 
 # Milestone 3 (design of 2026-10-12, section 3.0). The clustering values and the thresholds are our proposals.
 CHOSEN_SETTINGS = (Setting(250, 7, 1, False), Setting(200, 10, 2, True))  # eval/selection.json, modes e and i
