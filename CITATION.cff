@@ -24,15 +24,18 @@ keywords:
 references:
   - type: article
     authors:
-      - family-names: Shulman
-        given-names: Eyal D.
-      - family-names: Elkon
-        given-names: Ran
-    title: "Cell-type-specific analysis of alternative polyadenylation using single-cell transcriptomics data"
-    journal: "Nucleic Acids Research"
-    year: 2019
-    doi: "10.1093/nar/gkz867"
+      - family-names: Svoboda
+        given-names: Marek
+      - family-names: Frost
+        given-names: H. Robert
+      - family-names: Bosco
+        given-names: Giovanni
+    title: "Internal oligo(dT) priming introduces systematic bias in bulk and single-cell RNA sequencing count data"
+    journal: "NAR Genomics and Bioinformatics"
+    year: 2022
+    volume: 4
+    doi: "10.1093/nargab/lqac035"
   - type: software
     title: "polyAfilter"
-    repository-code: "https://github.com/EyalShulman/polyAfilter"
+    repository-code: "https://github.com/MarekSvob/polyAfilter"
     notes: "Vendored at commit 5ce0098"

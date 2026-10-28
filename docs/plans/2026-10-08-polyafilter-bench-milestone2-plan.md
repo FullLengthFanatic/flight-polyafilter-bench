@@ -14,13 +14,13 @@
 
 - polyAfilter pinned at commit 5ce0098 in `vendor/polyAfilter`; never edited.
 - Reference `/home/simone.picelli/Documents/Genome_ref/refdata-gex-GRCh38-2024-A` (`fasta/genome.fa`, `genes/genes.gtf`); gffutils database `/data/element_runs/polyafilter_bench/ref/genes_2024A.db`.
-- Libraries: 1417 (donor 28 nuclei), 1419 (donor 29 nuclei), 1179 (retinal organoid week 26 cells); BD67 and BD70 long reads from the 1179 cell pool. Spike-ins exist only in 1417 and 1419.
+- Libraries: 1417 (donor 28 nuclei), 1419 (donor 29 nuclei), 1179 (retinal organoid week 26 cells); BD67 long reads from the 1179 cell pool. Spike-ins exist only in 1417 and 1419.
 - Acceptance (spec 5.2): "the removed-read sets are identical to the original tool on 1417 and 1419 for every setting run in step 1. Any difference is resolved before results are used." 1179 does not fit in memory in full (spec 5.1 and 11), so it is checked by chromosome: chr21 and chr22 at the 8 published settings.
 - Labels (spec 4.1, user decision 2026-10-08): templated at 8 or more A's in the 20 nt of genome after the site, non-templated at 4 or fewer, ambiguous 5 to 7; every metric by A band 8-9, 10-13, 14-20; sweep templated 7 to 10 and non-templated 2 to 6, non-templated always below templated.
 - Members: same molecule key, `gene_match`, `dist3_exon >= -25`, `dist5_exon <= 1000` (exon-aware); sensitivity reruns at 500 and 2,000.
 - Grid (spec 6): COVLEN 150, 200, 250, 300, 375, 450, 600; MINSNRLEN none (remove all non-terminal reads, reported separately), 3, 5, 7, 9, 10, 11, 13, 15, 20; MISM 0, 1, 2 (MISM 0 only for none); default and `-i` mode: 392 settings, plus 275/9/1 and 180/11/2 in both modes = 396.
 - Selection rule (spec 7, fixed before results): "on 1417 (donor 28), in each mode, take the setting with the highest molecule-level sensitivity subject to specificity of at least 0.95; break ties by fewer total reads removed. Report that setting, plus the published settings, on 1419 (donor 29, a donor-level hold-out) and on 1179 without retuning. If no setting reaches 0.95, report the frontier and do not pick one."
-- Long-read acceptance (spec 4.3, user decision 2026-10-08): terminal A run of at least 10 nt counting aligned and clipped A's with one non-A allowed, followed by at least 30 nt of soft clip; site at the run start; statistics per unique site; BD67/BD70 enter later analyses when the hexamer rate at tail-primed sites is at least 3 times the rate at internally primed sites.
+- Long-read acceptance (spec 4.3, user decision 2026-10-08): terminal A run of at least 10 nt counting aligned and clipped A's with one non-A allowed, followed by at least 30 nt of soft clip; site at the run start; statistics per unique site; BD67 enters later analyses when the hexamer rate at tail-primed sites is at least 3 times the rate at internally primed sites.
 - Region of a site: at the last cDNA base (site - 1 on plus, site on minus), priority 3UTR > CDS > 5UTR > ncexon > intron on the site's strand; "antisense" when the site's strand is unannotated but an opposite-strand transcript covers it; "intergenic" otherwise.
 - Machine: 117 GB RAM, 32 cores. The largest single original-tool process in milestone 1 peaked at 46.0 GB (375/3/2 `-i` on 1417). Run heavy steps under `.venv/bin/python -m pafbench.memwatch <json> -- <command>`, which records the peak summed over the whole process tree.
 - Conventions: `.venv/bin/python`; packages only through `uv pip install --python .venv/bin/python`; commits as `git -c user.name="Simone Picelli" -c user.email="simone.picelli@iob.ch" commit`; no em or en dashes in code, docs or messages; delete with `gio trash`, never `rm -rf`.
@@ -299,8 +299,7 @@ index 5bac078..e1e18ab 100644
  LIBRARIES = {
 @@ -17,3 +18,13 @@ LIBRARIES = {
  BD67_BAM = RUNS / "BD67" / "BD67_2x_RT.fltnc.aligned.bam"
- BD70_BAM = RUNS / "BD70" / "BD70.fltnc.aligned.bam"
- LONG_READS = {"BD67": BD67_BAM, "BD70": BD70_BAM}
+ LONG_READS = {"BD67": BD67_BAM}
 +SIRV_DIR = OUT / "ref" / "sirv"
 +SIRV_FASTA = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta_20250402.fasta"
 +SIRV_GTF = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta-annotation_20250402.gtf"
@@ -3377,7 +3376,7 @@ git -c user.name="Simone Picelli" -c user.email="simone.picelli@iob.ch" commit -
 
 ---
 
-### Task 4: Long-read priming sites, BD67 and BD70 (stage 16)
+### Task 4: Long-read priming sites, BD67 (stage 16)
 
 **Files:**
 - Create: `tests/test_long_reads.py`
@@ -3404,7 +3403,7 @@ git -c user.name="Simone Picelli" -c user.email="simone.picelli@iob.ch" commit -
   - `pafbench.sites.context_from_seq(seq, site, is_reverse, down=20, up=40)`
 - Produces (data): `OUT/<BD>/long_read_sites.parquet` (`ref, strand, site, n_reads, n_accepted, a20, label, a_band, hexamer, region, gene`), `OUT/<BD>/long_read_acceptance.json` (read outcomes, per-site hexamer rates and ratio, `passes`, the same at 14/8, vs_1179 agreement), `OUT/<BD>/vs_1179.parquet` (`label_1179, label_long, n`).
 
-Spec 4.3 rule, decided 2026-10-08 after the milestone 1 clip test failed genome-wide: the aligner absorbs genome-encoded A's into the alignment, so the run is counted across the aligned part and the clip, with one non-A allowed inside it, and the bead sequence (at least 30 nt) must follow. With tolerance 0 the site equals milestone 1's `a_run_site` (tested). Build-time numbers on chr21 + chr22: 11.1% (BD67) and 7.7% (BD70) of reads dropped, per-site hexamer ratio 5.12 and 4.82 (per read 3.34 and 2.90).
+Spec 4.3 rule, decided 2026-10-08 after the milestone 1 clip test failed genome-wide: the aligner absorbs genome-encoded A's into the alignment, so the run is counted across the aligned part and the clip, with one non-A allowed inside it, and the bead sequence (at least 30 nt) must follow. With tolerance 0 the site equals milestone 1's `a_run_site` (tested). Build-time numbers on chr21 + chr22: 11.1% of BD67 reads dropped, per-site hexamer ratio 5.12 (per read 3.34).
 
 - [ ] **Step 1: Write the failing tests in `tests/test_long_reads.py`**
 
@@ -3955,7 +3954,7 @@ PATCH
 - [ ] **Step 5: Create `scripts/16_long_read_sites.py`**
 
 ```python
-"""Stage 16: long-read (BD67, BD70) priming sites, read acceptance by terminal A run and bead clip, comparison with 1179."""
+"""Stage 16: long-read (BD67) priming sites, read acceptance by terminal A run and bead clip, comparison with 1179."""
 import argparse
 import json
 import time
@@ -4060,7 +4059,7 @@ Expected: `143 passed, 2 warnings`.
 - [ ] **Step 7: Stage 16 genome-wide**
 
 Run: `mkdir -p /data/element_runs/polyafilter_bench/runs && .venv/bin/python -m pafbench.memwatch /data/element_runs/polyafilter_bench/runs/16_long_read_sites.mem.json -- .venv/bin/python scripts/16_long_read_sites.py`
-Expected: about 11 to 13 min. In each `long_read_acceptance.json`: duplicate qnames 0; dropped reads about 12% (BD67) and 9% (BD70); `passes` true with a per-site ratio near 5 (chr1 in the build: 5.65 and 5.32). If either library does not pass, stop and bring the numbers to the user: by the spec, that library stays out of later analyses. `vs_1179.parquet` exists for both.
+Expected: about 11 to 13 min. In `long_read_acceptance.json`: duplicate qnames 0; dropped reads about 12% (BD67); `passes` true with a per-site ratio near 5 (chr1 in the build: 5.65). If the library does not pass, stop and bring the numbers to the user: by the spec, that library stays out of later analyses. `vs_1179.parquet` exists.
 
 - [ ] **Step 8: Commit**
 
@@ -7691,7 +7690,7 @@ def test_empty_base_renders_every_section_as_not_run(tmp_path):
     assert "not run (missing eval/hexamer_check.parquet)" in s[6]
     assert "1419: not run (missing 1419/spikein/truth/molecules_labeled.parquet)" in s[7]
     assert "1417: not run (missing 1417/spikein/ercc.json)" in s[8]
-    assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s[9]
+    assert "10x_FL: not run (missing 10x_FL/long_read_acceptance.json)" in s[9]
     assert "not run (missing burden/templated_share.parquet)" in s[10]
     assert "not run (missing validation/exact_match_m2.json)" in s[11]
     # a base that does not exist at all behaves the same
@@ -7919,7 +7918,7 @@ def test_long_read_section(base):
     assert "| BD67 | 14/8 | 11,551 / 16,279 / 14,340 | 0.046 | 0.456 | 0.200 | 9.95 | True | 0.250 | 0.571 | 2.29 |" in s
     assert "about 7%" in s
     assert "| BD67 | 16,408 | 0.615 | 0.491 / 0.907 / 0.805 | 0.993 / 0.996 / 0.994 |" in s
-    assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s
+    assert "10x_FL: not run (missing 10x_FL/long_read_acceptance.json)" in s
 
 
 def test_burden_section(base):
@@ -8590,7 +8589,7 @@ def _per_read(sites, cutoffs):
 
 def long_read_section(base):
     base = Path(base)
-    out = ["## 9. Long reads (BD67, BD70)", "",
+    out = ["## 9. Long reads (BD67)", "",
            "Source: `<lib>/long_read_acceptance.json` and `<lib>/long_read_sites.parquet` (stage 16). Hexamer rates per unique "
            "site with an accepted read (binding, spec 4.3: passes at ratio >= 3) and per accepted read.", ""]
     data, notes = {}, []
@@ -8612,7 +8611,7 @@ def long_read_section(base):
     out += _table(["Library", "References", "Records", "Secondary or supplementary", "MAPQ < 20", "Used", "Accepted", "Short run",
                    "Short after", "Both", "Dropped", "Duplicate qnames"], rows)
     out += ["", "- The spec expects about 7% of reads dropped. BD67 drops more in every build check (11.1% on chr21 and chr22, "
-                "12.4% on chr1; BD70 7.7% and 9.1%), from more short-run and both-fail reads, so expect about 12% genome-wide; "
+                "12.4% on chr1), from more short-run and both-fail reads, so expect about 12% genome-wide; "
                 "that is the library, not a failure of the acceptance rule."]
     out += ["", "Hexamer rates (sites T / NT / amb counted per unique site with an accepted read):", ""]
     rows = []

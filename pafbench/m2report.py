@@ -853,7 +853,7 @@ def _per_read(sites, cutoffs):
 
 def long_read_section(base):
     base = Path(base)
-    out = ["## 9. Long reads (BD67, BD70)", "",
+    out = ["## 9. Long reads (BD67)", "",
            "Source: `<lib>/long_read_acceptance.json` and `<lib>/long_read_sites.parquet` (stage 16). Hexamer rates per unique "
            "site with an accepted read (binding, spec 4.3: passes at a per-site ratio >= 3) and per accepted read. Outcomes of the "
            f"used reads: Accepted, a terminal A run of at least {_READ['min_run'].default} nt followed by at least "

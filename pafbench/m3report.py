@@ -35,7 +35,7 @@ WRAPPED_M2 = tuple(f.__name__ for f in m2report.SECTIONS) + ("headline",)
 # library tags, the A bands, the member cap, the bias threshold. The test tokenises on `\d[\d.,/]*` and compares against
 # this set; a stray number that is not here and not inside a registry span raises the digit test.
 _ALLOW_NUMBERS = frozenset({
-    *LIBS, *LONG_READS, "BD67", "BD70",
+    *LIBS, *LONG_READS, "BD67",
     str(LABEL_CUTOFFS["templated_min"]), str(LABEL_CUTOFFS["nontemplated_max"]),
     f"{LABEL_CUTOFFS['templated_min']}/{LABEL_CUTOFFS['nontemplated_max']}",
     f"{MEMBER_CAP:,}", str(MEMBER_CAP),

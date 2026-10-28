@@ -1,4 +1,4 @@
-"""Stage 16: long-read (BD67, BD70) priming sites, read acceptance by terminal A run and bead clip, comparison with 1179."""
+"""Stage 16: long-read (BD67, 10x_FL) priming sites, read acceptance by terminal A run and bead clip, comparison with 1179."""
 import argparse
 import json
 import time

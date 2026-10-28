@@ -20,7 +20,7 @@ def test_site_key():
 
 def _tecap_json(path, cells):
     """<sample>_terminal_exon.json as tecap 0.4.0 writes it, cut down to the keys around per_cell_metrics (our
-    observation: design_m3_draft/review/v3/lens_stage30_whole/tecap_site_tag_out/BD70_chr21_site_terminal_exon.json)."""
+    observation: design_m3_draft/review/v3/lens_stage30_whole/tecap_site_tag_out/BD67_chr21_site_terminal_exon.json)."""
     per_cell = {k: {"total": sum(c.values()), "counts": c, "fractions": {b: n / sum(c.values()) for b, n in c.items()}}
                 for k, c in cells.items()}
     total = {}
@@ -70,11 +70,11 @@ def test_label_buckets_sum_the_sites_of_a_label(tmp_path):
 def test_run_classify_calls_tecap_with_the_options_of_the_design(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
-    out = tmp_path / "BD70" / "tecap" / "out"
-    got = run_classify(tmp_path / "accepted.bam", "BD70", out, 6)
-    assert got == out / "BD70_terminal_exon.json" and out.is_dir()
+    out = tmp_path / "BD67" / "tecap" / "out"
+    got = run_classify(tmp_path / "accepted.bam", "BD67", out, 6)
+    assert got == out / "BD67_terminal_exon.json" and out.is_dir()
     (cmd, kw), = calls
-    assert cmd == [str(tecap.TECAP), "classify", "--bam", str(tmp_path / "accepted.bam"), "--sample", "BD70", "--platform",
+    assert cmd == [str(tecap.TECAP), "classify", "--bam", str(tmp_path / "accepted.bam"), "--sample", "BD67", "--platform",
                    "cdna-pacbio", "--gtf", str(GTF), "--polya-sites", str(POLYASITE), "--cell-barcode-tag", "XK",
                    "--per-gene-table", "--threads", "6", "--out-dir", str(out)]
     assert str(tecap.TECAP) == "/home/simone.picelli/.local/bin/tecap"
@@ -109,7 +109,7 @@ def test_merge_parts_concatenates_in_header_order_and_indexes(tmp_path):
 
 
 def test_classify_library_merges_runs_tecap_and_writes_both_tables(tmp_path, monkeypatch):
-    out, calls = tmp_path / "BD70", []
+    out, calls = tmp_path / "BD67", []
     sites = pd.DataFrame({"ref": ["chrS", "chrS", "chrE"], "strand": "+", "site": [1080, 1180, 1080],
                           "label": ["templated", "ambiguous", "templated"], "n_accepted": [1, 1, 1], "n_no_splice": [1, 1, 0]})
 
@@ -122,9 +122,9 @@ def test_classify_library_merges_runs_tecap_and_writes_both_tables(tmp_path, mon
         return _tecap_json(out_dir / f"{sample}_terminal_exon.json", {keys[0]: {CAPTURED: 2, EXON: 1}, keys[1]: {CAPTURED: 2}})
 
     monkeypatch.setattr(tecap, "run_classify", fake)
-    got = classify_library(_parts(tmp_path), "BD70", out, sites, 3)
-    assert calls == [(out / "tecap" / "accepted.bam", "BD70", out / "tecap" / "out", 3)]
-    result = out / "tecap" / "out" / "BD70_terminal_exon.json"
+    got = classify_library(_parts(tmp_path), "BD67", out, sites, 3)
+    assert calls == [(out / "tecap" / "accepted.bam", "BD67", out / "tecap" / "out", 3)]
+    result = out / "tecap" / "out" / "BD67_terminal_exon.json"
     assert pd.read_parquet(out / "tecap_site_buckets.parquet").to_dict("list") == {
         "ref": ["chrS"] * 3, "strand": ["+"] * 3, "site": [1080, 1080, 1180], "bucket": [CAPTURED, EXON, CAPTURED],
         "reads": [2, 1, 2]}

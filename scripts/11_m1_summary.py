@@ -28,7 +28,7 @@ def main():
     cut = _j(OUT / "1417" / "label_cutoffs.json") or {}
     scope = _j(OUT / "scope_check.json") or {}
     tags = _j(OUT / "1417" / "spikein" / "tag_check.json") or {}
-    bd = {name: _j(OUT / name / "ends_check.json") or {} for name in ("BD67", "BD70")}
+    bd = {name: _j(OUT / name / "ends_check.json") or {} for name in ("BD67",)}
     ub = _j(OUT / "1179" / "ub_on_introns.json") or {}
     members = pd.read_parquet(OUT / "1417" / "members.parquet")
     bc = beyond_cap(members)
@@ -45,7 +45,7 @@ def main():
               f"- Label cut-offs: templated at A >= {cut.get('templated_min')}, non-templated at A <= {cut.get('nontemplated_max')} (tail rate {cut.get('tail_rate')}, background {cut.get('background_rate')})",
               "", "## Scope check (1416 vs 1417, chr1)", "", f"- go: {scope.get('go')}; molecules: {scope.get('molecules')}",
               "", "## Spike-in tags (1417)", "", f"- {json.dumps(tags.get('survival'))}; modules: {tags.get('modules')}",
-              "", "## Long-read ends (BD67, BD70)", ""] + [f"- {name}: {json.dumps({k: d.get(k) for k in ('reads', 'frac_clip_a_ge10', 'ratio_nontempl_templ', 'accept')})}" for name, d in bd.items()] + [
+              "", "## Long-read ends (BD67)", ""] + [f"- {name}: {json.dumps({k: d.get(k) for k in ('reads', 'frac_clip_a_ge10', 'ratio_nontempl_templ', 'accept')})}" for name, d in bd.items()] + [
               "", "## UB on reads in 1179 (chr1)", "", f"- {json.dumps(ub)}"]
     out = REPO / "docs" / "m1_results.md"
     out.write_text("\n".join(lines) + "\n")

@@ -1389,18 +1389,17 @@ Columns: n: ERCCs with a UMI unfiltered and a Mix 1 concentration; pearson_log10
 | 1419 | c250_l7_m1_e | 62 | 0.955 | 0.961 | 57,670 | 0.764 |
 | 1419 | c200_l10_m2_i | 62 | 0.954 | 0.958 | 62,430 | 0.827 |
 
-## 9. Long reads (BD67, BD70)
+## 9. Long reads (BD67)
 
-Source: `<lib>/long_read_acceptance.json` and `<lib>/long_read_sites.parquet` (stage 16). Hexamer rates per unique site with an accepted read (binding, spec 4.3: passes at a per-site ratio >= 3) and per accepted read. Outcomes of the used reads: Accepted, a terminal A run of at least 10 nt followed by at least 30 nt of clip; Short run, the run is shorter than 10 nt; Short after, the run is long enough but fewer than 30 nt of clip follow; Both, neither.
+Source: `BD67/long_read_acceptance.json` and `BD67/long_read_sites.parquet` (stage 16). Hexamer rates per unique site with an accepted read (binding, spec 4.3: passes at a per-site ratio >= 3) and per accepted read. Outcomes of the used reads: Accepted, a terminal A run of at least 10 nt followed by at least 30 nt of clip; Short run, the run is shorter than 10 nt; Short after, the run is long enough but fewer than 30 nt of clip follow; Both, neither.
 
 | Library | References | Records | Secondary or supplementary | MAPQ < 20 | Used | Accepted | Short run | Short after | Both | Dropped | Duplicate qnames |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | BD67 | 23 | 58,535,318 | 521,228 | 1,510,691 | 56,503,399 | 49,790,984 | 2,761,728 | 5,236 | 3,945,451 | 11.9% | 0 |
-| BD70 | 23 | 74,299,542 | 593,851 | 2,236,035 | 71,469,656 | 64,659,322 | 3,010,528 | 6,371 | 3,793,435 | 9.5% | 0 |
 
-- Spec 4.3 gives about 7% for milestone 1. In this run BD67 dropped 11.9% of the reads used and BD70 9.5% (`dropped_fraction` in each acceptance file, over the references stage 16 processed).
+- Spec 4.3 gives about 7% for milestone 1. In this run BD67 dropped 11.9% of the reads used (`dropped_fraction` in the acceptance file, over the references stage 16 processed).
 
-Sites with an accepted read by region and label (`BD67/long_read_sites.parquet`, `BD70/long_read_sites.parquet`, unique sites):
+Sites with an accepted read by region and label (`BD67/long_read_sites.parquet`, unique sites):
 
 | Library | Region | templated | ambiguous | non-templated | total |
 |---|---|---|---|---|---|
@@ -1411,13 +1410,6 @@ Sites with an accepted read by region and label (`BD67/long_read_sites.parquet`,
 | BD67 | CDS | 139,800 | 19,664 | 2,914 | 162,378 |
 | BD67 | 3UTR | 272,064 | 110,660 | 87,099 | 469,823 |
 | BD67 | antisense | 109,459 | 15,244 | 13,482 | 138,185 |
-| BD70 | intergenic | 82,824 | 23,691 | 24,316 | 130,831 |
-| BD70 | intron | 345,554 | 41,065 | 28,950 | 415,569 |
-| BD70 | ncexon | 52,895 | 17,947 | 13,568 | 84,410 |
-| BD70 | 5UTR | 4,979 | 819 | 569 | 6,367 |
-| BD70 | CDS | 111,567 | 13,069 | 1,987 | 126,623 |
-| BD70 | 3UTR | 234,272 | 96,038 | 79,051 | 409,361 |
-| BD70 | antisense | 78,811 | 13,700 | 11,846 | 104,357 |
 
 Hexamer rates (sites T / NT / amb counted per unique site with an accepted read):
 
@@ -1425,15 +1417,12 @@ Hexamer rates (sites T / NT / amb counted per unique site with an accepted read)
 |---|---|---|---|---|---|---|---|---|---|---|
 | BD67 | 8/4 | 1,087,038 / 179,788 / 243,316 | 0.107 | 0.573 | 0.483 | 5.34 | True | 0.218 | 0.869 | 3.98 |
 | BD67 | 14/8 | 398,860 / 519,423 / 591,859 | 0.050 | 0.479 | 0.116 | 9.51 | True | 0.054 | 0.852 | 15.86 |
-| BD70 | 8/4 | 910,902 / 160,287 / 206,329 | 0.117 | 0.593 | 0.522 | 5.06 | True | 0.246 | 0.876 | 3.56 |
-| BD70 | 14/8 | 342,905 / 443,417 / 491,196 | 0.054 | 0.515 | 0.128 | 9.55 | True | 0.064 | 0.863 | 13.38 |
 
 Agreement with 1179 (1179 molecules on the references stage 16 processed; a long-read site within 10 nt on the same strand). Agreement T / NT / pooled: among 1179 molecules matched to a long-read site, the share with the same label (T: of the matched templated molecules, NT: of the matched non-templated, pooled: of the matched templated or non-templated). Agreement within 10 nt may mostly measure co-location (not tested here):
 
 | Library | 1179 molecules | Matched share | Matched share T / NT / amb | Agreement T / NT / pooled |
 |---|---|---|---|---|
 | BD67 | 1,351,218 | 0.872 | 0.773 / 0.981 / 0.941 | 0.993 / 0.996 / 0.994 |
-| BD70 | 1,351,218 | 0.862 | 0.754 / 0.979 / 0.937 | 0.990 / 0.995 / 0.993 |
 
 ## 10. Burden: templated share of labeled molecules
 

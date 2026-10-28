@@ -20,12 +20,12 @@ Limits: the tested settings cover MISM 1 and 2, MINSNRLEN 3 and 10, COVLEN 300 a
 
 **6. Organoid cells (1179).** UB is present on 97.1% of intronic and 97.1% of exonic reads (chr1), so intronic molecules from cells can enter the truth set.
 
-**7. Long reads (BD67, BD70): failed the pre-set bar.** Sampled genome-wide, only 61.7% (BD67) and 62.3% (BD70) of reads start their 3' clip with 10 or more A's; the bar was 80%. The hexamer contrast holds: per unique site, 0.34 non-templated vs 0.06 templated in BD67, 0.39 vs 0.07 in BD70. A breakdown of 15,359 BD67 reads shows why the clip test fails:
+**7. Long reads (BD67): failed the pre-set bar.** Sampled genome-wide, only 61.7% of BD67 reads start their 3' clip with 10 or more A's; the bar was 80%. The hexamer contrast holds: per unique site, 0.34 non-templated vs 0.06 templated. A breakdown of 15,359 BD67 reads shows why the clip test fails:
 - 27% have the A run absorbed into the alignment (median 17 aligned A's). That is what priming on a long genomic A stretch looks like, and the site rule already counts aligned A's.
 - 10% have no 3' clip and no A run, so they have no usable site.
 - 5% have an A-rich clip broken by a mismatch.
 
-Per-read figures include about 2% duplicate reads (BD67 836, BD70 750) because 13 of the 200 random windows overlap; per-site figures are not affected, and the milestone 2 rerun deduplicates reads. The earlier pass (87% of reads, 15% templated) came from a gene-dense 1.3 Mb stretch of chr1. Genome-wide, 25% of BD67 reads are templated at 14/8.
+Per-read figures include about 2% duplicate reads (836) because 13 of the 200 random windows overlap; per-site figures are not affected, and the milestone 2 rerun deduplicates reads. The earlier pass (87% of reads, 15% templated) came from a gene-dense 1.3 Mb stretch of chr1. Genome-wide, 25% of BD67 reads are templated at 14/8.
 
 ## Decisions needed
 
@@ -40,11 +40,11 @@ Per-read figures include about 2% duplicate reads (BD67 836, BD70 750) because 1
 About 6.5% of the 8/4 positives are real tails, against 4.6% at 10 and 2.9% at 14. Two thirds of the 8/4 positives have no A stretch that README-type settings (10 A's, 1 mismatch) can detect. At 8/4 the benchmark therefore also measures priming on A-rich but broken sequence, which polyAfilter's definition cannot catch. At 14/8 it mainly measures position, and the internal-priming share of exonic molecules on chr1 drops from 0.84 to 0.29.
 Recommendation: keep 8/4 as the primary labels, since they were fixed before any polyAfilter result, and report every metric by A band. The spec's sensitivity sweep then becomes templated 7 to 10 and non-templated 2 to 6, so the two classes never overlap.
 
-**Long-read criterion.** Proposal for milestone 2: accept a read when its whole terminal A run (aligned plus clipped A's) is 10 or longer, drop reads without one (about 12%), and report per unique site. BD67 and BD70 stay out of milestone 2 until this is agreed.
+**Long-read criterion.** Proposal for milestone 2: accept a read when its whole terminal A run (aligned plus clipped A's) is 10 or longer, drop reads without one (about 12%), and report per unique site. BD67 stays out of milestone 2 until this is agreed.
 
 ## Carried into the milestone 2 plan (from the reviews)
 - Stage 03 streams records instead of holding a chromosome in memory, and stores CB, UB, GX, RE and MAPQ, so the molecule-level variant and the per-cell impact need no extra BAM pass. A 392-setting table on 1179 (580M reads) needs bit-packed or per-cell aggregate storage.
 - More exact-match settings before the grid is trusted: MISM 0, COVLEN 600, the remove-all-non-terminal control (in-process, since the CLI cannot express it), and the published 275/9/1 and 180/11/2 in both modes, on 1417 and 1419.
 - Member filter applies `gene_match` and the 1,000 nt cap; molecules carry MAPQ; `parse_setting` rejects an integer 0.
 - Memory measured for the whole process tree, not the largest process.
-- Long-read acceptance (decided 2026-10-08): terminal A run of 10 or more (aligned plus clipped, one non-A allowed) followed by at least 30 nt of bead sequence; site at the run start; genome-wide sampling with read deduplication; per-site statistics; BD67/BD70 used once tail-primed sites carry the hexamer at least 3 times as often as internally primed sites.
+- Long-read acceptance (decided 2026-10-08): terminal A run of 10 or more (aligned plus clipped, one non-A allowed) followed by at least 30 nt of bead sequence; site at the run start; genome-wide sampling with read deduplication; per-site statistics; BD67 used once tail-primed sites carry the hexamer at least 3 times as often as internally primed sites.

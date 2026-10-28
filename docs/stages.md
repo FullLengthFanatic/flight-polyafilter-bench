@@ -57,7 +57,7 @@ Stages are numbered. Each stage reads from `--base` (default `/data/element_runs
 
 | # | Script | Purpose |
 |---|---|---|
-| 90 | `90_export_figures.py` | Pull the four SVG figures from `m3_summary.html`, write PNGs at 2x viewBox |
+| 90 | `90_export_figures.py` | Render three supplementary figures (burden by library, by compartment, UMI loss by setting) from parquet with matplotlib at 300 dpi; writes PNG + SVG + PDF |
 | 92 | `92_main_text_figure.py` | Build the manuscript's two-panel main figure (burden + ARI) from the parquet files |
 
 ## Running a subset

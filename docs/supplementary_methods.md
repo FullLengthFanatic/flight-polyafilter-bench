@@ -4,15 +4,15 @@ One-page summary for the FLIGHT-seq manuscript supplementary section. For the fu
 
 ## Rationale
 
-polyAfilter (Shulman and Elkon 2019) flags reads whose alignment 3' end falls over a genomic adenine run, under the assumption that oligo-dT primes on such runs more often than on real poly-A tails. The 20 nt downstream window and the 8/4 A-count cutoffs used throughout this work trace to that paper, adapted to this dataset by a hexamer-purity audit on 1417 (ratio of canonical poly-A signal hexamer presence between non-templated and templated sites below 3 at cutoffs looser than 8/4).
+polyAfilter (Svoboda, Frost, and Bosco 2022, NAR Genomics and Bioinformatics) flags reads whose alignment 3' end falls over a genomic adenine run, under the assumption that oligo-dT primes on such runs more often than on real poly-A tails. The 20 nt downstream window is polyAfilter's design (Svoboda et al. 2022); the 8/4 A-count labelling cutoffs come from a hexamer-purity audit on 1417 (ratio of canonical poly-A signal hexamer presence between non-templated and templated sites below 3 at cutoffs looser than 8/4).
 
 ## Parameter choice without matched bulk
 
 Svoboda et al. 2022 tune polyAfilter against bulk random-primed RNA-seq. We do not have matched bulk data for the retina organoid libraries. Three substitutes carried the choice:
 
 1. **Hexamer purity ratio > 3x** between non-templated and templated sites at 8/4. All four libraries pass.
-2. **Matched long-read corroboration** from two independent PacBio Kinnex runs on the same week-26 cells. Pooled label agreement with 1179 short-read labels: 99.5% (10x_FL, same-prep match), 99.4% (BD67, cross-prep match). Null (1 kb shift upstream) collapses pooled agreement to 44%, confirming the signal is not geometric.
-3. **Prep-ordering sanity.** Nuclei are expected to carry more intronic A-stretches (pre-mRNA capture) than cells, and FLIGHT-seq on bead is expected to have lower internal-priming burden than oligo-dT in solution. Measured ordering (82% / 48.5% / 26.8% templated across nuclei, 10x cells, FLIGHT-seq cells) matches.
+2. **Long-read corroboration** from two independent PacBio Kinnex runs. Pooled label agreement with 1179 short-read labels: 99.4% for BD67 (FLIGHT-seq Rhapsody long-read, same week-26 cell pool as 1179, cross-prep comparison), 99.5% for 10x_FL (Kinnex 8-fold on a week-29 10x retina organoid library, different pool from 1179). The 10x_FL agreement reflects that the 20 nt A-count rule is a reference-sequence property, so cross-platform convergence is expected even without matched cells. Null (1 kb shift upstream) collapses pooled agreement to 44%, confirming the signal is not geometric.
+3. **Prep-ordering sanity.** Nuclei are expected to carry more intronic A-stretches (pre-mRNA capture) than cells, and FLIGHT-seq on bead is expected to have lower internal-priming burden than oligo-dT in solution. Measured ordering (89% pooled nuclei, 50% on 1179, 26% on BD67 templated share) matches.
 
 ## Chosen settings
 
@@ -22,7 +22,7 @@ Three settings reported:
 |---|---|---|---|---|---|
 | `c250_l7_m1_e` (mode-e) | 250 | 7 | 1 | excluded | Sensitivity pick for cells; moderate specificity gain on nuclei |
 | `c200_l10_m2_i` (mode-i) | 200 | 10 | 2 | included | Specificity pick for cells; eats intronic reads on nuclei |
-| `c300_l10_m1_e` (paper default) | 300 | 10 | 1 | excluded | Shulman and Elkon's starting point |
+| `c300_l10_m1_e` (paper default) | 300 | 10 | 1 | excluded | Svoboda et al.'s starting point |
 
 Per-library performance in Table S1 (or `docs/parameter_choices.md`). ARI reported as the median across 10 seeds and 3 Leiden resolutions.
 

@@ -10,7 +10,7 @@ polyAfilter counts those downstream A's across every candidate 3' end in the lib
 
 ## Why 20 nt and why 8 and 4
 
-The 20 nt window traces to Shulman and Elkon 2019 (Trends in Genetics). They showed that genomic poly-A runs of 10 or more A's within 20 nt of the alignment 3' end account for most oligo-dT mispriming on human data, and that the signal plateaus beyond 20 nt. We kept their window.
+The 20 nt downstream window is polyAfilter's design (Svoboda, Frost, and Bosco 2022, NAR Genomics and Bioinformatics). The tool evaluates genomic adenine content within that window to separate a real poly-A tail from oligo-dT mispriming on a genomic A-stretch, and we kept the window.
 
 The 8 and 4 split (templated at 8 or more, non-templated at 4 or fewer, ambiguous 5-7) comes from a hexamer-purity audit on 1417. At 8 A's downstream the fraction of sites carrying a known mispriming hexamer in the 10 nt upstream drops below one in ten. At 4 A's the hexamer rate is high and the sites behave like real cleavage-polyadenylation signals. 5-7 is a mixed band we keep separate rather than force into either side. In our hands cutoffs of 14/8 (the paper default) are too permissive on nuclei: a lot of mispriming slips into "non-templated" because the upstream signal is already strong. We tightened to 8/4.
 
@@ -22,9 +22,9 @@ We did not have matched bulk random-primed RNA-seq for the retina organoid libra
 
 **Hexamer purity.** On the long-read libraries we require that the rate of a canonical poly-A signal hexamer (AATAAA, ATTAAA and the 15 near-canonical variants) within 10 nt upstream of the site be at least three times higher on non-templated sites than on templated ones. If a cutoff setting breaks that ratio, the labels are not splitting biology any more. Three is empirical, picked so that both 1417 and 1419 pass at 8/4 and fail at 14/8 by small margins. The ratio check is a smoke test, not a tune.
 
-**Long-read corroboration.** Two independent PacBio Kinnex long-read runs on the same cells as 1179 agree with the short-read labels at 99.5% pooled (10x_FL, matched prep) and 99.4% pooled (BD67, cross-prep). The agreement is identical across chemistries because the 20 nt A-count rule is a reference-sequence property. This does not tune the cutoffs; it tells us the cutoffs are consistent across platforms.
+**Long-read corroboration.** Two independent PacBio Kinnex long-read runs agree with the 1179 short-read labels: 99.4% pooled for BD67 (FLIGHT-seq Rhapsody long-read on the same week-26 cell pool as 1179, cross-prep comparison) and 99.5% pooled for 10x_FL (Kinnex 8-fold on a week-29 10x retina organoid library, different pool from 1179; cross-platform check). The agreement is near-identical because the 20 nt A-count rule is a reference-sequence property, so cross-platform convergence is expected even without matched cells. This does not tune the cutoffs; it tells us the labels are stable across platforms.
 
-**Known positive and negative controls.** On nuclei the templated share should dominate (pre-mRNA capture favours intronic A-stretches); it does, at 82%. On FLIGHT-seq cells the templated share should be lower (RT-on-bead with less secondary structure); it is, at 27%. The relative ordering across the four libraries matches the physics.
+**Known positive and negative controls.** On nuclei the templated share should dominate (pre-mRNA capture favours intronic A-stretches); it does, at 89% pooled across 1417 and 1419. On FLIGHT-seq cells the templated share should be lower (RT-on-bead with less secondary structure); it is, at 26% on BD67. The relative ordering across the four libraries matches the physics.
 
 None of these substitutes is as clean as bulk random-primed data. We tell the reader this up front. We would prefer bulk for a future benchmark and would run it if we had the sample.
 

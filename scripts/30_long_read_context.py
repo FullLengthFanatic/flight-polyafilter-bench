@@ -1,5 +1,5 @@
-"""Stage 30: context of long-read (BD67, BD70) 3' ends against the GTF, with the pigeon cross-check for BD70, the link to
-1179 with its null, and tecap buckets per site (design of 2026-10-12, section 3.8).
+"""Stage 30: context of long-read (BD67, 10x_FL) 3' ends against the GTF, the link to 1179 with its null, and tecap buckets
+per site (design of 2026-10-12, section 3.8).
 
 Reads and sites are those of stage 16 (same references by default, same acceptance); each accepted read gets one class by
 pafbench.lrcontext.classify. Inputs are read under --base: <lib>/long_read_sites.parquet of stage 16 and
@@ -19,10 +19,8 @@ pafbench.lrcontext.classify. Inputs are read under --base: <lib>/long_read_sites
                                        placed top class is a no_model reason (novel_junction, antisense, intergenic), with
                                        the main sub-cause of a novel junction.
 <lib>/isoform_context.json             totals in both versions (lrcontext.totals), record counts, the acceptance checks,
-                                       the link to 1179 and its null, per reference counts and seconds, for BD70 the
-                                       counts of the pigeon cross-check, and under "tecap" the counts of that step.
-BD70/pigeon_crosscheck.parquet         structural_category, subcategory, context, isoforms: the ends of the min20 collapsed
-                                       isoforms against the nearest site within 10 nt ("none" without one).
+                                       the link to 1179 and its null, per reference counts and seconds, and under "tecap"
+                                       the counts of that step.
 1179/truth/long_read_context.parquet   mol, context_<lib>: the placed top class of the long-read site within 10 nt of each
                                        truth molecule on the references scanned ("none" without one).
 <lib>/tecap/accepted.bam (indexed)     the accepted reads with the site key ref:strand:site in tag XK, <lib>/tecap/out/ with
@@ -54,15 +52,13 @@ import pandas as pd
 import pysam
 
 from pafbench.config import (FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_AFTER, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT,
-                             OUT, PIGEON_DIR)
+                             OUT)
 from pafbench.lrcontext import (CONTEXT_COLUMNS, NOVEL_JUNCTION, VERSIONS, attach_stage16, context_tables, intron_sites_off_model,
-                                isoform_ends, link_1179, load_models, pigeon_crosscheck, reduce_sites, scan_context, totals)
+                                link_1179, load_models, reduce_sites, scan_context, totals)
 from pafbench.pool import map_forked
 from pafbench.tecap import classify_library
 
 REFS = [f"chr{i}" for i in range(1, 23)] + ["chrX"]
-PIGEON_GTF = PIGEON_DIR / "20260608_FLIGHT-seq_horg_BD70_BD70.trimmed.min20count.gtf"
-PIGEON_CLASS = PIGEON_DIR / "classification" / "BD70.trimmed.min20count_classification.txt"
 RECORD_KEYS = ("records", "secondary_supplementary", "low_mapq", "used", "accepted", "empty_body")
 _MODELS = None
 
@@ -138,11 +134,6 @@ def main():
                                  "one_class_per_accepted_read": summary["accepted_reads"] == summary["records"]["accepted"],
                                  "intron_sites_off_model": 0}
         link[f"context_{lib}"], summary["vs_1179"] = link_1179(mol, sites)
-        if lib == "BD70":
-            classification = pd.read_csv(PIGEON_CLASS, sep="\t", usecols=["isoform", "structural_category", "subcategory"])
-            table, counts = pigeon_crosscheck(isoform_ends(PIGEON_GTF, args.refs), classification, sites)
-            table.to_parquet(d / "pigeon_crosscheck.parquet", index=False)
-            summary["pigeon"] = {"gtf": str(PIGEON_GTF), "classification": str(PIGEON_CLASS)} | counts
         line[lib] = {"accepted_reads": summary["accepted_reads"], "sites": summary["sites"],
                      "reads_novel_junction": {v: summary[v]["reads_by_class"][NOVEL_JUNCTION] for v in VERSIONS},
                      "sites_top_no_model": {v: sum(n for c, n in summary[v]["sites_by_context"].items()

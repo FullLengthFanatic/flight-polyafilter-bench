@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23562409.svg)](https://doi.org/10.5281/zenodo.23562409)
 
-A reproducible evaluation of polyAfilter (Shulman and Elkon 2019) on retina organoid single-cell libraries. Compares four preps on the same differentiation batch: nuclei (10x 3' v4), dissociated cells (10x 3' v4), and FLIGHT-seq (BD Rhapsody) on week-26 and week-28 organoids. Cross-checked with two independent PacBio Kinnex long-read runs on the matched week-26 cells.
+A reproducible evaluation of polyAfilter (Svoboda, Frost, and Bosco 2022, NAR Genomics and Bioinformatics) on retina organoid single-cell libraries. Compares three preps on week-26 organoid cultures: nuclei (10x 3' v4, two donors), dissociated cells (10x 3' v4), and FLIGHT-seq (BD Rhapsody) on the same cell pool as the dissociated 10x. Cross-checked with three independent PacBio Kinnex long-read runs: the BD67 FLIGHT-seq long-read on the same week-26 pool, and two week-29 10x Kinnex runs (8-fold FL, 16-fold SC) for cross-platform corroboration of the A-count rule.
 
 Companion to the FLIGHT-seq manuscript. Sister tools:
 - [flightcollapse](https://github.com/irinakhven/flightcollapse) — long-read collapsing and barcode recovery (maintained by Irina Khven)
@@ -12,9 +12,9 @@ Companion to the FLIGHT-seq manuscript. Sister tools:
 
 Three claims the four-library comparison supports:
 
-1. **Internal priming is the dominant 3' artefact in oligo-dT scRNA-seq.** Nuclei run 82% templated (internal priming), 10x cells 48.5%, FLIGHT-seq cells 26.8%. The ordering matches the physics of each prep.
-2. **polyAfilter is tunable without matched bulk random-primed RNA-seq.** Hexamer-purity ratio above 3x is a cheap, defensible acceptance criterion; two independent long-read runs on the same cells confirm the short-read labels at 99.5% pooled agreement.
-3. **FLIGHT-seq has lower internal-priming burden than matched 10x on the same cells, and more reproducible clustering structure after filtering.** Unfiltered clustering ARI ceiling is 0.89 for BD67 vs 0.75 for 1179 on the same week-26 pool.
+1. **Internal priming is the dominant 3' artefact in oligo-dT scRNA-seq.** Nuclei run 89% templated (internal priming) on the pooled 1417+1419 cohort, 10x cells (1179) 50%, FLIGHT-seq cells (BD67) 26%. The ordering matches the physics of each prep.
+2. **polyAfilter is tunable without matched bulk random-primed RNA-seq.** Hexamer-purity ratio above 3x is a cheap, defensible acceptance criterion; cross-prep label agreement on the same week-26 pool (BD67 FLIGHT-seq long-read vs 1179 short-read) is 99.4% pooled, and cross-platform agreement with a week-29 10x Kinnex run is 99.5% pooled, consistent with the A-count rule being a reference-sequence property.
+3. **FLIGHT-seq has lower internal-priming burden than matched 10x on the same cells, and more reproducible clustering structure after filtering.** Unfiltered clustering ARI median is 0.89 for BD67 vs 0.71 for 1179 on the same week-26 pool.
 
 ## Getting started
 
@@ -29,7 +29,7 @@ polyAfilter is vendored at a pinned commit (`5ce0098`) in `vendor/`. If you clon
 
 Stage 30 (long-read context classification) calls [`tecap`](https://github.com/FullLengthFanatic/tecap) for 3' end structural buckets. Install it on PATH or run stage 30 with `--no-tecap` to skip that step; the rest of the long-read corroboration still runs.
 
-Reference data: GRCh38-2024-A (10x Genomics), PolyASite 2.0 (GRCh38, Gencode v42). Download instructions in `data/README.md` once you fetch the sample BAMs from GEO (accessions in the manuscript).
+Reference data: GRCh38-2024-A (10x Genomics), PolyASite 3.0 (GRCh38, GENCODE 42). Download instructions in `data/README.md` once you fetch the sample BAMs from GEO (accessions in the manuscript).
 
 ## Running the pipeline
 

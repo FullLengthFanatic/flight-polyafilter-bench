@@ -1,4 +1,4 @@
-"""Stage 10: confirm how BD67 and BD70 FLNC reads mark priming sites (genome-wide sample)."""
+"""Stage 10: confirm how BD67 FLNC reads mark priming sites (genome-wide sample)."""
 import json
 import random
 

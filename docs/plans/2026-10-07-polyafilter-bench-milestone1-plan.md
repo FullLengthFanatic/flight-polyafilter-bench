@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** De-risk the benchmark: run the original polyAfilter on 1417, build a reimplementation that reproduces its removed-read sets exactly, build the `pa` molecule truth set for 1417 with a fixed member rule and fixed label cut-offs, check the 3k-only scope against 1416, confirm spike-in tags survive realignment, and confirm how BD67 and BD70 long reads mark priming sites.
+**Goal:** De-risk the benchmark: run the original polyAfilter on 1417, build a reimplementation that reproduces its removed-read sets exactly, build the `pa` molecule truth set for 1417 with a fixed member rule and fixed label cut-offs, check the 3k-only scope against 1416, confirm spike-in tags survive realignment, and confirm how BD67 long reads mark priming sites.
 
 **Architecture:** A small Python package `pafbench` holds tested logic; numbered stage scripts in `scripts/` run it on real data and write Parquet/JSON under `/data/element_runs/polyafilter_bench/`. The reimplementation imports polyAfilter's own interval and transcript-end functions from a pinned, unmodified checkout and replaces only the slow parts (coverage, A-stretch scan, read overlap) with numpy/numba code that is tested against the original on synthetic data and on the full 1417 BAM.
 
@@ -14,7 +14,7 @@
 
 - polyAfilter pinned at commit `5ce0098`, cloned to `vendor/polyAfilter`, never edited.
 - Reference: `/home/simone.picelli/Documents/Genome_ref/refdata-gex-GRCh38-2024-A` (`fasta/genome.fa`, `genes/genes.gtf`).
-- Libraries: 1417 (`/data/element_runs/1417_HsRetina_D28_3k/outs/possorted_genome_bam.bam`), 1419, 1179; 1416 chr1 only for the scope check; long reads BD67 `/data/element_runs/BD67/BD67_2x_RT.fltnc.aligned.bam` and BD70 `/data/element_runs/BD70/BD70.fltnc.aligned.bam` (same organoid cell pool as 1179).
+- Libraries: 1417 (`/data/element_runs/1417_HsRetina_D28_3k/outs/possorted_genome_bam.bam`), 1419, 1179; 1416 chr1 only for the scope check; long reads BD67 `/data/element_runs/BD67/BD67_2x_RT.fltnc.aligned.bam` (same organoid cell pool as 1179).
 - Code in `~/polyafilter_bench`; results in `/data/element_runs/polyafilter_bench/<library>/`.
 - Python packages only through `uv` in `~/polyafilter_bench/.venv`; never `pip install --break-system-packages`.
 - Exact-match acceptance: the reimplementation's removed-record set equals the original's, record for record, for every setting run.
@@ -41,7 +41,7 @@
 - Create: `.gitignore`, `pyproject.toml`, `scripts/00_setup.sh`, `pafbench/__init__.py`, `pafbench/config.py`, `pafbench/vendor.py`, `tests/__init__.py`, `tests/test_setup.py`
 
 **Interfaces:**
-- Produces: `pafbench.config` constants `REPO, VENDOR_POLYAFILTER, POLYAFILTER_COMMIT, REF_DIR, FASTA, GTF, RUNS, OUT, LIBRARIES, BD67_BAM, BD70_BAM, LONG_READS`; `pafbench.vendor.polyafilter_modules() -> (BAMfilter, RNAseqAnalysis, SNRanalysis)`.
+- Produces: `pafbench.config` constants `REPO, VENDOR_POLYAFILTER, POLYAFILTER_COMMIT, REF_DIR, FASTA, GTF, RUNS, OUT, LIBRARIES, BD67_BAM, LONG_READS`; `pafbench.vendor.polyafilter_modules() -> (BAMfilter, RNAseqAnalysis, SNRanalysis)`.
 
 - [ ] **Step 1: Write `.gitignore` and `pyproject.toml`**
 
@@ -113,8 +113,7 @@ LIBRARIES = {
     "1416": RUNS / "1416_HsRetina_D28_20k" / "outs" / "possorted_genome_bam.bam",
 }
 BD67_BAM = RUNS / "BD67" / "BD67_2x_RT.fltnc.aligned.bam"
-BD70_BAM = RUNS / "BD70" / "BD70.fltnc.aligned.bam"
-LONG_READS = {"BD67": BD67_BAM, "BD70": BD70_BAM}
+LONG_READS = {"BD67": BD67_BAM}
 ```
 
 `pafbench/vendor.py`:
@@ -2150,14 +2149,14 @@ git commit -m "Spike-in realignment with tag carry-over check"
 
 ---
 
-### Task 12: BD67 and BD70 priming sites from the terminal A run
+### Task 12: BD67 priming sites from the terminal A run
 
 **Files:**
 - Create: `pafbench/bd67.py`, `tests/test_bd67.py`, `scripts/10_bd67_ends.py`
 
 **Interfaces:**
 - Consumes: `sense_context`, `has_hexamer`, `classify`.
-- Produces: `sense_3p_clip(a) -> str`; `leading_a(s) -> int`; `a_run_site(a) -> (site: int, aligned_a: int)`; `/data/element_runs/polyafilter_bench/<BD67|BD70>/ends_check.json`.
+- Produces: `sense_3p_clip(a) -> str`; `leading_a(s) -> int`; `a_run_site(a) -> (site: int, aligned_a: int)`; `/data/element_runs/polyafilter_bench/BD67/ends_check.json`.
 
 Acceptance, fixed now, per library: at least 80% of sampled reads start their 3' clip with 10 or more A, and the hexamer rate at non-templated sites is at least 3 times the rate at templated sites (starting cut-offs 14/8).
 
@@ -2246,7 +2245,7 @@ Expected: 3 passed.
 - [ ] **Step 5: Write `scripts/10_bd67_ends.py` and run it**
 
 ```python
-"""Stage 10: confirm how BD67 and BD70 FLNC reads mark priming sites (chr1 sample)."""
+"""Stage 10: confirm how BD67 FLNC reads mark priming sites (chr1 sample)."""
 import json
 
 import pandas as pd
@@ -2288,13 +2287,13 @@ if __name__ == "__main__":
 ```
 
 Run: `.venv/bin/python scripts/10_bd67_ends.py`
-Expected: `accept: true` for BD67 and BD70. If false for a library, its sites are not used in milestone 2 until the read structure is understood; record the numbers.
+Expected: `accept: true` for BD67. If false, its sites are not used in milestone 2 until the read structure is understood; record the numbers.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add pafbench/bd67.py tests/test_bd67.py scripts/10_bd67_ends.py
-git commit -m "BD67/BD70 priming sites from the terminal A run"
+git commit -m "BD67 priming sites from the terminal A run"
 ```
 
 ---
@@ -2382,7 +2381,7 @@ def main():
     cut = _j(OUT / "1417" / "label_cutoffs.json") or {}
     scope = _j(OUT / "scope_check.json") or {}
     tags = _j(OUT / "1417" / "spikein" / "tag_check.json") or {}
-    bd = {name: _j(OUT / name / "ends_check.json") or {} for name in ("BD67", "BD70")}
+    bd = {name: _j(OUT / name / "ends_check.json") or {} for name in ("BD67",)}
     ub = _j(OUT / "1179" / "ub_on_introns.json") or {}
     lines += ["", "## Truth set, 1417", "",
               f"- Molecules: {coll.get('molecules')}; member reads: {coll.get('members')}; member cap: {coll.get('cap')} nt",
@@ -2390,7 +2389,7 @@ def main():
               f"- Label cut-offs: templated at A >= {cut.get('templated_min')}, non-templated at A <= {cut.get('nontemplated_max')} (tail rate {cut.get('tail_rate')}, background {cut.get('background_rate')})",
               "", "## Scope check (1416 vs 1417, chr1)", "", f"- go: {scope.get('go')}; molecules: {scope.get('molecules')}",
               "", "## Spike-in tags (1417)", "", f"- {json.dumps(tags.get('survival'))}; modules: {tags.get('modules')}",
-              "", "## Long-read ends (BD67, BD70)", ""] + [f"- {name}: {json.dumps({k: d.get(k) for k in ('reads', 'frac_clip_a_ge10', 'ratio_nontempl_templ', 'accept')})}" for name, d in bd.items()] + [
+              "", "## Long-read ends (BD67)", ""] + [f"- {name}: {json.dumps({k: d.get(k) for k in ('reads', 'frac_clip_a_ge10', 'ratio_nontempl_templ', 'accept')})}" for name, d in bd.items()] + [
               "", "## UB on reads in 1179 (chr1)", "", f"- {json.dumps(ub)}"]
     out = REPO / "docs" / "m1_results.md"
     out.write_text("\n".join(lines) + "\n")

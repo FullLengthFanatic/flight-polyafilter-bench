@@ -20,7 +20,6 @@ LIBRARIES = {
     "BD67": RUNS / "BD67" / "short_read" / "BD067_as10x.bam",
 }
 BD67_BAM = RUNS / "BD67" / "BD67_2x_RT.fltnc.aligned.bam"
-BD70_BAM = RUNS / "BD70" / "BD70.fltnc.aligned.bam"
 TENX_FL_BAM = RUNS / "10x_FL_Kinnex" / "10x_FL.fltnc.aligned.bam"
 LONG_READS = {"BD67": BD67_BAM, "10x_FL": TENX_FL_BAM}
 # BD67 fltnc keeps the bead-tail bases (bt/bl tags, sequence retained); 10x_FL fltnc has PR1+CB+UMI stripped by

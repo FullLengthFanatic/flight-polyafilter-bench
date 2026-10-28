@@ -20,8 +20,8 @@ import pysam
 from .config import GTF, POLYASITE
 
 TECAP = Path("/home/simone.picelli/.local/bin/tecap")
-# Tag of ours for the site key. Our observation, 2026-10-13: the first 100,000 records of the BD67 and of the BD70 BAM carry
-# ML MM NM RG SA bc bl bq bt bx cx di dl dr ds ec ls mg np qe ql qs qt rm rq sn we ws zm and no tag that starts with X.
+# Tag of ours for the site key. Our observation, 2026-10-13: the first 100,000 records of the BD67 BAM carry ML MM NM RG SA
+# bc bl bq bt bx cx di dl dr ds ec ls mg np qe ql qs qt rm rq sn we ws zm and no tag that starts with X.
 TAG = "XK"
 _KEY = ["ref", "strand", "site"]
 

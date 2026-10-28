@@ -403,8 +403,8 @@ def _fake_tecap(bam, sample, out_dir, threads):
 
 @pytest.fixture
 def stage30_inputs(tmp_path, monkeypatch):
-    """Inputs of stage 30 for the designed reads: the BAM as BD67 and as BD70, the stage 16 site table of each made with
-    stage 16's own functions, 1179 truth molecules, and a pigeon isoform GTF with its classification."""
+    """Inputs of stage 30 for the designed reads: the BAM as BD67 and as 10x_FL, the stage 16 site table of each made with
+    stage 16's own functions, and 1179 truth molecules."""
     base = tmp_path / "base"
     bam, gtf = write_bam(tmp_path / "long.bam", _context_reads()), write_gtf(tmp_path / "genes.gtf")
     fasta = write_fasta(tmp_path / "genome.fa")
@@ -412,7 +412,7 @@ def stage30_inputs(tmp_path, monkeypatch):
     with pysam.FastaFile(str(fasta)) as fa:
         s16 = pd.concat([annotate_sites(scan_long_reads(bam, ref)[0], ref, fa.fetch(ref).upper(), *seg) for ref in CHROMS],
                         ignore_index=True)
-    for lib in ("BD67", "BD70"):
+    for lib in ("BD67", "10x_FL"):
         (base / lib).mkdir(parents=True)
         # the table of stage 16 also holds a site on a reference that is not scanned
         pd.concat([s16, s16.iloc[:1].assign(ref="chrX")]).to_parquet(base / lib / "long_read_sites.parquet", index=False)
@@ -424,19 +424,10 @@ def stage30_inputs(tmp_path, monkeypatch):
                         "label": ["templated", "nontemplated", "templated", "ambiguous", "templated"],
                         "a_band": "x"})
     mol.to_parquet(base / "1179" / "truth" / "molecules_labeled.parquet", index=False)
-    pigeon = tmp_path / "pigeon.gtf"
-    pigeon.write_text("##pacbio-collapse-version 1.0\n" + "".join(
-        f'{ref}\tPacBio\ttranscript\t{s}\t{e}\t.\t{strand}\t.\tgene_id "PB.{i}"; transcript_id "PB.{i}.1";\n'
-        for i, (ref, s, e, strand) in enumerate([("chrS", 1001, 1805, "+"), ("chrS", 1001, 1811, "+"), ("chrE", 5, 90, "+"),
-                                                 ("chrS", G - 1995, G - 1000, "-"), ("chrX", 1001, 1800, "+")])))
-    cls = tmp_path / "classification.txt"
-    cls.write_text("isoform\tchrom\tstructural_category\tsubcategory\nPB.0.1\tchrS\tfull-splice_match\treference_match\n"
-                   "PB.1.1\tchrS\tfull-splice_match\treference_match\nPB.3.1\tchrS\tincomplete-splice_match\t5prime_fragment\n")
     stage = _stage30(monkeypatch)
-    monkeypatch.setattr(stage, "LONG_READS", {"BD67": bam, "BD70": bam})
+    monkeypatch.setattr(stage, "LONG_READS", {"BD67": bam, "10x_FL": bam})
+    monkeypatch.setattr(stage, "MIN_AFTER", {"BD67": 30, "10x_FL": 30})
     monkeypatch.setattr(stage, "GTF", gtf)
-    monkeypatch.setattr(stage, "PIGEON_GTF", pigeon)
-    monkeypatch.setattr(stage, "PIGEON_CLASS", cls)
     monkeypatch.setattr(tecap, "run_classify", _fake_tecap)
     return stage, base, s16
 
@@ -457,7 +448,7 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
     printed = _run30(stage, monkeypatch, capsys, base, out, "--workers", "5")
     acc = s16[s16.n_accepted >= 1].reset_index(drop=True)
     n_reads, n_spliced = 2 * len(DESIGNED) + 4, 2 * sum(len(blocks) > 1 for blocks, _, _ in DESIGNED.values()) + 1
-    for lib in ("BD67", "BD70"):
+    for lib in ("BD67", "10x_FL"):
         d = out / lib
         sites = pd.read_parquet(d / "isoform_context_sites.parquet")
         # the sites and accepted reads of stage 16, with its label, band, hexamer and region, in the order of --refs
@@ -569,24 +560,14 @@ def test_stage30_on_synthetic_long_reads(stage30_inputs, tmp_path, monkeypatch, 
         assert (acc.region == "intron").sum() == 8
         assert at("+", 1900).context_without_chain_novel == NJ
         assert at("+", 1550).context_without_chain_novel == "intron_after_junction"
-    # pigeon cross-check, BD70 only: ends at +1805 (5 nt from the site 1800), +1811 (11 nt), chrE (no site) and, on minus,
-    # at the site of the mirrored full_chain_annotated_end read; the isoform of chrX is not on a scanned reference
-    assert not (out / "BD67" / "pigeon_crosscheck.parquet").exists()
-    pigeon = pd.read_parquet(out / "BD70" / "pigeon_crosscheck.parquet")
-    assert list(pigeon.itertuples(index=False, name=None)) == [
-        ("full-splice_match", "reference_match", NJ, 1), ("full-splice_match", "reference_match", "none", 1),
-        ("incomplete-splice_match", "5prime_fragment", "annotated_end", 1), ("not_classified", "not_classified", "none", 1)]
-    assert _types(out / "BD70" / "pigeon_crosscheck.parquet") == {"structural_category": "string", "subcategory": "string",
-                                                                  "context": "string", "isoforms": "int64"}
-    j = json.loads((out / "BD70" / "isoform_context.json").read_text())
-    assert j["pigeon"] == {"gtf": str(stage.PIGEON_GTF), "classification": str(stage.PIGEON_CLASS), "isoform_ends": 4,
-                           "without_classification": 1, "matched": 2, "share_matched": 0.5}
+    assert not (out / "BD67" / "pigeon_crosscheck.parquet").exists() and not (out / "10x_FL" / "pigeon_crosscheck.parquet").exists()
     assert "pigeon" not in json.loads((out / "BD67" / "isoform_context.json").read_text())
+    assert "pigeon" not in json.loads((out / "10x_FL" / "isoform_context.json").read_text())
     link = pd.read_parquet(out / "1179" / "truth" / "long_read_context.parquet")
-    assert list(link.columns) == ["mol", "context_BD67", "context_BD70"] and link.mol.tolist() == [3, 5, 8, 9]
-    assert link.context_BD67.tolist() == link.context_BD70.tolist() == ["CDS", "intron_unspliced", "none", "none"]
+    assert list(link.columns) == ["mol", "context_BD67", "context_10x_FL"] and link.mol.tolist() == [3, 5, 8, 9]
+    assert link.context_BD67.tolist() == link.context_10x_FL.tolist() == ["CDS", "intron_unspliced", "none", "none"]
     assert _types(out / "1179" / "truth" / "long_read_context.parquet") == {"mol": "int64", "context_BD67": "string",
-                                                                           "context_BD70": "string"}
+                                                                           "context_10x_FL": "string"}
     assert not list(base.rglob("isoform_context*")) and not list(base.rglob("tecap*"))       # the inputs folder is only read
 
 
@@ -598,7 +579,7 @@ def test_stage30_without_tecap_and_one_library(stage30_inputs, tmp_path, monkeyp
     assert sorted(p.name for p in (out / "BD67").iterdir()) == ["isoform_context.json", "isoform_context_sites.parquet",
                                                                 "isoform_context_summary.parquet", "region_by_context.parquet",
                                                                 "sites_no_model.parquet"]
-    assert "tecap" not in json.loads((out / "BD67" / "isoform_context.json").read_text()) and not (out / "BD70").exists()
+    assert "tecap" not in json.loads((out / "BD67" / "isoform_context.json").read_text()) and not (out / "10x_FL").exists()
     assert list(pd.read_parquet(out / "1179" / "truth" / "long_read_context.parquet").columns) == ["mol", "context_BD67"]
 
 
@@ -613,26 +594,26 @@ def test_stage30_writes_the_context_outputs_before_tecap_runs(stage30_inputs, tm
     with pytest.raises(subprocess.CalledProcessError):
         _run30(stage, monkeypatch, capsys, base, out)
     # tecap failed on the first library: the context outputs of both are complete, and nothing of tecap is in them
-    for lib in ("BD67", "BD70"):
+    for lib in ("BD67", "10x_FL"):
         j = json.loads((out / lib / "isoform_context.json").read_text())
         assert j["acceptance"]["sites_and_accepted_reads_equal_stage16"] and "per_ref" in j and "tecap" not in j
         assert (out / lib / "sites_no_model.parquet").exists() and not (out / lib / "tecap_buckets.parquet").exists()
     assert list(pd.read_parquet(out / "1179" / "truth" / "long_read_context.parquet").columns) == ["mol", "context_BD67",
-                                                                                                  "context_BD70"]
+                                                                                                  "context_10x_FL"]
 
 
 def test_stage30_stops_when_an_acceptance_condition_fails(stage30_inputs, tmp_path, monkeypatch, capsys):
     stage, base, s16 = stage30_inputs
     out = tmp_path / "out"
-    # stage 16 knows a site of BD70 that this scan does not find: nothing is written for either library
+    # stage 16 knows a site of 10x_FL that this scan does not find: nothing is written for either library
     extra = s16.iloc[:1].assign(site=77, n_accepted=1)
-    pd.concat([s16, extra], ignore_index=True).to_parquet(base / "BD70" / "long_read_sites.parquet", index=False)
-    with pytest.raises(SystemExit, match="BD70: 1 sites of stage 16 without reads here, 0 sites here that stage 16 lacks"):
+    pd.concat([s16, extra], ignore_index=True).to_parquet(base / "10x_FL" / "long_read_sites.parquet", index=False)
+    with pytest.raises(SystemExit, match="10x_FL: 1 sites of stage 16 without reads here, 0 sites here that stage 16 lacks"):
         _run30(stage, monkeypatch, capsys, base, out, "--no-tecap")
     assert not list(out.rglob("*.parquet")) and not list(out.rglob("*.json"))
     # a site of the region intron whose top class is antisense is listed and stops the stage
     s16.assign(region=np.where((s16.strand == "+") & (s16.site == 8080), "intron", s16.region)).to_parquet(
-        base / "BD70" / "long_read_sites.parquet", index=False)
-    with pytest.raises(SystemExit, match=r"(?s)BD70: 1 sites of the region intron .*chrS +\+ +8080 +1 +" + AS):
+        base / "10x_FL" / "long_read_sites.parquet", index=False)
+    with pytest.raises(SystemExit, match=r"(?s)10x_FL: 1 sites of the region intron .*chrS +\+ +8080 +1 +" + AS):
         _run30(stage, monkeypatch, capsys, base, out, "--no-tecap")
     assert not list(out.rglob("*.parquet")) and not list(out.rglob("*.json"))

@@ -39,10 +39,9 @@ Peak RSS is the largest single process; runs with -p 8 used more memory in total
 
 - {"CB": {"n": 1949, "kept": 1949, "fraction": 1.0}, "UB": {"n": 1604, "kept": 1604, "fraction": 1.0}, "pa": {"n": 3, "kept": 3, "fraction": 1.0}, "ts": {"n": 34, "kept": 34, "fraction": 1.0}}; modules: {'long_SIRV': 3060743, 'ERCC': 4269987, 'SIRV_E0': 4988671}
 
-## Long-read ends (BD67, BD70)
+## Long-read ends (BD67)
 
 - BD67: {"reads": 44274, "frac_clip_a_ge10": 0.6168631702579392, "ratio_nontempl_templ": 9.347270775720007, "accept": false}
-- BD70: {"reads": 44062, "frac_clip_a_ge10": 0.6226453633516409, "ratio_nontempl_templ": 8.665359380680455, "accept": false}
 
 ## UB on reads in 1179 (chr1)
 

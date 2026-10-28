@@ -331,7 +331,7 @@ def test_empty_base_renders_every_section_as_not_run(tmp_path):
     assert "not run (missing eval/hexamer_check.parquet)" in s[6]
     assert "1419: not run (missing 1419/spikein/truth/molecules_labeled.parquet)" in s[7]
     assert "1417: not run (missing 1417/spikein/ercc.json)" in s[8]
-    assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s[9]
+    assert "10x_FL: not run (missing 10x_FL/long_read_acceptance.json)" in s[9]
     assert "not run (missing burden/templated_share.parquet)" in s[10]
     assert "not run (missing validation/exact_match_m2.json)" in s[11]
     head = text.split("\n## 1.")[0]
@@ -942,7 +942,7 @@ def test_long_read_section(base):
     assert "Spec 4.3 gives about 7% for milestone 1. In this run BD67 dropped 11.1% of the reads used" in s
     assert "about 12%" not in s
     assert "| BD67 | 16,408 | 0.615 | 0.491 / 0.907 / 0.805 | 0.993 / 0.996 / 0.994 |" in s
-    assert "BD70: not run (missing BD70/long_read_acceptance.json)" in s
+    assert "10x_FL: not run (missing 10x_FL/long_read_acceptance.json)" in s
     # outcome and agreement columns defined, thresholds from bd67.read_outcome
     assert ("Outcomes of the used reads: Accepted, a terminal A run of at least 10 nt followed by at least 30 nt of clip; Short run, "
             "the run is shorter than 10 nt; Short after, the run is long enough but fewer than 30 nt of clip follow; Both, "
@@ -966,9 +966,9 @@ def test_long_read_section_drop_rates_come_from_the_files(base):
     d = json.loads((base / "BD67/long_read_acceptance.json").read_text())
     d["dropped_fraction"] = 0.1188
     (base / "BD67/long_read_acceptance.json").write_text(json.dumps(d))
-    _write(base / "BD70/long_read_acceptance.json", d | {"library": "BD70", "dropped_fraction": 0.0953})
+    _write(base / "10x_FL/long_read_acceptance.json", d | {"library": "10x_FL", "dropped_fraction": 0.0953})
     s = m2report.long_read_section(base)
-    assert "BD67 dropped 11.9% of the reads used and BD70 9.5%" in s
+    assert "BD67 dropped 11.9% of the reads used and 10x_FL 9.5%" in s
 
 
 def test_burden_section(base):
