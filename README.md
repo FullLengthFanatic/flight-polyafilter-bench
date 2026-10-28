@@ -1,6 +1,6 @@
 # flight-polyafilter-bench
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23562409.svg)](https://doi.org/10.5281/zenodo.23562409)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23562408.svg)](https://doi.org/10.5281/zenodo.23562408)
 
 A reproducible evaluation of polyAfilter (Svoboda, Frost, and Bosco 2022, NAR Genomics and Bioinformatics) on retina organoid single-cell libraries. Compares three preps on week-26 organoid cultures: nuclei (10x 3' v4, two donors), dissociated cells (10x 3' v4), and FLIGHT-seq (BD Rhapsody) on the same cell pool as the dissociated 10x. Cross-checked with three independent PacBio Kinnex long-read runs: the BD67 FLIGHT-seq long-read on the same week-26 pool, and two week-29 10x Kinnex runs (8-fold FL, 16-fold SC) for cross-platform corroboration of the A-count rule.
 
@@ -68,7 +68,7 @@ Tested on retina organoid 10x 3' v4 (cells and nuclei) and FLIGHT-seq (BD Rhapso
 
 ## Citation
 
-Zenodo DOI: [10.5281/zenodo.23562409](https://doi.org/10.5281/zenodo.23562409). See `CITATION.cff` for full metadata.
+Zenodo concept DOI (always resolves to the latest version): [10.5281/zenodo.23562408](https://doi.org/10.5281/zenodo.23562408). See `CITATION.cff` for full metadata.
 
 ## License
 

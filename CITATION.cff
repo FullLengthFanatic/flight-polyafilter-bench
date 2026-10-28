@@ -5,11 +5,20 @@ authors:
   - family-names: Picelli
     given-names: Simone
     orcid: "https://orcid.org/0000-0002-1747-614X"
-version: "1.0.0"
-date-released: "2026-10-22"
+version: "1.0.2"
+date-released: "2026-10-28"
 repository-code: "https://github.com/FullLengthFanatic/flight-polyafilter-bench"
-doi: "10.5281/zenodo.23562409"
+doi: "10.5281/zenodo.23562408"
 identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23562408"
+    description: "Zenodo concept DOI (resolves to the latest version)"
+  - type: doi
+    value: "10.5281/zenodo.23735161"
+    description: "Zenodo archive of v1.0.2"
+  - type: doi
+    value: "10.5281/zenodo.23565208"
+    description: "Zenodo archive of v1.0.1"
   - type: doi
     value: "10.5281/zenodo.23562409"
     description: "Zenodo archive of v1.0.0"
