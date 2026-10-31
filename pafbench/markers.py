@@ -4,7 +4,7 @@ The wording read in each source is in design_m3_draft/research/methods_notes.md,
 """
 from collections import namedtuple
 
-from .config import CELLS, NUCLEI
+from .config import BD_NUC, CELLS, NUCLEI
 
 SOURCES = {
     "Lukowski": "Lukowski et al. 2019 EMBO J 38:e100811 (PMC6745503), adult human retina, scRNA-seq",
@@ -18,7 +18,7 @@ SOURCES = {
 
 # weak: two of the three progenitor genes also mark mature classes (VSX2 bipolar, PAX6 amacrine), so the class table
 # prints a warning with it
-MarkerClass = namedtuple("MarkerClass", "name genes sources libraries weak", defaults=(NUCLEI + CELLS, False))
+MarkerClass = namedtuple("MarkerClass", "name genes sources libraries weak", defaults=(NUCLEI + CELLS + BD_NUC, False))
 
 PANEL = (
     MarkerClass("rod", ("NRL", "NR2E3", "PDE6A", "CNGA1", "GNAT1", "SLC24A1", "GNGT1", "PDE6G", "PPEF2"),

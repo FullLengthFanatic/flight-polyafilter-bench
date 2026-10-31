@@ -46,11 +46,12 @@ def main():
     ap.add_argument("library")
     ap.add_argument("--out", type=Path, help="recount directory, with parts/ of stage 23 (default OUT/LIB/recount)")
     ap.add_argument("--matrices", type=Path, help="matrices directory (default OUT/LIB/matrices)")
+    ap.add_argument("--refs", nargs="+", help="restrict to these references (default: every reference with mapped reads in the BAM index)")
     args = ap.parse_args()
     lib = args.library
     bam = LIBRARIES[lib]
     with pysam.AlignmentFile(str(bam)) as fh:
-        refs = [s.contig for s in fh.get_index_statistics() if s.mapped > 0]
+        refs = [s.contig for s in fh.get_index_statistics() if s.mapped > 0 and (args.refs is None or s.contig in args.refs)]
     folder, a4_refs = SUBSET.get(lib, (OUT / lib / "original", None))
     try:
         bams = original_bams(folder, "" if a4_refs is None else "_".join(a4_refs) + ".",
