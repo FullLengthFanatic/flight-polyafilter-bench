@@ -31,7 +31,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from pafbench.burden import near_shares, proximity_table, same_gene, same_site, selection_bias, share_ci, share_table
-from pafbench.config import CELLS, NUCLEI, OUT, POLYASITE, POPULATIONS, SEL_POPULATION
+from pafbench.config import BD_NUC, CELLS, NUCLEI, OUT, POLYASITE, POPULATIONS, SEL_POPULATION
 from pafbench.polyasite import NULL_SHIFT, load_polyasite, site_distances
 from pafbench.truth import in_population
 
@@ -53,7 +53,7 @@ def main():
     args = ap.parse_args()
     t0 = time.time()
     mols, by_population = {}, {}
-    for lib in NUCLEI + CELLS:
+    for lib in NUCLEI + CELLS + BD_NUC:
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if p.exists():
             m = pd.read_parquet(p, columns=COLUMNS + (["in_cell"] if "in_cell" in pq.read_schema(p).names else []))
@@ -69,7 +69,9 @@ def main():
         raise SystemExit("no library has truth files")
     args.out.mkdir(parents=True, exist_ok=True)
     groups, members = dict(mols), {lib: [lib] for lib in mols}
-    for name, libs in (("nuclei", [lib for lib in NUCLEI if lib in mols]), ("cells", [lib for lib in CELLS if lib in mols])):
+    for name, libs in (("nuclei", [lib for lib in NUCLEI if lib in mols]),
+                       ("cells", [lib for lib in CELLS if lib in mols]),
+                       ("flight_nuclei", [lib for lib in BD_NUC if lib in mols])):
         if libs:
             groups[name] = pd.concat([mols[lib] for lib in libs], ignore_index=True)
             members[name] = libs

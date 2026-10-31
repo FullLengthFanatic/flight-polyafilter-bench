@@ -22,13 +22,13 @@ import time
 from pathlib import Path
 
 from pafbench.classes import UNASSIGNED, run
-from pafbench.config import CELLS, LIBRARIES, NUCLEI, OUT
+from pafbench.config import BD_NUC, CELLS, LIBRARIES, NUCLEI, OUT
 from pafbench.recount import require_passed
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("library", choices=NUCLEI + CELLS)
+    ap.add_argument("library", choices=NUCLEI + CELLS + BD_NUC)
     ap.add_argument("--cells", type=Path, help="output directory (default OUT/LIB/cells)")
     ap.add_argument("--matrices", type=Path, help="matrices directory of stage 24 (default OUT/LIB/matrices)")
     ap.add_argument("--recount", type=Path, help="recount directory of stage 24 (default OUT/LIB/recount)")

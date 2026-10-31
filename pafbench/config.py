@@ -18,9 +18,9 @@ LIBRARIES = {
     "1179": RUNS / "1179_organoid_wk26_10xv4" / "outs" / "possorted_genome_bam.bam",
     "1416": RUNS / "1416_HsRetina_D28_20k" / "outs" / "possorted_genome_bam.bam",
     "BD67": RUNS / "BD67" / "short_read" / "BD067_as10x.bam",
-    "BD_nuc_211": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_211_as10x.bam",
-    "BD_nuc_213": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_213_as10x.bam",
-    "BD_nuc_215": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_215_as10x.bam",
+    "BD_nuc_211": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_211" / "BD_nuc_211_as10x.bam",
+    "BD_nuc_213": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_213" / "BD_nuc_213_as10x.bam",
+    "BD_nuc_215": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_215" / "BD_nuc_215_as10x.bam",
 }
 BD67_BAM = RUNS / "BD67" / "BD67_2x_RT.fltnc.aligned.bam"
 TENX_FL_BAM = RUNS / "10x_FL_Kinnex" / "10x_FL.fltnc.aligned.bam"

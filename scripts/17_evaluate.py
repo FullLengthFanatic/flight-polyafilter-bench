@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pafbench.config import CELLS, MEMBER_CAP, NUCLEI, OUT, POPULATIONS, SEL_POPULATION, SEL_UNITS, SENS_CAPS
+from pafbench.config import BD_NUC, CELLS, MEMBER_CAP, NUCLEI, OUT, POPULATIONS, SEL_POPULATION, SEL_UNITS, SENS_CAPS
 from pafbench.evaluate import (COUNT_COLUMNS, ambiguous_tail_share, bootstrap, evaluate, hexamer_check, label_purity, relabel,
                                select_setting, spikein_metrics, tag_setting, units)
 from pafbench.flags import Setting, setting_tag
@@ -78,7 +78,7 @@ def main():
     args = ap.parse_args()
     t0 = time.time()
     libs, missing = [], {}
-    for lib in NUCLEI + CELLS:
+    for lib in NUCLEI + CELLS + BD_NUC:
         need = list(_files(args.base, lib).values()) + [args.base / lib / "grid" / "region_counts.parquet"]
         absent = [str(p) for p in need if not p.exists()]
         if absent:

@@ -33,7 +33,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from pafbench.burden import purity_acceptance, purity_by_region
-from pafbench.config import CELLS, NUCLEI, OUT
+from pafbench.config import BD_NUC, CELLS, NUCLEI, OUT
 from pafbench.truth import in_population
 
 COLUMNS = ["a20", "hexamer", "label", "region", "gene", "ref", "strand", "site"]
@@ -47,7 +47,7 @@ def main():
     args = ap.parse_args()
     t0 = time.time()
     mols = {}
-    for lib in NUCLEI + CELLS:
+    for lib in NUCLEI + CELLS + BD_NUC:
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if not p.exists():
             print(f"{lib}: skipped, missing {p}")
@@ -60,7 +60,9 @@ def main():
     if not mols:
         raise SystemExit("no library has truth files")
     groups, members = dict(mols), {lib: [lib] for lib in mols}
-    for name, libs in (("nuclei", [lib for lib in NUCLEI if lib in mols]), ("cells", [lib for lib in CELLS if lib in mols])):
+    for name, libs in (("nuclei", [lib for lib in NUCLEI if lib in mols]),
+                       ("cells", [lib for lib in CELLS if lib in mols]),
+                       ("flight_nuclei", [lib for lib in BD_NUC if lib in mols])):
         if libs:
             groups[name] = pd.concat([mols[lib] for lib in libs], ignore_index=True)
             members[name] = libs

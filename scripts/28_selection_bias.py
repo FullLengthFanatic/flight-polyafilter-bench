@@ -89,8 +89,8 @@ import numpy as np
 import pandas as pd
 
 from pafbench.burden import gene_ends
-from pafbench.config import (BIAS_POINTS, CELLS, DIST_END_BINS, EXPR_BINS, GTF, MIN_EXPECTED, MIN_STRATUM, NUCLEI, OUT,
-                             POOL_MIN, TOP_GENES)
+from pafbench.config import (BD_NUC, BIAS_POINTS, CELLS, DIST_END_BINS, EXPR_BINS, GTF, MIN_EXPECTED, MIN_STRATUM, NUCLEI,
+                             OUT, POOL_MIN, TOP_GENES)
 from pafbench.exons import load_collapsed_exons
 from pafbench.matrices import load
 from pafbench.recount import require_passed
@@ -111,7 +111,7 @@ def _json(x):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("libraries", nargs="*", default=[*NUCLEI, *CELLS])
+    ap.add_argument("libraries", nargs="*", default=[*NUCLEI, *CELLS, *BD_NUC])
     ap.add_argument("--base", type=Path, default=OUT,
                     help="outputs of milestones 1 and 2: LIB/truth/molecules_labeled.parquet, LIB/grid/cell_counts.parquet")
     ap.add_argument("--cells", default=str(OUT / "{lib}" / "cells"), help="stage 25 folder, {lib} replaced")

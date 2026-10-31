@@ -57,7 +57,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pafbench.config import CELLS, CHOSEN_SETTINGS, EXPR_BINS, IMPACT_SETTINGS, MEMBER_CAP, MIN_STRATUM, NUCLEI, OUT
+from pafbench.config import BD_NUC, CELLS, CHOSEN_SETTINGS, EXPR_BINS, IMPACT_SETTINGS, MEMBER_CAP, MIN_STRATUM, NUCLEI, OUT
 from pafbench.evaluate import evaluate, units
 from pafbench.flags import setting_tag
 from pafbench.grid import published
@@ -78,7 +78,7 @@ def _labels(u):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("libraries", nargs="*", default=[*NUCLEI, *CELLS])
+    ap.add_argument("libraries", nargs="*", default=[*NUCLEI, *CELLS, *BD_NUC])
     ap.add_argument("--base", type=Path, default=OUT,
                     help="outputs of milestones 1 and 2: LIB/truth, LIB/grid, LIB/pa_sites.parquet, eval/metrics.parquet")
     ap.add_argument("--cells", default=str(OUT / "{lib}" / "cells"), help="stage 25 folder, {lib} replaced")
