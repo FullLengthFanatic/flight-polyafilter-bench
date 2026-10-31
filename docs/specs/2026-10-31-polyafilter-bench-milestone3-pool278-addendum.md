@@ -21,55 +21,55 @@ Nine BAMs on disk: 3 samples (211, 213, 215) × 3 bead-split replicates (a, b, c
 
 Pool the three bead-split replicates within each sample. That gives three FLIGHT-nuclei libraries, `BD_nuc_211`, `BD_nuc_213`, `BD_nuc_215`, which matches the scale of the 10x nuclei set (1416, 1417, 1419). Don't pool across samples. The three sample pools become the sibling nuclei libraries of BD67.
 
-Realignment: BD's STAR BAMs were aligned against `RhapRef_Human_WTA_2023-02` with BD-specific parameters, and BD's GTF differs from GRCh38-2024-A. Realigning from FASTQ against GRCh38-2024-A with 10x-style STARsolo parameters is the cleanest apples-to-apples with 1417, 1419, 1416, 1179 (**decided 2026-10-30**, D-pool278-2). Nine R1/R2 pairs are on disk at `fastq/Samples/DefaultProject/<library>/<library>_R{1,2}.fastq.gz`. STARsolo in BD Rhapsody Enhanced v2/v3 CB_UMI_Complex mode (three-segment cell label + 8 nt UMI) with the BD Enhanced v2/v3 whitelist; GRCh38-2024-A genome index; `GeneFull` to count intronic reads the way Cell Ranger does on the 10x libraries; CB and UB tags in the output BAM to drop straight into the pipeline schema.
+Reference frame: BD's STAR BAMs are aligned against `RhapRef_Human_WTA_2023-02` (GRCh38 primary assembly, UCSC naming), the same coordinate frame as the benchmark's GRCh38-2024-A primary assembly used by 1417, 1419, 1416, 1179. Mirror BD67's as10x pattern rather than realigning from FASTQ: inspection of `BD067_as10x.bam` headers shows BD67 is itself not a GRCh38-2024-A STARsolo output, it is BD's own STAR BAM with 10x-compatible tags grafted on (CB kept, UB from MR padded to 12 nt, UR = UB, GX from the BD features table, RE from XF, xf = 25, pa from the polyA soft-clip). The benchmark already runs its own region re-annotation on top of the input BAM, so what the input needs is a correct coordinate frame and 10x-style tags, not a 10x aligner. BD67 passes that bar today; Pool278 fits the same mold. Realigning Pool278 to GRCh38-2024-A while leaving BD67 on BD's reference would introduce a cross-reference confound; realigning both is out of scope for this addendum (**decision revised 2026-10-31**, D-pool278-2).
 
-BD67's short-read BAM is `BD067_as10x.bam`, which was produced by the same pattern (STARsolo retag against GRCh38 with 10x tags). Reuse that script with the BD Enhanced v2/v3 whitelist (Pool278 uses the same bead version per the per-library metrics summary: `Bead version detected: Enhanced V2/V3`). One command invocation per sample, feeding its three bead-split replicates as comma-separated FASTQs.
+Script: `scripts/01a_pool278_preprocess.py`, structured as `01_bd67_preprocess.py` with per-replicate RG tagging and a per-sample pysam merge at the end. One invocation per sample, over its three bead-split replicates. Output: `/data/element_runs/Pool278_FLIGHTseq_NucleiHsRetinaDonation/merged/BD_nuc_<sample>_as10x.bam` with three `@RG` entries, plus the nine per-replicate part BAMs in `merged/parts/` for the reproducibility inset.
 
 ## 2. Config change
 
 ```python
 # pafbench/config.py
-POOL278 = RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation"
 LIBRARIES = {
     "1417": ...,
     "1419": ...,
     "1179": ...,
     "1416": ...,
     "BD67": RUNS / "BD67" / "short_read" / "BD067_as10x.bam",
-    "BD_nuc_211": POOL278 / "merged" / "BD_nuc_211_as10x.bam",
-    "BD_nuc_213": POOL278 / "merged" / "BD_nuc_213_as10x.bam",
-    "BD_nuc_215": POOL278 / "merged" / "BD_nuc_215_as10x.bam",
+    "BD_nuc_211": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_211_as10x.bam",
+    "BD_nuc_213": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_213_as10x.bam",
+    "BD_nuc_215": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_215_as10x.bam",
 }
-BD_NUC = ("BD_nuc_211", "BD_nuc_213", "BD_nuc_215")
-NUCLEI = ("1417", "1419", *BD_NUC)
+NUCLEI = ("1417", "1419")                            # 10x nuclei, unchanged (stage 31 contrast)
 CELLS = ("1179", "BD67")
-FLIGHT = ("BD67", *BD_NUC)   # new, for the chemistry-controlled material comparison
+BD_NUC = ("BD_nuc_211", "BD_nuc_213", "BD_nuc_215")  # FLIGHT nuclei, three samples
+FLIGHT = ("BD67", *BD_NUC)                           # chemistry-controlled material comparison
 ```
 
-Each merged BAM pools its three bead-split replicates (`a + b + c`) within one sample. The three raw BAMs per sample stay addressable through a `BD_NUC_PARTS` dict for a reproducibility inset.
+`NUCLEI` stays scoped to the 10x nuclei so stage 31 keeps running the way it does (1417 + 1419 against 1179). The BD-nuclei side of stage 31b and the interaction panel use `BD_NUC` and `FLIGHT` directly. Each merged BAM pools its three bead-split replicates (`a + b + c`) within one sample; the three per-replicate part BAMs under `merged/parts/` stay addressable for the reproducibility inset.
 
 ## 3. Stages that need work
 
 The pipeline is already library-pluggable. Stages 1 to 10, 23, 24, 26 to 29 run on a new library with no code change: a new entry in `LIBRARIES` is enough.
 
-### 3.1 Stage 1a: Pool278 realign from FASTQ (new)
+### 3.1 Stage 1a: retag Pool278 BD BAMs as 10x and merge per sample (new)
 
-Input: 18 FASTQ files (9 R1 + 9 R2) at `fastq/Samples/DefaultProject/<library>/<library>_R{1,2}.fastq.gz`. Output: three STARsolo outputs, one per sample (`BD_nuc_211_as10x.bam`, `BD_nuc_213_as10x.bam`, `BD_nuc_215_as10x.bam`), each the pool of its three bead-split replicates, plus the solo matrices in the pipeline schema.
+Input: 9 BD Bioproduct BAMs at `bd_pipeline/<lib>/<prefix>_Bioproduct.bam` plus their matching `_RSEC_MolsPerCell_MEX.zip` for the gene-symbol → ENSG table. Output: 9 retagged part BAMs under `merged/parts/`, 3 merged BAMs `BD_nuc_<sample>_as10x.bam` under `merged/`, each with 3 `@RG` entries and a `.bai`.
 
 Steps:
 
-1. For each sample, run STARsolo once against GRCh38-2024-A with the three replicate R1/R2 pairs as comma-separated inputs. Chemistry: BD Rhapsody Enhanced V2/V3, `--soloType CB_UMI_Complex` with the three-segment cell label (9+9+9) and 8 nt UMI, BD Enhanced V2/V3 whitelist, `--soloFeatures GeneFull` to count intronic reads the way Cell Ranger does on the 10x libraries, `--outSAMtype BAM SortedByCoordinate`, `--outSAMattributes NH HI AS nM GX GN CB UB sS sQ sM`.
-2. Each replicate carries its own read group so the merged BAM carries replicate identity (`@RG ID:BD-211a SM:BD_nuc_211`, and so on).
-3. Index each merged BAM.
-4. Write `BD_nuc_<sample>/library_parts.parquet` per sample with per-replicate read counts, median UMI per cell, and the STARsolo cell call so the per-replicate inset in the report does not re-scan BAMs.
+1. For each sample, load the sym → ENSG table from the first replicate's `features.tsv.gz` (inside the MEX zip).
+2. For each of the three replicates, rewrite the BAM with CB kept, UB = `(MR + 'AAAA')[:12]`, UR = UB, GX from the sym → ENSG lookup, RE in {E, N, I} from XF, xf = 25, pa = polyA soft-clip length (polyAfilter rule applied in place), and RG = replicate label (`BD-<sample>{a,b,c}`). Secondary/supplementary and reads lacking CB or MR are dropped.
+3. `pysam.merge -c -p` the three part BAMs per sample into `BD_nuc_<sample>_as10x.bam`.
+4. `pysam.index` the merged BAM.
+5. Write `BD_nuc_<sample>/library_parts.parquet` per sample with per-replicate kept-read count, pa-tagged count, and gene-lookup-miss count so the per-replicate inset in the report does not re-scan BAMs.
 
-Acceptance: `GeneFull` matrix cell count per sample is within 5% of the sum of its three BD per-library cell calls (consistency check against BD's basic cell calling, allowing drift from the whitelist and the knee); every output BAM read has valid `CB` and `UB`; the `@RG` entries of each sample's BAM name only its three replicates.
+Acceptance: three `@RG` entries per merged BAM named `BD-<sample>{a,b,c}`, SM = `BD_nuc_<sample>`, no cross-sample RG; every kept read carries a valid CB and a 12-nt UB.
 
-Tests: on three synthetic BD-style FASTQ pairs (one per replicate) with one valid cell barcode per read, STARsolo produces three reads in the per-sample BAM with correct `CB`/`UB`/`RG`; a replicate from a different sample fed into the wrong invocation is refused.
+Observed on 2026-10-31: `BD_nuc_211` 316.9 M reads total, 316.9 M kept; `BD_nuc_213` 342.5 M reads, 319.9 M kept; `BD_nuc_215` 294.7 M reads, 276.9 M kept. Merged BAMs 19 to 22 GB each, index 5.6 to 6.2 MB.
 
-Run time: STARsolo on ~300 M read pairs per sample (sum of three replicates), with GRCh38-2024-A index. Expect 2 to 4 h per sample on 16 threads. The three samples can run in parallel if disk I/O permits; otherwise serial, ~6 to 12 h total.
+Run time: ~70 min per sample on 4 threads with all three samples in parallel (observed). Disk: 19 to 22 GB per merged BAM, plus 9 part BAMs of comparable aggregate size under `merged/parts/`.
 
-Disk: index + 3 output BAMs + solo matrices. Budget ~150 to 250 GB.
+Note: this is NOT a STARsolo realignment against GRCh38-2024-A. BD's reference is GRCh38 primary assembly with UCSC naming, same coordinate frame as 10x's `refdata-gex-GRCh38-2024-A` primary assembly, so no coordinate conversion is needed. The pipeline's region re-annotation (stages 2 to 10) runs on top of the input BAM, so GX/RE from the BD feature table are recomputed downstream; what the retag preserves is CB/UB (molecule identity) and pa (polyA soft-clip length).
 
 ### 3.2 Stage 25a: marker set for the FLIGHT nuclei
 
@@ -102,7 +102,7 @@ Stage 30 is BD67-specific (long reads) and does not get a Pool278 version.
 
 ## 6. Order of work
 
-1. Stage 1a: STARsolo realignment per sample against GRCh38-2024-A, three merged BAMs out.
+1. Stage 1a: retag the nine BD Bioproduct BAMs as 10x and merge to three `BD_nuc_<sample>_as10x.bam`.
 2. Stages 1 to 10, 23 to 29 run on each `BD_nuc_<sample>` with no changes.
 3. Stage 29a: fit the interaction model, build Panel F.
 4. Stage 31b: FLIGHT-pair matched sites.
@@ -111,10 +111,10 @@ Stage 30 is BD67-specific (long reads) and does not get a Pool278 version.
 ## 7. Decisions
 
 - D-pool278-1: pool bead-split replicates within each sample, three FLIGHT-nuclei libraries (`BD_nuc_211`, `BD_nuc_213`, `BD_nuc_215`). **Decided 2026-10-30.**
-- D-pool278-2: realign from FASTQ with STARsolo against GRCh38-2024-A. **Decided 2026-10-31.**
+- D-pool278-2: mirror BD67's as10x retag pattern on the nine Pool278 BAMs rather than realigning from FASTQ. Initial decision on 2026-10-31 was to realign; revised the same day after inspecting `BD067_as10x.bam` headers showed BD67 itself is a tag-retrofit of BD's own STAR BAM rather than a GRCh38-2024-A STARsolo realignment. Realigning Pool278 while leaving BD67 on BD's reference would introduce a cross-reference confound; realigning both is out of scope for this addendum. **Revised 2026-10-31.**
 - D-pool278-3: reuse the 10x nuclei marker panel for the FLIGHT nuclei. **Decided 2026-10-31.**
 - D-pool278-4: library names `BD_nuc_211`, `BD_nuc_213`, `BD_nuc_215`; 211 is D29 (shared with 1419), 213 and 215 are two further Graz donors. **Decided 2026-10-31.**
 
 ## 8. Rough timing
 
-STARsolo realignment: 2 to 4 h per sample on 16 threads, three samples in parallel or serial depending on I/O (~1 day end-to-end for all three). Stage 1 to 29 reruns on each new library: half a day. Interaction model and Panel F: a day. Stage 31b: half a day. Total: 3 to 4 working days before the first draft of Panel F.
+Stage 1a retag + merge: ~70 min per sample on 4 threads with all three samples in parallel (observed 2026-10-31). Stage 1 to 29 reruns on each new library: half a day. Interaction model and Panel F: a day. Stage 31b: half a day. Total: 2 to 3 working days before the first draft of Panel F.

@@ -18,6 +18,9 @@ LIBRARIES = {
     "1179": RUNS / "1179_organoid_wk26_10xv4" / "outs" / "possorted_genome_bam.bam",
     "1416": RUNS / "1416_HsRetina_D28_20k" / "outs" / "possorted_genome_bam.bam",
     "BD67": RUNS / "BD67" / "short_read" / "BD067_as10x.bam",
+    "BD_nuc_211": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_211_as10x.bam",
+    "BD_nuc_213": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_213_as10x.bam",
+    "BD_nuc_215": RUNS / "Pool278_FLIGHTseq_NucleiHsRetinaDonation" / "merged" / "BD_nuc_215_as10x.bam",
 }
 BD67_BAM = RUNS / "BD67" / "BD67_2x_RT.fltnc.aligned.bam"
 TENX_FL_BAM = RUNS / "10x_FL_Kinnex" / "10x_FL.fltnc.aligned.bam"
@@ -38,6 +41,8 @@ SEL_POPULATION = "cells"  # barcodes the headline selection and burden are compu
 SEL_UNITS = "with_member"  # molecule units of the headline selection
 NUCLEI = ("1417", "1419")
 CELLS = ("1179", "BD67")
+BD_NUC = ("BD_nuc_211", "BD_nuc_213", "BD_nuc_215")
+FLIGHT = ("BD67", *BD_NUC)
 
 # Milestone 3 (design of 2026-10-12, section 3.0). The clustering values and the thresholds are our proposals.
 CHOSEN_SETTINGS = (Setting(250, 7, 1, False), Setting(200, 10, 2, True))  # eval/selection.json, modes e and i
