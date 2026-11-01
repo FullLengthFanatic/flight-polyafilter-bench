@@ -102,8 +102,8 @@ Stage 30 is BD67-specific (long reads) and does not get a Pool278 version.
 
 ## 6. Order of work
 
-1. Stage 1a: retag the nine BD Bioproduct BAMs as 10x and merge to three `BD_nuc_<sample>_as10x.bam`.
-2. Stages 1 to 10, 23 to 29 run on each `BD_nuc_<sample>` with no changes.
+1. Stage 1a: retag the nine BD Bioproduct BAMs as 10x and merge to three `BD_nuc_<sample>_as10x.bam`. **Done 2026-10-31.**
+2. Stages 1 to 10, 23 to 29 run on each `BD_nuc_<sample>` with no changes. **Done 2026-11-01.** Two code-side bumps required: `markers.MarkerClass` panel default extended to `NUCLEI + CELLS + BD_NUC` so stage 25 scores the FLIGHT nuclei, and stage 24 picked up a `--refs` flag mirroring stage 23 so the recount restricts to the GRCh38 primary assembly on BAMs that still carry phiX174. Both in commit `10a5e47`. Stage 34 report rebuilt the same day; §9 lists numbers.
 3. Stage 29a: fit the interaction model, build Panel F.
 4. Stage 31b: FLIGHT-pair matched sites.
 5. Report: add Panels A/B rows, add Panels F/G.
@@ -118,3 +118,34 @@ Stage 30 is BD67-specific (long reads) and does not get a Pool278 version.
 ## 8. Rough timing
 
 Stage 1a retag + merge: ~70 min per sample on 4 threads with all three samples in parallel (observed 2026-10-31). Stage 1 to 29 reruns on each new library: half a day. Interaction model and Panel F: a day. Stage 31b: half a day. Total: 2 to 3 working days before the first draft of Panel F.
+
+Observed wall-clock on the three FLIGHT-nuclei libraries (2026-11-01, three libraries in parallel where the stage parallelises): stage 23 read-groups 15 to 18 min, stage 13 grid 17 min, stage 24 recount 1 to 2 min, stage 25 cell classes 10 min, stage 26 impact 20 min. Aggregate steps across all seven libraries: stage 17 evaluate 2 h 06 min (dominated by the three BD_nuc BAMs at 480k to 820k molecule units each), stage 18 burden 5 min, stage 27 truth strata 19 min, stage 28 selection bias 9 min, stage 29 purity by region 1 min, stage 34 report 31 s.
+
+## 9. Observed results (2026-11-01)
+
+Corrected templated share, "all" region, from `burden/templated_share_corrected.parquet` after stage 29. Numbers are the headline the m3 report page uses. CI is the stage-18 bootstrap 95%.
+
+| Library / group     | n_labeled | share_label | share_corrected | 95% CI           |
+|---------------------|-----------|-------------|-----------------|------------------|
+| 1417 (10x nuclei)   | 90,099    | 0.896       | 0.871           | 0.860 to 0.885   |
+| 1419 (10x nuclei)   | 105,400   | 0.887       | 0.859           | 0.846 to 0.875   |
+| 1179 (10x cells)    | 1,174,777 | 0.497       | 0.409           | 0.386 to 0.438   |
+| BD67 (FLIGHT cells) | 186,891   | 0.259       | 0.219           | 0.192 to 0.252   |
+| BD_nuc_211          | 700,870   | 0.437       | 0.398           | 0.343 to 0.446   |
+| BD_nuc_213          | 1,080,726 | 0.386       | 0.340           | 0.289 to 0.389   |
+| BD_nuc_215          | 730,740   | 0.384       | 0.327           | 0.277 to 0.380   |
+| **nuclei** group    | 195,499   | 0.891       | **0.865**       | 0.852 to 0.879   |
+| **cells** group     | 1,361,668 | 0.464       | **0.387**       | 0.363 to 0.416   |
+| **flight_nuclei** group | 2,512,336 | 0.400   | **0.352**       | 0.298 to 0.403   |
+
+Reads of this that are relevant to Panel F before it is formally fit: on 10x the material gap is nuclei 0.865 vs cells 0.387, 0.48 absolute. On BD it is flight_nuclei 0.352 vs BD67 0.219, 0.13 absolute. The nuclei vs cells gap is smaller on BD than on 10x by about a factor of three. The chemistry effect holding material constant is cells 0.387 (10x) vs 0.219 (BD) and nuclei 0.865 (10x) vs 0.352 (BD). Both main effects are directionally the same across the other factor, so the interaction coefficient will be the smaller cross-term, not a sign flip. Stage 29a quantifies it; the CI will lean on the three BD_nuc samples per §3.4.
+
+Stage 25 class calls (`<lib>/cells/cells.parquet`):
+
+| Library    | n cells | rod    | macroglia | microglia | unassigned |
+|------------|---------|--------|-----------|-----------|------------|
+| BD_nuc_211 | 32,089  | 12,493 | 2,988     | 0         | 16,608     |
+| BD_nuc_213 | 34,545  | 6,682  | 3,441     | 0         | 24,422     |
+| BD_nuc_215 | 37,775  | 26,230 | 1,981     | 251       | 9,313      |
+
+Panel coverage was enough to call rod and macroglia across all three samples; BD_nuc_215 additionally reached the microglia threshold. The unassigned fraction varies from 29% (215) to 71% (213), consistent with the shallow per-nucleus depth noted in §5. No sample fell under the marker-coverage floor, so no library ran stage 26 at the library level only; the per-class impact table is populated for each sample.
