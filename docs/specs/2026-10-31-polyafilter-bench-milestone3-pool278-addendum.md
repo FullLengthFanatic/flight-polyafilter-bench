@@ -104,8 +104,8 @@ Stage 30 is BD67-specific (long reads) and does not get a Pool278 version.
 
 1. Stage 1a: retag the nine BD Bioproduct BAMs as 10x and merge to three `BD_nuc_<sample>_as10x.bam`. **Done 2026-10-31.**
 2. Stages 1 to 10, 23 to 29 run on each `BD_nuc_<sample>` with no changes. **Done 2026-11-01.** Two code-side bumps required: `markers.MarkerClass` panel default extended to `NUCLEI + CELLS + BD_NUC` so stage 25 scores the FLIGHT nuclei, and stage 24 picked up a `--refs` flag mirroring stage 23 so the recount restricts to the GRCh38 primary assembly on BAMs that still carry phiX174. Both in commit `10a5e47`. Stage 34 report rebuilt the same day; §9 lists numbers.
-3. Stage 29a: fit the interaction model, build Panel F.
-4. Stage 31b: FLIGHT-pair matched sites.
+3. Stage 29a: fit the interaction model, build Panel F. **Model fit 2026-11-01**, `scripts/29a_interaction.py` writes `burden/interaction.*`; headline in §9. Panel F wiring in `pafbench.m3report` still open.
+4. Stage 31b: FLIGHT-pair matched sites. **Done 2026-11-01**, `scripts/31b_matched_sites_flightpair.py` writes `burden/matched_sites_flightpair.*`; headline in §9. Panel G wiring in `pafbench.m3report` still open.
 5. Report: add Panels A/B rows, add Panels F/G.
 
 ## 7. Decisions
@@ -149,3 +149,27 @@ Stage 25 class calls (`<lib>/cells/cells.parquet`):
 | BD_nuc_215 | 37,775  | 26,230 | 1,981     | 251       | 9,313      |
 
 Panel coverage was enough to call rod and macroglia across all three samples; BD_nuc_215 additionally reached the microglia threshold. The unassigned fraction varies from 29% (215) to 71% (213), consistent with the shallow per-nucleus depth noted in §5. No sample fell under the marker-coverage floor, so no library ran stage 26 at the library level only; the per-class impact table is populated for each sample.
+
+Stage 29a: 2x2 interaction (`burden/interaction.json`). OLS on logit(share) with chemistry (10x, BD) and material (cells, nuclei) + interaction, each library a replicate within its cell, 1000 gene-cluster bootstrap draws per library (1001/1000 kept including the point). Fitted cell means on the share scale:
+
+| Cell       | Members                              | Fitted share | 95% CI             | Observed per library           |
+|------------|--------------------------------------|--------------|--------------------|--------------------------------|
+| 10x cells  | 1179                                 | 0.497        | 0.474 to 0.524     | 0.497                          |
+| 10x nuclei | 1417, 1419                           | 0.892        | 0.885 to 0.899     | 0.896, 0.887                   |
+| BD cells   | BD67                                 | 0.259        | 0.238 to 0.282     | 0.259                          |
+| BD nuclei  | BD_nuc_211, BD_nuc_213, BD_nuc_215   | 0.402        | 0.376 to 0.429     | 0.437, 0.386, 0.384            |
+
+Contrasts (share scale, back-transformed averages over the within-cell replicates), with the logit-scale coefficients in parentheses:
+
+- Chemistry (BD minus 10x, averaged over material): -0.364, 95% CI -0.386 to -0.343 (logit -1.77, CI -1.88 to -1.68). BD has a lower templated share than 10x across both materials.
+- Material (nuclei minus cells, averaged over chemistry): +0.269, 95% CI +0.247 to +0.289 (logit +1.39, CI +1.28 to +1.48). Nuclei above cells on both chemistries.
+- Interaction: **-0.252, 95% CI -0.294 to -0.209** (logit -1.47, CI -1.67 to -1.26). The nuclei-vs-cells gap on BD (0.143) is 0.252 absolute smaller than on 10x (0.395). The sign is consistent across draws; the material effect is attenuated by chemistry, not reversed. The CI is driven by the three BD-nuclei samples and the two 10x-nuclei libraries, as called out in §3.4 and §5.
+
+Stage 31b: FLIGHT-pair matched sites (`burden/matched_sites_flightpair.json`). Same code and thresholds as stage 31 (`SITE_TOL`=5, `MIN_GENE`=20, 100 downsample draws, seed 0). Molecules on called cells: BD67 186,891; BD_nuc_211 700,870; BD_nuc_213 1,080,726; BD_nuc_215 730,740; pooled `flight_nuclei` 2,512,336. Sites per group: BD67 52,079; flight_nuclei 421,575.
+
+| Pair                       | Shared genes | Shared sites | First-only sites | Second-only sites | Spearman rho | Depth-matched rho |
+|----------------------------|--------------|--------------|------------------|-------------------|--------------|-------------------|
+| BD_nuc_213 vs BD_nuc_215   | 4,900        | 43,963       | 44,507           | 30,460            | 0.892        | not applicable    |
+| flight_nuclei vs BD67      | 1,584        | 11,780       | 35,670           | 1,993             | 0.841        | 0.843 (CI 0.843 to 0.844, 100 draws) |
+
+Reads of this against stage 31 (10x): the within-material baseline rho for 10x was 1417-vs-1419 at 0.885; the FLIGHT within-material baseline (BD_nuc_213 vs BD_nuc_215, two Graz donors) is a hair higher at 0.892. The 10x nuclei-vs-cells rho was 0.661 at full depth and 0.849 depth-matched; the FLIGHT nuclei-vs-cells rho is 0.841 at full depth and 0.843 depth-matched, because the pooled flight_nuclei (932k molecules at shared sites) is only ~9x deeper than BD67 (105k) rather than the 11 to 13x gap between 1179 and 1417+1419. On BD the depth asymmetry does not drive the full-depth rho the way it does on 10x. The median log2(usage_flight / usage_BD67) is -0.58 at full depth and -0.59 depth-matched, versus +0.67 for 10x nuclei-vs-cells at full depth and 0 depth-matched: on BD the matched sites carry more molecules on the nuclei side even per shared gene, consistent with the smaller BD-material gap on templated share.
