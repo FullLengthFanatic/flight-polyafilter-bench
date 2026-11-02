@@ -104,9 +104,9 @@ Stage 30 is BD67-specific (long reads) and does not get a Pool278 version.
 
 1. Stage 1a: retag the nine BD Bioproduct BAMs as 10x and merge to three `BD_nuc_<sample>_as10x.bam`. **Done 2026-10-31.**
 2. Stages 1 to 10, 23 to 29 run on each `BD_nuc_<sample>` with no changes. **Done 2026-11-01.** Two code-side bumps required: `markers.MarkerClass` panel default extended to `NUCLEI + CELLS + BD_NUC` so stage 25 scores the FLIGHT nuclei, and stage 24 picked up a `--refs` flag mirroring stage 23 so the recount restricts to the GRCh38 primary assembly on BAMs that still carry phiX174. Both in commit `10a5e47`. Stage 34 report rebuilt the same day; §9 lists numbers.
-3. Stage 29a: fit the interaction model, build Panel F. **Model fit 2026-11-01**, `scripts/29a_interaction.py` writes `burden/interaction.*`; headline in §9. Panel F wiring in `pafbench.m3report` still open.
-4. Stage 31b: FLIGHT-pair matched sites. **Done 2026-11-01**, `scripts/31b_matched_sites_flightpair.py` writes `burden/matched_sites_flightpair.*`; headline in §9. Panel G wiring in `pafbench.m3report` still open.
-5. Report: add Panels A/B rows, add Panels F/G.
+3. Stage 29a: fit the interaction model, build Panel F. **Model fit 2026-11-01**, `scripts/29a_interaction.py` writes `burden/interaction.*`; headline in §9.
+4. Stage 31b: FLIGHT-pair matched sites. **Done 2026-11-01**, `scripts/31b_matched_sites_flightpair.py` writes `burden/matched_sites_flightpair.*`; headline in §9.
+5. Report: add Panels A/B rows, add Panels F/G. **Done 2026-11-02.** Panels A and B pick up the FLIGHT-nuclei rows automatically because stage 18's `burden/templated_share.parquet` iterates every group it finds. Section 16 of `pafbench.m3report` now reads `burden/matched_sites_flightpair.*` after the 10x pair block (Panel G); new section 21 renders Panel F from `burden/interaction.json` with a grouped bar chart, 95% CIs, and per-replicate observed shares overlaid. Report rebuilt 2026-11-02 in 17 s with 22 sections and 0 missing inputs.
 
 ## 7. Decisions
 
