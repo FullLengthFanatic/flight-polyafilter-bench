@@ -213,7 +213,8 @@ def test_cell_records_are_the_designed_counters_and_units_a_naive_set_count(synt
     for ref in CHROMS:
         _, rec, counts = _scan(synth10x, ref, chunk=chunk)
         assert list(rec.columns) == RECORD_COLS + TAGS
-        assert rec.dtypes.astype(str).tolist() == ["int32", "str", "bool"] + ["uint32"] * (4 + len(TAGS))
+        # pandas 2.x represents the series built from dtype="str" as the object dtype (strings held in a Python object array)
+        assert rec.dtypes.astype(str).tolist() == ["int32", "object", "bool"] + ["uint32"] * (4 + len(TAGS))
         assert (rec.total > 0).all() and not rec.duplicated(["cell", "re", "gx"]).any()
         called = rec[rec.cell >= 0]
         assert counts["called"] == int(called.total.sum()) and counts["primary"] == int(rec[rec.cell < 0].total.sum())
@@ -371,7 +372,8 @@ def test_reference_without_genes_or_without_called_cells_gives_empty_tables(plan
     pd.testing.assert_frame_equal(groups, empty)
     assert [tuple(r) for r in rec[RECORD_COLS].itertuples(index=False)] == [(-1, "E", True, 1, 1, 0, 0),
                                                                             (-1, "I", False, 1, 1, 0, 0)]
-    assert rec.dtypes.astype(str).tolist() == ["int32", "str", "bool"] + ["uint32"] * (4 + len(TAGS))
+    # pandas 2.x represents the series built from dtype="str" as the object dtype (strings held in a Python object array)
+    assert rec.dtypes.astype(str).tolist() == ["int32", "object", "bool"] + ["uint32"] * (4 + len(TAGS))
     assert counts == dict(zip(COUNTS, (2, 2, 0, 0, 0, 0, 0)))
 
 
@@ -598,7 +600,9 @@ def test_parts_hold_the_tables_of_the_scan_and_the_json_names_counts_and_inputs(
     assert pq.read_table(part_dir / "chrA.read_groups.parquet").num_rows == 27
     records = pq.read_schema(part_dir / "chrD.cell_records.parquet")
     assert records.names == RECORD_COLS + TAGS
-    assert [str(t) for t in records.types] == ["int32", "large_string", "bool"] + ["uint32"] * 8
+    # pyarrow uses the regular `string` type for columns under 2 GiB (the fixture never approaches that), where an older
+    # pyarrow release emitted `large_string` by default for an object-dtype pandas column
+    assert [str(t) for t in records.types] == ["int32", "string", "bool"] + ["uint32"] * 8
 
 
 def test_finished_reference_is_not_scanned_again(synth10x, tmp_path, monkeypatch):

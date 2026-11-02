@@ -41,11 +41,13 @@ PANEL = (
     MarkerClass("vascular", ("CD34", "CDH5", "RGS5", "ADAMTS9", "EGFL7", "VWF", "PDGFRB", "ACTA2", "COL1A2", "PROCR"),
                 ("Menon", "Cowan")),
     MarkerClass("RPE", ("RPE65", "BEST1", "MITF", "MLANA", "TJP1"), ("Cowan",)),
-    MarkerClass("progenitor", ("SOX2", "VSX2", "PAX6"), ("Sridhar",), CELLS, True),
-    MarkerClass("proliferating", ("MKI67",), ("Cowan", "Sridhar"), CELLS),
+    # the four developmental classes are scored on 1179 only (design 3.3 "1179 only"). CELLS also contains BD67, so the
+    # literal tuple here keeps the scope narrow regardless of what later additions to CELLS do.
+    MarkerClass("progenitor", ("SOX2", "VSX2", "PAX6"), ("Sridhar",), ("1179",), True),
+    MarkerClass("proliferating", ("MKI67",), ("Cowan", "Sridhar"), ("1179",)),
     MarkerClass("neurogenic or transitional", ("ATOH7", "HES6", "PRDM13", "PTF1A", "FABP7", "DLL3", "NEUROD1"),
-                ("Sridhar", "Cowan"), CELLS),
-    MarkerClass("photoreceptor precursor", ("OTX2", "RCVRN", "FABP7", "DLL3"), ("Sridhar",), CELLS),
+                ("Sridhar", "Cowan"), ("1179",)),
+    MarkerClass("photoreceptor precursor", ("OTX2", "RCVRN", "FABP7", "DLL3"), ("Sridhar",), ("1179",)),
 )
 
 # second rod score of the class table: the two transcription factors only

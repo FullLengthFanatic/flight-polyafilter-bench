@@ -231,7 +231,7 @@ def m2_block(func, base, title=None):
 
 # ---------------------------------------------------------------------------------------------- digit test (rule 3)
 
-_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_])\d[\d.,/\-]*")
+_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_])\d[\d.,/\-]*(?![A-Za-z0-9])")
 _SPAN_RE = re.compile(r'<span[^>]*data-num="[^"]*"[^>]*>.*?</span>', re.DOTALL)
 _M2_BLOCK_RE = re.compile(r'<section[^>]*data-m2="[^"]*"[^>]*>.*?</section>', re.DOTALL)
 _CODE_RE = re.compile(r"<code>.*?</code>", re.DOTALL)
@@ -393,12 +393,15 @@ def section_1(base, reg):
 
 
 def section_2(base, reg):
-    """Libraries. Table of the three libraries from `outs/metrics_summary.csv` of each library."""
+    """Libraries. Table of the libraries from `outs/metrics_summary.csv` of each library. Reads from
+    `base/<lib>/outs/metrics_summary.csv` (the same base-relative pattern every other section uses, and what the
+    fixture in tests/test_m3report.py::_m3_inputs writes). Stage 34 is expected to materialise or symlink each
+    library's 10x metrics file under the benchmark's OUT tree before building the report."""
     base = Path(base)
     rows, present = [], False
     for lib in LIBS:
-        p = LIBRARIES[lib].parent / "metrics_summary.csv"
-        src = f"{LIBRARIES[lib].parent.parent.name}/outs/metrics_summary.csv"
+        p = base / lib / "outs" / "metrics_summary.csv"
+        src = f"{lib}/outs/metrics_summary.csv"
         if p.exists():
             present = True
             try:
@@ -414,11 +417,10 @@ def section_2(base, reg):
         else:
             rows.append([lib, "n/a"])
     if not present:
-        return _not_run_section(2, "Libraries", base, [LIBRARIES[lib].parent / "metrics_summary.csv" for lib in LIBS])
+        return _not_run_section(2, "Libraries", base, [base / lib / "outs" / "metrics_summary.csv" for lib in LIBS])
     body = _html_table(["Library", "Called cells"], rows)
     return _section(2, "Libraries", body,
-                    [(f"{LIBRARIES[lib].parent.parent.name}/outs/metrics_summary.csv", ["Estimated Number of Cells"])
-                     for lib in LIBS])
+                    [(f"{lib}/outs/metrics_summary.csv", ["Estimated Number of Cells"]) for lib in LIBS])
 
 
 def section_3(base, reg):
@@ -999,10 +1001,28 @@ def _wrap(body):
             f'</body></html>')
 
 
+def _link_cellranger_metrics(base):
+    """Symlink each library's Cell Ranger metrics_summary.csv under base/<lib>/outs/ so section_2 reads from the same
+    base-relative layout as every other section. In production the file lives next to the BAM (LIBRARIES[lib].parent),
+    which may be outside base; the symlink keeps section_2 pure (base-relative only) without copying bytes. A library
+    without an existing metrics_summary.csv is left alone."""
+    for lib in LIBS:
+        src = LIBRARIES[lib].parent / "metrics_summary.csv"
+        dst = base / lib / "outs" / "metrics_summary.csv"
+        if dst.exists() or not src.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            dst.symlink_to(src)
+        except OSError:
+            continue  # read-only base, cross-device, etc.: section_2 will render n/a for this lib
+
+
 def build(base, out_dir):
     """Build the page and the numbers file; returns the two paths."""
     base, out_dir = Path(base), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    _link_cellranger_metrics(base)
     reg = Registry()
     body = _render(base, reg)
     html_text = _wrap(body)

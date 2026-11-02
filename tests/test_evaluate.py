@@ -738,7 +738,12 @@ def test_stage17_selection_without_qualifier_tie_breaks_caps_and_spikeins(tmp_pa
     tr.to_parquet(base / "1417" / "spikein" / "truth" / "truth_reads.parquet")
     fl.to_parquet(base / "1417" / "spikein" / "grid" / "truth_flags.parquet")
     stdout = _run_stage("17_evaluate.py", base, out)
-    assert not [line for line in stdout.splitlines() if ": skipped, missing" in line]  # all three libraries used
+    # the fixture provides 1417, 1419 and 1179; stage 17 now also iterates BD67 and the three BD_nuc libraries (addendum
+    # 2026-10-31), which the fixture does not build. The invariant checked here is that no fixture-provided library was
+    # skipped; libraries the fixture never set up are expected to print "skipped, missing" lines.
+    for lib in ("1417", "1419", "1179"):
+        assert not [line for line in stdout.splitlines()
+                    if ": skipped, missing" in line and line.startswith(f"{lib}:")], lib
     assert "1419: spike-in metrics skipped" in stdout and "1179: spike-in" not in stdout
     assert "mode i: no setting chosen" in stdout
     sel = json.loads((out / "selection.json").read_text())

@@ -1075,8 +1075,10 @@ def test_burden_section_duplicate_flag_caveat(base):
     assert f"{source} The shares without PCR duplicates therefore remove duplicates only among counted reads. {last}" in s
     assert "absent on every" not in s
     assert s.index(source) < s.index("Spec 11 says")   # under the table, before the rule
-    # the regions without one flagged record are read from stage 13's counts: I everywhere, N in 1179 only
-    for lib in ("1417", "1419"):
+    # the regions without one flagged record are read from stage 13's counts: I everywhere, N in 1179 only. CELLS was
+    # extended with BD67 (addendum 2026-10-31), so the fixture also writes BD67's counts to keep the "every intergenic
+    # record" claim universal across LIBS.
+    for lib in ("1417", "1419", "BD67"):
         _write(base / lib / "grid/region_counts.parquet", _region_counts())
     cells = _region_counts()
     cells.loc[cells.re == "N", "total_nondup"] = cells.loc[cells.re == "N", "total"]
@@ -1087,6 +1089,7 @@ def test_burden_section_duplicate_flag_caveat(base):
     # one library only: the claim names it
     (base / "1419/grid/region_counts.parquet").unlink()
     (base / "1179/grid/region_counts.parquet").unlink()
+    (base / "BD67/grid/region_counts.parquet").unlink()
     s = m2report.burden_section(base)
     assert "The flag is therefore absent on every intergenic record of 1417, so the shares" in s
     # a library whose intergenic records do carry the flag is not named
@@ -1105,9 +1108,9 @@ def _region_counts(total_nondup=True):
 
 def test_burden_section_records_by_re_tag_is_an_observation_from_region_counts(base):
     s = m2report.burden_section(base)
-    # fixture base has no region_counts.parquet
-    assert "Primary records by RE tag: not run (missing 1417/grid/region_counts.parquet, 1419/grid/region_counts.parquet, " \
-           "1179/grid/region_counts.parquet)" in s
+    # fixture base has no region_counts.parquet; CELLS now includes BD67 so the not-run message lists its path too
+    assert ("Primary records by RE tag: not run (missing 1417/grid/region_counts.parquet, 1419/grid/region_counts.parquet, "
+            "1179/grid/region_counts.parquet, BD67/grid/region_counts.parquet)") in s
     # without total_nondup (stage 13 predates it): the primary records only, and the line saying so
     _write(base / "1417/grid/region_counts.parquet", _region_counts(total_nondup=False))
     s = m2report.burden_section(base)

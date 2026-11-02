@@ -373,7 +373,7 @@ def reduce_sites(reads, ref):
 def attach_stage16(sites, stage16):
     """sites of reduce_sites with label, a_band, hexamer and region of the stage 16 site table (bd67.SITE_COLUMNS), in the
     order of sites, CONTEXT_COLUMNS first. ValueError unless sites holds exactly the stage 16 sites with an accepted
-    read, each with the same number of accepted reads (the first acceptance condition of design 3.8)."""
+    read, each with the same number of accepted reads (the first and second acceptance conditions of design 3.8)."""
     s16 = stage16.loc[stage16.n_accepted >= 1, _KEY + ["label", "a_band", "hexamer", "region", "n_accepted"]]
     j = sites.merge(s16.rename(columns={"n_accepted": "n_stage16"}), on=_KEY, how="left", validate="one_to_one")
     extra = int(j.n_stage16.isna().sum())
@@ -381,6 +381,10 @@ def attach_stage16(sites, stage16):
     if missing or extra or differ:
         raise ValueError(f"{missing} sites of stage 16 without reads here, {extra} sites here that stage 16 lacks, "
                          f"{differ} sites with another number of accepted reads")
+    # pandas 2.x's left-merge may promote a bool column via its nullable path (BooleanArray or object) even when every
+    # row matches; the acceptance check above has already proved there are no missing rows, so a plain bool cast is safe
+    # and preserves the parquet schema the design pins (hexamer: bool, not double)
+    j["hexamer"] = j["hexamer"].astype(bool)
     return j[CONTEXT_COLUMNS + [c for c in SITE_COLUMNS if c not in CONTEXT_COLUMNS]]
 
 

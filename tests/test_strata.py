@@ -294,7 +294,8 @@ def test_join_takes_gx_of_the_pa_read_when_our_gene_differs(tmp_path, batch_rows
     j = join_counted(mol, tr, sites, BARCODES, GENE_IDS, path, "L", batch_rows=batch_rows)
     assert JOIN_COLUMNS == ["lib", "mol", "cell", "gene", "umi", "joined", "region"]
     assert list(j.columns) == JOIN_COLUMNS + ["lost"]
-    assert j.dtypes.astype(str).tolist() == ["str", "int64", "int32", "int32", "uint32", "bool", "str", "uint32"]
+    # pandas 2.x represents string series held in Python object arrays as the "object" dtype label
+    assert j.dtypes.astype(str).tolist() == ["object", "int64", "int32", "int32", "uint32", "bool", "object", "uint32"]
     assert j.mol.tolist() == [10, 11, 12, 13, 14, 15] and set(j.lib) == {"L"}
     assert j.cell.tolist() == [0, 0, 1, 1, 1, 0] and j.umi.tolist() == [_code(UMIS[u]) for u in (0, 1, 0, 2, 3, 4)]
     # m10 takes gB (GX of its pa read), m11 the counted group of its second pa read; m12 and m15 lie in groups that are

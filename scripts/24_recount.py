@@ -53,6 +53,7 @@ def main():
     with pysam.AlignmentFile(str(bam)) as fh:
         refs = [s.contig for s in fh.get_index_statistics() if s.mapped > 0 and (args.refs is None or s.contig in args.refs)]
     folder, a4_refs = SUBSET.get(lib, (OUT / lib / "original", None))
+    a4_skipped = False
     try:
         bams = original_bams(folder, "" if a4_refs is None else "_".join(a4_refs) + ".",
                              [s for s in published() if s in IMPACT_SETTINGS])
@@ -60,11 +61,12 @@ def main():
         if not folder.exists():
             print(f"note: {folder} not present; A4 check skipped for {lib}", file=sys.stderr)
             bams = {}
+            a4_skipped = True
         else:
             raise
     check = OUT / "design_m3_draft" / "review" / "v2" / f"a1b_genomewide_{lib}.json"
     res = run(lib, bam, refs, IMPACT_SETTINGS, args.out or OUT / lib / "recount", args.matrices or OUT / lib / "matrices",
-              OUT / lib / "grid", bams, a4_refs, check if check.exists() else None)
+              OUT / lib / "grid", bams, a4_refs, check if check.exists() else None, a4_skipped=a4_skipped)
     keys = ("library", "refs", "read_groups", "counted_molecules", "other_read_groups", "cell_umis_two_or_more_groups", "seconds")
     print(json.dumps({k: res[k] for k in keys if k in res} | {
         name: res[name]["passed"] for name in ("A1", "A1b", "A2", "A3", "A4", "A5") if name in res} | {

@@ -95,9 +95,23 @@ def main():
     ap.add_argument("--gtf", type=Path, default=GTF)
     args = ap.parse_args()
     t0 = time.time()
-    libs = {lib: in_population(pd.read_parquet(args.base / lib / "truth" / "molecules_labeled.parquet", columns=COLUMNS),
-                               "cells") for lib in NUCLEI + CELLS}
-    groups = {lib: [lib] for lib in NUCLEI} | {"nuclei": list(NUCLEI), "cells": list(CELLS)}
+    # mirror stage 18's convention: a library without a molecules_labeled.parquet is skipped (stage 18 prints the same note
+    # and continues). This keeps stage 31 runnable when CELLS has been extended but one of its libraries has not reached
+    # stage 10 yet, and keeps the m2-era tests runnable without a BD67 fixture.
+    libs = {}
+    for lib in NUCLEI + CELLS:
+        p = args.base / lib / "truth" / "molecules_labeled.parquet"
+        if p.exists():
+            libs[lib] = in_population(pd.read_parquet(p, columns=COLUMNS), "cells")
+        else:
+            print(f"{lib}: skipped, missing {p}", file=sys.stderr)
+    groups = {lib: [lib] for lib in NUCLEI if lib in libs}
+    nuclei_members = [lib for lib in NUCLEI if lib in libs]
+    cells_members = [lib for lib in CELLS if lib in libs]
+    if nuclei_members:
+        groups["nuclei"] = nuclei_members
+    if cells_members:
+        groups["cells"] = cells_members
     mols = {g: pd.concat([libs[lib] for lib in members], ignore_index=True) for g, members in groups.items()}
     exons, ends = load_collapsed_exons(args.gtf), gene_ends(args.gtf)
     sites = {g: site_table(m, exons, ends) for g, m in mols.items()}
@@ -105,6 +119,9 @@ def main():
 
     rows, summaries, pairs, acceptance = [], [], {}, {}
     for pair, a, b in PAIRS:
+        if a not in mols or b not in mols:
+            print(f"{pair}: skipped, missing {a if a not in mols else b}", file=sys.stderr)
+            continue
         genes = shared_genes(mols[a], mols[b], MIN_GENE)
         r = site_sets(sites[a], sites[b], genes)
         rows.append(r.assign(pair=pair)[OUT_COLUMNS])

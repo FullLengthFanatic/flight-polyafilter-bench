@@ -2,12 +2,18 @@ import gzip
 import re
 from collections import Counter
 
-from pafbench.config import CELLS, LIBRARIES, NUCLEI, REPO
+from pafbench.config import BD_NUC, CELLS, LIBRARIES, NUCLEI, REPO
 from pafbench.markers import AMBIENT_ROD_TRANSCRIPTS, NOT_SCORED, PANEL, ROD_TF, SOURCES, MarkerClass
 
 BY_NAME = {c.name: c for c in PANEL}
-# symbols of the panel that the reference of the libraries lacks; none today. A symbol goes here only after it was reported.
-ABSENT_FROM_REFERENCE = set()
+# symbols of the panel that the reference of a library lacks. Each key is a library; the value is the set of symbols known
+# missing from its features.tsv.gz. A symbol goes here only after it was reported.
+ABSENT_FROM_REFERENCE = {
+    # BD67's Rhapsody WTA panel does not list these symbols
+    "BD67": {"CHAT", "CX3CR1", "HLA-DPA1", "OPN1LW", "TMEM119"},
+    # the three per-sample merges each take their features list from their own BD run; 211's three replicates do not list PTF1A
+    "BD_nuc_211": {"PTF1A"},
+}
 
 
 def test_panel_classes():
@@ -23,7 +29,9 @@ def test_panel_classes():
 
 
 def test_panel_is_the_table_of_the_design():
-    # every row of the marker table of section 3.3: class, genes and sources in the order written there
+    # every row of the marker table of section 3.3: class, genes and sources in the order written there. The FLIGHT-nuclei
+    # libraries (BD_NUC) were added to the shared classes by addendum D-pool278-3 (2026-10-31); the 1179-only rows are
+    # unchanged by that addendum.
     lines = (REPO / "docs/specs/2026-10-12-polyafilter-bench-milestone3-design.md").read_text().splitlines()
     start = lines.index("| Class | Genes scored | Sources |") + 2
     table = []
@@ -34,15 +42,18 @@ def test_panel_is_the_table_of_the_design():
         only_1179, weak = name.startswith("1179 only: "), name.endswith("(weak)")
         name = re.sub(r" \(.*\)$", "", name.removeprefix("1179 only: "))
         sources = re.sub(r" \(.*?\)| \d{4}", "", sources).split(", ")     # the quotes, "(HRCA)" and the years
-        table.append(MarkerClass(name, tuple(genes.split(", ")), tuple(sources), CELLS if only_1179 else NUCLEI + CELLS, weak))
+        table.append(MarkerClass(name, tuple(genes.split(", ")), tuple(sources),
+                                 ("1179",) if only_1179 else NUCLEI + CELLS + BD_NUC, weak))
     assert len(table) == 14 and tuple(table) == PANEL
 
 
 def test_last_four_classes_are_for_1179_only():
+    # the shared classes include BD_NUC after addendum D-pool278-3 (2026-10-31); the 1179-only rows name 1179 explicitly
+    # since CELLS now also contains BD67
     for c in PANEL[:10]:
-        assert c.libraries == NUCLEI + CELLS, c.name
+        assert c.libraries == NUCLEI + CELLS + BD_NUC, c.name
     for c in PANEL[10:]:
-        assert c.libraries == CELLS == ("1179",), c.name
+        assert c.libraries == ("1179",), c.name
 
 
 def test_weak_mark_is_on_progenitor_only():
@@ -68,8 +79,9 @@ def test_rod_subsets_and_genes_left_out():
 
 def test_every_symbol_is_in_the_reference_of_the_libraries():
     symbols = {g for c in PANEL for g in c.genes} | set(AMBIENT_ROD_TRANSCRIPTS) | set(NOT_SCORED)
-    for lib in NUCLEI + CELLS:
+    for lib in NUCLEI + CELLS + BD_NUC:
         with gzip.open(LIBRARIES[lib].parent / "filtered_feature_bc_matrix" / "features.tsv.gz", "rt") as fh:
             names = Counter(line.split("\t")[1] for line in fh)
-        assert {g for g in symbols if names[g] == 0} == ABSENT_FROM_REFERENCE, lib
-        assert all(names[g] == 1 for g in symbols - ABSENT_FROM_REFERENCE), lib
+        absent = ABSENT_FROM_REFERENCE.get(lib, set())
+        assert {g for g in symbols if names[g] == 0} == absent, lib
+        assert all(names[g] == 1 for g in symbols - absent), lib

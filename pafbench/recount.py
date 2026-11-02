@@ -600,7 +600,8 @@ def check_a4(job):
     return tag, {"bam": str(bam)} | counts | a4 | {"seconds": round(time.monotonic() - t0, 1)}, a6
 
 
-def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4_refs=None, check_script=None):
+def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4_refs=None, check_script=None,
+        a4_skipped=False):
     """Stage 24 for one library: the rule on the parts of stage 23 under recount_dir/parts, the output tables and matrices,
     and the acceptance checks A1 to A6 in the order of design 3.2. Returns the content of recount.json.
 
@@ -608,6 +609,10 @@ def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4
     cell_counts.parquet and region_counts.parquet. a4_bams: {tag: BAM the original tool wrote at that setting}; a4_refs:
     the references those BAMs hold when they are a subset (the rule is then applied to the read groups of these alone).
     check_script: the json of the design's genome-wide check of A1b, when there is one.
+    a4_skipped: True when the caller has deliberately skipped A4 (the original-tool BAMs do not exist for this library,
+    for example a BD FLIGHT-seq library has no polyAfilter run to compare against). A4 is then marked passed, so the
+    pipeline can finish; without that flag an empty a4_bams dict means A4 was expected to run but had no inputs, which
+    fails A4 and stops the pipeline.
     A failed check of A1 to A5 ends the run: recount.json then holds the checks so far, without passed, and the failed
     check is printed to stderr with its offending entries. passed is written last, after every check has run and passed.
     """
@@ -750,7 +755,7 @@ def run(lib, bam, refs, settings, recount_dir, matrix_dir, grid_dir, a4_bams, a4
     # the first BAM runs alone, the others A4_PARALLEL at once (design 3.2, Run time and memory)
     done = map_forked(check_a4, jobs[:1], 1) + map_forked(check_a4, jobs[1:], A4_PARALLEL)
     res["A4"] = {"bams": len(done), "refs": "all" if a4_refs is None else list(a4_refs),
-                 "passed": (not a4_bams) or (bool(done) and all(a4["passed"] for _, a4, _ in done)),
+                 "passed": a4_skipped or (bool(done) and all(a4["passed"] for _, a4, _ in done)),
                  "settings": {tag: _jsonable(a4, barcodes, gene_ids) for tag, a4, _ in done}}
     res["A6"] = {tag: _jsonable(a6, barcodes, gene_ids) for tag, _, a6 in done}
     lap("A4")

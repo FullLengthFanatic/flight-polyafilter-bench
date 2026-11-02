@@ -1192,7 +1192,10 @@ def validation_section(base):
     for lib in LIBS:
         d, sub = em.get(lib), em.get(f"{lib}_subset")
         if d is None and sub is None:
-            notes.append(f"{lib}: not in exact_match_m2.json" + ("; the 1179 grid has no original-versus-reimplementation "
+            # the "no original-versus-reimplementation evidence" caveat was written for 1179, where stage 20 only runs the
+            # original tool on the chr21/chr22 subset. BD67 (FLIGHT-seq) does not have a stage 20 original-tool run at all,
+            # so the caveat names the specific library rather than the hard-coded "1179".
+            notes.append(f"{lib}: not in exact_match_m2.json" + (f"; the {lib} grid has no original-versus-reimplementation "
                                                                  "evidence" if lib in CELLS else ""))
         elif d is not None and not d:
             notes.append(f"{lib}: no completed original run")
