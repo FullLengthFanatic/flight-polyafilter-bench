@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import m2report
-from .config import (A_BANDS, BIAS_POINTS, CELLS, CELLS_TUNED_SETTINGS, CHOSEN_SETTINGS, CLASS_MARGIN, CLUSTER,
+from .config import (A_BANDS, BD_NUC, BIAS_POINTS, CELLS, CELLS_TUNED_SETTINGS, CHOSEN_SETTINGS, CLASS_MARGIN, CLUSTER,
                      IMPACT_SETTINGS, JACCARD_DISSOLVED, JACCARD_STABLE, LABEL_CUTOFFS, LIBRARIES, LONG_READS, MEMBER_CAP,
                      NUCLEI, SITE_TOL)
 from .flags import setting_tag
@@ -35,7 +35,7 @@ WRAPPED_M2 = tuple(f.__name__ for f in m2report.SECTIONS) + ("headline",)
 # library tags, the A bands, the member cap, the bias threshold. The test tokenises on `\d[\d.,/]*` and compares against
 # this set; a stray number that is not here and not inside a registry span raises the digit test.
 _ALLOW_NUMBERS = frozenset({
-    *LIBS, *LONG_READS, "BD67",
+    *LIBS, *LONG_READS, "BD67", *BD_NUC, "flight_nuclei",
     str(LABEL_CUTOFFS["templated_min"]), str(LABEL_CUTOFFS["nontemplated_max"]),
     f"{LABEL_CUTOFFS['templated_min']}/{LABEL_CUTOFFS['nontemplated_max']}",
     f"{MEMBER_CAP:,}", str(MEMBER_CAP),
@@ -718,20 +718,62 @@ def section_15(base, reg):
 
 
 def section_16(base, reg):
-    """Nuclei against cells. F25 site features; from matched_sites tables."""
+    """Nuclei against cells. F25 site features; from matched_sites tables. Panel G (addendum 2026-10-31 §4) is the
+    FLIGHT-pair instance, from burden/matched_sites_flightpair.*."""
     base = Path(base)
     p = base / "burden" / "matched_sites.parquet"
+    pf = base / "burden" / "matched_sites_flightpair.parquet"
+    jf = base / "burden" / "matched_sites_flightpair.json"
     if not p.exists():
         return _not_run_section(16, "Nuclei against cells", base, [p])
+    body_parts = []
     df = pd.read_parquet(p)
     rows = []
     for (pair, kind), g in df.groupby(["pair", "set"]):
         rows.append([pair, kind, reg.num(int(len(g)),
                                          source={"file": "burden/matched_sites.parquet", "column": "rows",
                                                  "filter": f"pair={pair};set={kind}", "function": "section_16"})])
-    body = "<p>Shared and group-only sites per pair.</p>" + _html_table(["Pair", "Set", "Sites"], rows)
+    body_parts.append("<h3><code>10x</code> pair</h3>")
+    body_parts.append("<p>Shared and group-only sites per pair.</p>" + _html_table(["Pair", "Set", "Sites"], rows))
+    if pf.exists() and jf.exists():
+        df = pd.read_parquet(pf)
+        d = json.loads(jf.read_text())
+        rows = []
+        for (pair, kind), g in df.groupby(["pair", "set"]):
+            rows.append([pair, kind, reg.num(int(len(g)),
+                                             source={"file": "burden/matched_sites_flightpair.parquet", "column": "rows",
+                                                     "filter": f"pair={pair};set={kind}", "function": "section_16"})])
+        body_parts.append("<h3>FLIGHT pair (Panel G)</h3>")
+        body_parts.append("<p>FLIGHT-pair matched sites, same code and thresholds as the 10x pair. The baseline pair is "
+                          "within-material between two BD-nuclei donors.</p>")
+        body_parts.append(_html_table(["Pair", "Set", "Sites"], rows))
+        rho_rows = []
+        for pair_name, pdct in d.get("pairs", {}).items():
+            rho = pdct.get("usage", {}).get("spearman_rho")
+            rho_rows.append([pair_name,
+                             reg.num(int(pdct.get("shared_genes") or 0),
+                                     source={"file": "burden/matched_sites_flightpair.json",
+                                             "column": f"pairs.{pair_name}.shared_genes", "function": "section_16"}),
+                             reg.num(float(rho) if rho is not None else None,
+                                     source={"file": "burden/matched_sites_flightpair.json",
+                                             "column": f"pairs.{pair_name}.usage.spearman_rho",
+                                             "function": "section_16"}, fmt="{:.3f}")])
+            ds = pdct.get("downsampling")
+            if ds and "usage" in ds and "spearman_rho" in ds["usage"]:
+                dr = ds["usage"]["spearman_rho"]
+                rho_rows[-1].append(reg.num(float(dr["mean"]),
+                                            source={"file": "burden/matched_sites_flightpair.json",
+                                                    "column": f"pairs.{pair_name}.downsampling.usage.spearman_rho.mean",
+                                                    "function": "section_16"}, fmt="{:.3f}"))
+            else:
+                rho_rows[-1].append("n/a")
+        body_parts.append(_html_table(["Pair", "Shared genes", "Spearman rho (full)", "Spearman rho (depth-matched)"],
+                                      rho_rows))
+    body = "\n".join(body_parts)
     return _section(16, "Nuclei against cells", body,
-                    [("burden/matched_sites.parquet", ["pair", "set", "gene", "site_a", "site_b", "label"])])
+                    [("burden/matched_sites.parquet", ["pair", "set", "gene", "site_a", "site_b", "label"]),
+                     ("burden/matched_sites_flightpair.parquet", ["pair", "set", "gene", "site_a", "site_b", "label"]),
+                     ("burden/matched_sites_flightpair.json", [])])
 
 
 def section_17(base, reg):
@@ -817,9 +859,106 @@ def section_20(base, reg):
     return _section(20, "Methods, runs and files", body, [("<base>/**/*.mem.json", []), ("pafbench/config.py", [])])
 
 
+def section_21(base, reg):
+    """Panel F: chemistry by material interaction model (addendum 2026-10-31 §3.4). Chemistry (10x, BD) x material
+    (cells, nuclei) + interaction, each library a replicate within its cell. Reads burden/interaction.json."""
+    base = Path(base)
+    p = base / "burden" / "interaction.json"
+    if not p.exists():
+        return _not_run_section(21, "Panel F: chemistry by material interaction", base, [p])
+    d = json.loads(p.read_text())
+    cell_rows = []
+    cell_order = ("10x_cells", "10x_nuclei", "BD_cells", "BD_nuclei")
+    cells = {c["cell"]: c for c in d["cells"]}
+    for name in cell_order:
+        c = cells.get(name, {})
+        cell_rows.append([
+            name,
+            ", ".join(c.get("members", [])),
+            reg.num(float(c["fitted_share"]), source={"file": "burden/interaction.json",
+                                                      "column": f"cells.{name}.fitted_share",
+                                                      "function": "section_21"}, fmt="{:.3f}"),
+            reg.num(float(c["share_ci"][0]), source={"file": "burden/interaction.json",
+                                                     "column": f"cells.{name}.share_ci[0]",
+                                                     "function": "section_21"}, fmt="{:.3f}"),
+            reg.num(float(c["share_ci"][1]), source={"file": "burden/interaction.json",
+                                                     "column": f"cells.{name}.share_ci[1]",
+                                                     "function": "section_21"}, fmt="{:.3f}"),
+        ])
+    contrast_rows = []
+    for term in ("chemistry", "material", "interaction"):
+        s = d["contrasts"][term]["share"]
+        l = d["contrasts"][term]["logit"]
+        contrast_rows.append([
+            term,
+            reg.num(float(s["point"]), source={"file": "burden/interaction.json",
+                                               "column": f"contrasts.{term}.share.point",
+                                               "function": "section_21"}, fmt="{:+.3f}"),
+            reg.num(float(s["lo"]), source={"file": "burden/interaction.json",
+                                            "column": f"contrasts.{term}.share.lo",
+                                            "function": "section_21"}, fmt="{:+.3f}"),
+            reg.num(float(s["hi"]), source={"file": "burden/interaction.json",
+                                            "column": f"contrasts.{term}.share.hi",
+                                            "function": "section_21"}, fmt="{:+.3f}"),
+            reg.num(float(l["point"]), source={"file": "burden/interaction.json",
+                                               "column": f"contrasts.{term}.logit.point",
+                                               "function": "section_21"}, fmt="{:+.3f}"),
+            reg.num(float(l["lo"]), source={"file": "burden/interaction.json",
+                                            "column": f"contrasts.{term}.logit.lo",
+                                            "function": "section_21"}, fmt="{:+.3f}"),
+            reg.num(float(l["hi"]), source={"file": "burden/interaction.json",
+                                            "column": f"contrasts.{term}.logit.hi",
+                                            "function": "section_21"}, fmt="{:+.3f}"),
+        ])
+    import plotly.graph_objects as go
+    labels_10x = ["cells", "nuclei"]
+    labels_bd = ["cells", "nuclei"]
+    y_10x = [cells["10x_cells"]["fitted_share"], cells["10x_nuclei"]["fitted_share"]]
+    y_bd = [cells["BD_cells"]["fitted_share"], cells["BD_nuclei"]["fitted_share"]]
+    err_10x_lo = [cells["10x_cells"]["fitted_share"] - cells["10x_cells"]["share_ci"][0],
+                  cells["10x_nuclei"]["fitted_share"] - cells["10x_nuclei"]["share_ci"][0]]
+    err_10x_hi = [cells["10x_cells"]["share_ci"][1] - cells["10x_cells"]["fitted_share"],
+                  cells["10x_nuclei"]["share_ci"][1] - cells["10x_nuclei"]["fitted_share"]]
+    err_bd_lo = [cells["BD_cells"]["fitted_share"] - cells["BD_cells"]["share_ci"][0],
+                 cells["BD_nuclei"]["fitted_share"] - cells["BD_nuclei"]["share_ci"][0]]
+    err_bd_hi = [cells["BD_cells"]["share_ci"][1] - cells["BD_cells"]["fitted_share"],
+                 cells["BD_nuclei"]["share_ci"][1] - cells["BD_nuclei"]["fitted_share"]]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="10x", x=labels_10x, y=y_10x,
+                         error_y=dict(type="data", symmetric=False, array=err_10x_hi, arrayminus=err_10x_lo)))
+    fig.add_trace(go.Bar(name="BD", x=labels_bd, y=y_bd,
+                         error_y=dict(type="data", symmetric=False, array=err_bd_hi, arrayminus=err_bd_lo)))
+    for name, (chem, mat) in (("10x", ("10x", "cells")), ("10x", ("10x", "nuclei")),
+                              ("BD", ("BD", "cells")), ("BD", ("BD", "nuclei"))):
+        key = f"{chem}_{mat}"
+        for obs in cells[key]["observed_shares"]:
+            fig.add_trace(go.Scatter(x=[mat], y=[obs], mode="markers",
+                                     marker=dict(color="black", size=6, opacity=0.6), showlegend=False,
+                                     xaxis="x", yaxis="y"))
+    fig.update_layout(barmode="group", title="Panel F: chemistry x material interaction (templated share)",
+                      yaxis=dict(title="Templated share (corrected OLS fit)", range=[0, 1]),
+                      xaxis=dict(title="Material"),
+                      margin=dict(l=40, r=10, t=40, b=40))
+    cells_table = _html_table(["Cell", "Members", "Fitted share", "CI lo", "CI hi"], cell_rows)
+    contrasts_table = _html_table(
+        ["Contrast", "Share point", "Share lo", "Share hi", "Logit point", "Logit lo", "Logit hi"], contrast_rows)
+    fig_html = _fig_div("fig-panel-f", fig, cells_table + contrasts_table)
+    n_draws_kept = reg.num(int(d.get("n_draws_kept") or 0),
+                           source={"file": "burden/interaction.json", "column": "n_draws_kept",
+                                   "function": "section_21"})
+    n_draws = reg.num(int(d.get("n_draws") or 0),
+                      source={"file": "burden/interaction.json", "column": "n_draws", "function": "section_21"})
+    body = (f'<p>OLS fit on logit(templated share) with chemistry (10x, BD) and material (cells, nuclei) '
+            f'as main effects plus their interaction, each library a replicate within its cell. '
+            f'Gene-cluster bootstrap per library, {n_draws_kept} of {n_draws} draws kept (logit undefined at 0 or 1). '
+            f'Descriptive only; the interaction CI leans on the three BD-nuclei samples and the two 10x-nuclei libraries.</p>'
+            f'{fig_html}')
+    return _section(21, "Panel F: chemistry by material interaction", body, [("burden/interaction.json", [])])
+
+
 SECTIONS = (section_0, section_1, section_2, section_3, section_4, section_5, section_6, section_7, section_8, section_9,
             section_10, section_11, section_12, section_13, section_14, section_15, section_16, section_17, section_18,
-            section_19, section_20)
+            section_19, section_20, section_21)
 
 
 # ---------------------------------------------------------------------------------------------- top-level build
