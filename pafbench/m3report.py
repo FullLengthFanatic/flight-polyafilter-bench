@@ -695,7 +695,8 @@ def section_14(base, reg):
 
 
 def section_15(base, reg):
-    """Do clusters survive. F23 agreement, F24 Jaccard."""
+    """Do clusters survive. F23 agreement, F24 Jaccard. Split by (tag, kind) so filtered rows are not median'd
+    together with thinned controls that share the same tag."""
     base = Path(base)
     paths = [base / lib / "impact" / "clustering.parquet" for lib in LIBS]
     present = [p for p in paths if p.exists()]
@@ -707,14 +708,17 @@ def section_15(base, reg):
         df = pd.read_parquet(p, columns=["tag", "kind", "ari"])
         if df.empty:
             continue
-        for tag, g in df.groupby("tag"):
+        for (tag, kind), g in df.groupby(["tag", "kind"]):
             med_ari = float(g.ari.median())
-            rows.append([lib, tag, reg.num(med_ari, source={"file": f"{lib}/impact/clustering.parquet",
-                                                             "column": "ari median", "filter": f"tag={tag}",
-                                                             "function": "section_15"}, fmt="{:.3f}")])
+            rows.append([lib, tag, kind, reg.num(med_ari, source={"file": f"{lib}/impact/clustering.parquet",
+                                                                   "column": "ari median",
+                                                                   "filter": f"tag={tag};kind={kind}",
+                                                                   "function": "section_15"}, fmt="{:.3f}")])
     body = (f"<p>ARI of filtered clusters against unfiltered; the Jaccard thresholds are "
-            f"{JACCARD_DISSOLVED} and {JACCARD_STABLE}.</p>"
-            + _html_table(["Library", "Setting", "Median ARI"], rows))
+            f"{JACCARD_DISSOLVED} and {JACCARD_STABLE}. Rows are split by kind: filtered runs sit next to their "
+            f"thinned random-thinning controls that share the same tag, so a single median per tag would mix "
+            f"them. Thinned rows are random-thinning controls for comparison, not filter performance.</p>"
+            + _html_table(["Library", "Setting", "Kind", "Median ARI"], rows))
     return _section(15, "Do clusters survive", body,
                     [(f"{lib}/impact/clustering.parquet", ["tag", "kind", "replicate", "seed", "ari"]) for lib in LIBS])
 
@@ -937,8 +941,8 @@ def section_21(base, reg):
             fig.add_trace(go.Scatter(x=[mat], y=[obs], mode="markers",
                                      marker=dict(color="black", size=6, opacity=0.6), showlegend=False,
                                      xaxis="x", yaxis="y"))
-    fig.update_layout(barmode="group", title="Panel F: chemistry x material interaction (templated share)",
-                      yaxis=dict(title="Templated share (corrected OLS fit)", range=[0, 1]),
+    fig.update_layout(barmode="group", title="Panel F: chemistry x material interaction (raw templated share)",
+                      yaxis=dict(title="Templated share (raw, logit-OLS fit)", range=[0, 1]),
                       xaxis=dict(title="Material"),
                       margin=dict(l=40, r=10, t=40, b=40))
     cells_table = _html_table(["Cell", "Members", "Fitted share", "CI lo", "CI hi"], cell_rows)
@@ -950,10 +954,13 @@ def section_21(base, reg):
                                    "function": "section_21"})
     n_draws = reg.num(int(d.get("n_draws") or 0),
                       source={"file": "burden/interaction.json", "column": "n_draws", "function": "section_21"})
-    body = (f'<p>OLS fit on logit(templated share) with chemistry (10x, BD) and material (cells, nuclei) '
-            f'as main effects plus their interaction, each library a replicate within its cell. '
-            f'Gene-cluster bootstrap per library, {n_draws_kept} of {n_draws} draws kept (logit undefined at 0 or 1). '
-            f'Descriptive only; the interaction CI leans on the three BD-nuclei samples and the two 10x-nuclei libraries.</p>'
+    body = (f'<p>OLS fit on logit of the <b>raw</b> templated share (<code>share_label</code>, not '
+            f'<code>share_corrected</code>) with chemistry (10x, BD) and material (cells, nuclei) as main effects '
+            f'plus their interaction, each library a replicate within its cell. '
+            f'Gene-cluster bootstrap per library with an independent random stream per library, '
+            f'{n_draws_kept} of {n_draws} draws kept (logit undefined at 0 or 1). '
+            f'Descriptive only: the CIs describe gene-resampling uncertainty conditional on the observed libraries '
+            f'and do not represent biological-replicate variability.</p>'
             f'{fig_html}')
     return _section(21, "Panel F: chemistry by material interaction", body, [("burden/interaction.json", [])])
 

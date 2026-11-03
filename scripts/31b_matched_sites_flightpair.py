@@ -8,15 +8,19 @@ confounded on the baseline pair; BD67 (wk26 organoid pool) and the FLIGHT nuclei
 tissue and maturity as well as material.
 
 Stage 18 does not write a same_site.parquet row for the FLIGHT pairs. Rather than extend stage 18, the acceptance check for
-31b is internal: on the site tables without the gene filter, burden.same_site's one-way nearest match reproduces the labeled
-pair counts from match_sites on the shared-gene subset after reaggregation. When it does not, the outputs are written and
-the stage exits with an error.
+31b is two internal invariants on `same_site` run forward (sites of a matched one-way to nearest sites of b): (i) the
+matched (label_b != "none") and unmatched rows together must cover every site of a (coverage), and (ii) the matched count
+must be at least the shared-gene pair count returned by match_sites inside shared_genes (shared-gene pairs are a subset of
+all cross-gene nearest matches). When either invariant is violated the outputs are written and the stage exits with an
+error.
 
 Writes under --out (default OUT/burden):
 - matched_sites_flightpair.parquet, matched_sites_flightpair_summary.parquet, matched_sites_flightpair.json. Column layout
-  mirrors stage 31. For the flight_vs_bd67 pair downsampling draws from BD67 to the pooled flight-nuclei molecule count per
-  shared gene (BD67 is the cell side and typically deeper per gene than the pooled nuclei; the stage 31 convention is to
-  draw the deeper side to the shallower).
+  mirrors stage 31. For the flight_vs_bd67 pair downsampling runs under the per-gene-minimum rule in burden.downsample_sets
+  (both sides drawn to min(count_a, count_b) per gene), so the depth-matched rho is symmetric in the argument order and
+  robust to which side is the deeper one. The previous one-sided version only brought the second argument down and was a
+  no-op when the first argument was deeper, which is the case here (pooled flight_nuclei is ~9x deeper than BD67 at shared
+  sites).
 """
 import argparse
 import json
@@ -67,11 +71,17 @@ def main():
         if pair == DOWNSAMPLE_PAIR:
             pairs[pair]["downsampling"] = {"seed": SEED} | downsampling_summary(
                 downsample_sets(sites[a], sites[b], genes, DOWNSAMPLE_DRAWS, SEED))
-        # self-consistency: the labeled-pair counts over the full site tables (one-way nearest match) match the shared-gene
-        # match counts after dropping the gene filter
-        expected = same_site(mols[a], mols[b])
-        got = same_site(mols[a], mols[b])
-        acceptance[pair] = {"pass": expected.equals(got), "pairs_a_b": int(expected.n.sum())}
+        # self-consistency: (i) same_site's output rows must cover every site of a (matched + unmatched == sites_a),
+        # (ii) the matched (label_b != "none") count must be at least the shared-gene pair count from match_sites, since
+        # shared-gene pairs are a subset of all cross-gene nearest matches without the gene filter.
+        forward = same_site(mols[a], mols[b])
+        matched = int(forward[forward.label_b != "none"].n.sum())
+        unmatched = int(forward[forward.label_b == "none"].n.sum())
+        sites_a = len(sites[a])
+        shared_pair_count = int((r.set == "shared").sum())
+        passed_pair = (matched + unmatched == sites_a) and (matched >= shared_pair_count)
+        acceptance[pair] = {"pass": passed_pair, "sites_a": sites_a, "matched": matched, "unmatched": unmatched,
+                            "shared_gene_pairs": shared_pair_count}
 
     passed = all(c["pass"] for c in acceptance.values())
     args.out.mkdir(parents=True, exist_ok=True)

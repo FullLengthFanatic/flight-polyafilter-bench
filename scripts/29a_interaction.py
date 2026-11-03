@@ -1,15 +1,22 @@
-"""Stage 29a: fit the 2x2 interaction model on templated share, chemistry (10x, BD) x material (cells, nuclei), with each
-library as one replicate within its cell (addendum 2026-10-31, section 3.4).
+"""Stage 29a: fit the 2x2 interaction model on the RAW (uncorrected) templated share, chemistry (10x, BD) x material
+(cells, nuclei), with each library as one replicate within its cell (addendum 2026-10-31, section 3.4).
 
 Rows (7 total): 1417 and 1419 (10x nuclei, chem=10x, mat=nuclei), 1179 (10x cells), BD67 (BD cells), BD_nuc_211/213/215
 (BD nuclei). 1416 is in LIBRARIES but not in NUCLEI and does not enter here (addendum decision outside this scope).
 
-Response: logit of the per-library templated share, "all" region, on called cells (truth/molecules_labeled.parquet, in_cell).
+Response: logit of the per-library RAW templated share, "all" region, on called cells. The raw share is templated
+molecules divided by all labeled molecules on called cells (truth/molecules_labeled.parquet, in_cell); this is
+`share_label` in `burden/templated_share_corrected.parquet`, NOT `share_corrected`. The ambiguous-label correction from
+stage 29 is a per-library linear offset in the logit domain and would propagate through the 2x2 fit, but applying it
+during the gene-cluster bootstrap requires the per-cluster hexamer-rate inputs stage 29 uses; stage 29a keeps the simpler
+raw response and labels it that way. Expect the fitted shares to sit above the corresponding corrected shares in
+`templated_share_corrected.parquet` by a small per-library amount.
+
 Design matrix: intercept, chemistry (10x=0, BD=1), material (cells=0, nuclei=1), chemistry x material. OLS per bootstrap
-draw: gene-cluster bootstrap per library (evaluate.gene_clusters + resample_counts), the same N draws (one seed) applied
-independently to each library's cluster count vector, templated share recomputed per draw. For each draw the 4 OLS
-coefficients and the 4 cell means (back-transformed from the fitted logit) are collected. Point estimates run on the
-observed share (no resampling). CIs: 2.5th and 97.5th percentiles of the N draws.
+draw: gene-cluster bootstrap per library (evaluate.gene_clusters + resample_counts) with an INDEPENDENT seed per library
+derived from --seed via numpy.random.SeedSequence.spawn, so two libraries with identical cluster counts no longer share
+their bootstrap draws by array position. Point estimates run on the observed share (no resampling). CIs: 2.5th and 97.5th
+percentiles of the N draws.
 
 Share scale is also reported for the three contrasts: the main effects and the interaction expressed as absolute
 differences in share. The interaction on the share scale is (nuclei_BD - cells_BD) - (nuclei_10x - cells_10x), averaged
@@ -19,7 +26,9 @@ Writes under --out (default OUT/burden): interaction.parquet (per-draw and point
 interaction_cells.parquet (per-cell means with CIs on share and logit scales), interaction.json (headline).
 
 Descriptive only. With one BD-cells library (BD67) the BD-cells cell has no within-cell variance; the interaction CI leans
-on the three BD-nuclei samples and the two 10x-nuclei libraries (addendum section 3.4).
+on the three BD-nuclei samples and the two 10x-nuclei libraries (addendum section 3.4). These CIs describe gene-resampling
+uncertainty CONDITIONAL on the observed libraries; they do NOT estimate biological-replicate variability across donors or
+batches.
 """
 import argparse
 import json
@@ -114,16 +123,19 @@ def main():
     if missing:
         raise SystemExit(f"libraries not registered in config: {missing}")
 
-    # per-library shares: shape (n_libs, n_draws + 1)
+    # per-library shares: shape (n_libs, n_draws + 1). Independent seed per library so two libraries with equal cluster
+    # counts do not share bootstrap draws by array position (addendum section 3.4 review, 2026-11-03).
+    ss = np.random.SeedSequence(args.seed)
+    child_seeds = ss.spawn(len(rows))
     shares = []
     n_labeled = {}
-    for lib, _, _ in rows:
+    for i, (lib, _, _) in enumerate(rows):
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if not p.exists():
             raise SystemExit(f"{lib}: missing {p}")
         mol = pd.read_parquet(p, columns=COLUMNS)
         mol = in_population(mol, "cells")
-        s = per_library_shares(mol, args.n_draws, args.seed)
+        s = per_library_shares(mol, args.n_draws, child_seeds[i])
         shares.append(s)
         n_labeled[lib] = int(len(mol))
     shares = np.vstack(shares)

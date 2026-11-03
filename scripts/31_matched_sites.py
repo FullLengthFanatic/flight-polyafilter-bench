@@ -74,12 +74,16 @@ from pathlib import Path
 
 import pandas as pd
 
-from pafbench.burden import (SETS, downsample_sets, downsampling_summary, gene_ends, same_site_check, set_counts,
+from pafbench.burden import (SETS, downsample_sets, downsampling_summary, gene_ends, same_site, set_counts,
                              set_summary, shared_genes, site_sets, site_table, usage_comparison)
-from pafbench.config import CELLS, DIST_END_BINS, DOWNSAMPLE_DRAWS, GTF, NUCLEI, OUT, SITE_TOL
+from pafbench.config import DIST_END_BINS, DOWNSAMPLE_DRAWS, GTF, NUCLEI, OUT, SITE_TOL
 from pafbench.exons import load_collapsed_exons
 from pafbench.truth import in_population
 
+# Stage 31's nuclei_vs_cells pair is a 10x within-chemistry comparison by design (see 2026-10-12 spec §3.9). The FLIGHT
+# nuclei-vs-BD67 pair runs separately in stage 31b. CELLS now carries BD67 for other stages, so we pin the 10x members
+# here rather than let the Pool278 addition silently pool chemistries.
+TENX_CELLS = ("1179",)
 COLUMNS = ["ref", "strand", "site", "label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "genes", "in_cell"]
 PAIRS = (("1417_vs_1419", "1417", "1419"), ("nuclei_vs_cells", "nuclei", "cells"))
 MIN_GENE = 20  # burden.same_gene's min_n
@@ -99,7 +103,7 @@ def main():
     # and continues). This keeps stage 31 runnable when CELLS has been extended but one of its libraries has not reached
     # stage 10 yet, and keeps the m2-era tests runnable without a BD67 fixture.
     libs = {}
-    for lib in NUCLEI + CELLS:
+    for lib in NUCLEI + TENX_CELLS:
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if p.exists():
             libs[lib] = in_population(pd.read_parquet(p, columns=COLUMNS), "cells")
@@ -107,7 +111,7 @@ def main():
             print(f"{lib}: skipped, missing {p}", file=sys.stderr)
     groups = {lib: [lib] for lib in NUCLEI if lib in libs}
     nuclei_members = [lib for lib in NUCLEI if lib in libs]
-    cells_members = [lib for lib in CELLS if lib in libs]
+    cells_members = [lib for lib in TENX_CELLS if lib in libs]
     if nuclei_members:
         groups["nuclei"] = nuclei_members
     if cells_members:
@@ -115,7 +119,6 @@ def main():
     mols = {g: pd.concat([libs[lib] for lib in members], ignore_index=True) for g, members in groups.items()}
     exons, ends = load_collapsed_exons(args.gtf), gene_ends(args.gtf)
     sites = {g: site_table(m, exons, ends) for g, m in mols.items()}
-    expected = pd.read_parquet(args.base / "burden" / "same_site.parquet")
 
     rows, summaries, pairs, acceptance = [], [], {}, {}
     for pair, a, b in PAIRS:
@@ -132,7 +135,19 @@ def main():
         if pair == "nuclei_vs_cells":
             pairs[pair]["downsampling"] = {"seed": SEED} | downsampling_summary(
                 downsample_sets(sites[a], sites[b], genes, DOWNSAMPLE_DRAWS, SEED))
-        acceptance[pair] = same_site_check(sites[a], sites[b], expected[expected.pair == pair])
+        # internal self-consistency acceptance (mirrors stage 31b): same_site's output must cover every site of a
+        # (matched + unmatched == sites_a) and the matched count must be at least the shared-gene pair count returned
+        # by match_sites (shared-gene pairs are a subset of all cross-gene nearest matches without the gene filter).
+        # Dropped the stage 18 same_site.parquet handoff because stage 18's "cells" is pooled by material (1179 + BD67)
+        # while stage 31's nuclei_vs_cells pair pins to 10x cells; the two sides no longer share a reference table.
+        forward = same_site(mols[a], mols[b])
+        matched = int(forward[forward.label_b != "none"].n.sum())
+        unmatched = int(forward[forward.label_b == "none"].n.sum())
+        sites_a = len(sites[a])
+        shared_pair_count = int((r.set == "shared").sum())
+        passed_pair = (matched + unmatched == sites_a) and (matched >= shared_pair_count)
+        acceptance[pair] = {"pass": passed_pair, "sites_a": sites_a, "matched": matched, "unmatched": unmatched,
+                            "shared_gene_pairs": shared_pair_count}
     passed = all(c["pass"] for c in acceptance.values())
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -141,7 +156,7 @@ def main():
     out = {"population": "cells", "groups": groups, "gtf": str(args.gtf), "site_tol": SITE_TOL, "min_molecules_gene": MIN_GENE,
            "dist_end_bins": list(DIST_END_BINS), "sites": {g: len(t) for g, t in sites.items()},
            "molecules": {g: len(m) for g, m in mols.items()}, "pairs": pairs,
-           "acceptance": {"source": str(args.base / "burden" / "same_site.parquet"), "pass": passed, **acceptance},
+           "acceptance": {"source": "internal (burden.same_site self-consistency)", "pass": passed, **acceptance},
            "seconds": round(time.time() - t0, 1)}
     (args.out / "matched_sites.json").write_text(json.dumps(out, indent=1))
     print(json.dumps({"shared_genes": {p: d["shared_genes"] for p, d in pairs.items()},

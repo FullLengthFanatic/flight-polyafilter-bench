@@ -386,23 +386,21 @@ def test_set_counts_count_unpaired_sites_near_the_other_group(tmp_path):
     assert c["first_only"]["near"] == 1 and c["second_only"]["near"] == 1
 
 
-def test_downsample_sets_without_downsampling_equal_the_full_depth_sets(tmp_path):
+def test_downsample_sets_draws_both_sides_to_per_gene_minimum(tmp_path):
     a, b = _near_tables(tmp_path)
     d = downsample_sets(a, b, ["gP"], draws=3, seed=1)
-    c, u = set_counts(site_sets(a, b, ["gP"])), usage_comparison(site_sets(a, b, ["gP"]))
-    # shared 1050 (6 of 12) with 1048 (2 of 6) and 1064 (2 of 12, nontemplated) with 1063 (1 of 6)
-    assert u["spearman_rho"] == pytest.approx(1.0) and u["log2_ratio"]["all"]["median"] == pytest.approx(np.log2(1.5) / 2)
-    assert (d.spearman_rho == u["spearman_rho"]).all() and (d.median_all == u["log2_ratio"]["all"]["median"]).all()
-    for kind, names in (("label", ("templated", "nontemplated", "ambiguous")), ("region", REGION_NAMES)):
-        for x in names:
-            want = u["log2_ratio"][kind][x]["median"]
-            assert d[f"median_{x}"].isna().all() if want is None else (d[f"median_{x}"] == want).all()
-    assert d.median_templated.iloc[0] == pytest.approx(np.log2(1.5)) and d.median_nontemplated.iloc[0] == 0
-    # the second group has fewer molecules (6 against 12): every draw keeps all of them
+    # gP: a has 12 molecules, b has 6. Per-gene min is 6, so both sides are drawn to 6 molecules; the
+    # column molecules holds the per-side total (equal on the two sides by construction).
     assert (d.molecules == 6).all()
-    assert d[["shared", "first_only", "second_only", "first_only_near", "second_only_near"]].values.tolist() == [
-        [c["shared"]["sites"], c["first_only"]["sites"], c["second_only"]["sites"], c["first_only"]["near"],
-         c["second_only"]["near"]]] * 3
+    # the shared-site ordering (1050-1048 and 1064-1063) is preserved by construction so Spearman is 1.0,
+    # but usage_a is now recomputed on 6 drawn molecules rather than the full 12, so log2(usage ratio)
+    # varies across draws; the previous one-sided downsample left the first group at full depth and
+    # collapsed to a constant.
+    assert np.allclose(d.spearman_rho, 1.0)
+    assert not (d.median_all == d.median_all.iloc[0]).all()
+    # same seed reproduces, different seed does not
+    pd.testing.assert_frame_equal(d, downsample_sets(a, b, ["gP"], draws=3, seed=1))
+    assert not d.equals(downsample_sets(a, b, ["gP"], draws=3, seed=2))
 
 
 def test_downsampling_summary():
@@ -518,11 +516,16 @@ def test_stage31_end_to_end(tmp_path):
     ds = p["downsampling"]
     assert ds["draws"] == DOWNSAMPLE_DRAWS and ds["seed"] == 0 and ds["molecules"] == 60
     assert ds["shared"]["lo"] >= 1 and ds["second_only"]["hi"] <= 1 and ds["first_only"]["lo"] >= 2
-    # 2253 (1419) is unpaired 3 nt from the cell site 2250 in every draw
+    # 2253 (1419) is unpaired 3 nt from the cell site 2250. Under per-gene-minimum downsampling the nuclei
+    # side of gM is drawn to 20 of 40 molecules; drawing 20 from a 20/20 split across two sites keeps 2253
+    # in every draw (hypergeometric: the chance of all 20 draws missing 2253 is 1/C(40,20), essentially 0).
     assert ds["first_only_near"] == {"mean": 1.0, "lo": 1.0, "hi": 1.0} and ds["second_only_near"]["hi"] == 0
-    # gM 2250: usage 1/2 in nuclei and 1 in cells in every draw; gP 1050 (35 of 40) against 1052 (at most 39 of 40 drawn)
+    # gM 2250: nuclei usage = x/20 varies by draw (x is the hypergeometric share of 2250 among 20 drawn),
+    # cells usage = 1. The log2(nuclei/cells) median is near -1 on average but no longer constant across
+    # draws; the previous one-sided downsample left nuclei at full depth and collapsed to exactly -1.
     du = ds["usage"]
-    assert du["log2_median"]["region"]["3UTR"] == {"mean": -1.0, "lo": -1.0, "hi": -1.0}
+    assert du["log2_median"]["region"]["3UTR"]["mean"] == pytest.approx(-1.0, abs=0.1)
+    assert du["log2_median"]["region"]["3UTR"]["lo"] < du["log2_median"]["region"]["3UTR"]["hi"]
     assert du["spearman_rho"] == {"mean": pytest.approx(-1.0), "lo": pytest.approx(-1.0), "hi": pytest.approx(-1.0)}
     assert du["log2_median"]["region"]["intergenic"] == {"mean": None, "lo": None, "hi": None}
     assert j["acceptance"]["pass"] is True
@@ -532,13 +535,16 @@ def test_stage31_end_to_end(tmp_path):
     assert j["sites"] == {"1417": 5, "1419": 3, "nuclei": 6, "cells": 5}
 
 
-def test_stage31_fails_when_the_acceptance_fails(tmp_path):
+def test_stage31_is_decoupled_from_stage18_same_site_parquet(tmp_path):
+    """Stage 31's acceptance switched to an internal self-consistency check (burden.same_site run over the full molecule
+    tables) because stage 18's `cells` group pools by material (1179 + BD67) while stage 31's nuclei_vs_cells pair pins
+    to 10x cells. Corrupting the stage 18 output must no longer affect stage 31."""
     base, out = tmp_path / "base", tmp_path / "burden31"
     _stage_libs(base)
     p = base / "burden" / "same_site.parquet"
     pd.read_parquet(p).assign(n=lambda d: d.n + (d.label_b == "none")).to_parquet(p)
     r = _stage31(base, out, _gtf(tmp_path))
-    assert r.returncode != 0 and "acceptance failed" in r.stderr
+    assert r.returncode == 0, r.stderr
     j = json.loads((out / "matched_sites.json").read_text())
-    assert j["acceptance"]["pass"] is False and j["acceptance"]["1417_vs_1419"]["pass"] is False
+    assert j["acceptance"]["pass"] is True and j["acceptance"]["source"].startswith("internal")
     assert (out / "matched_sites.parquet").exists() and (out / "matched_sites_summary.parquet").exists()

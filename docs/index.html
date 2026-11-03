@@ -150,7 +150,7 @@ polyAfilter removes internal-priming artefacts from 3' single-cell RNA-seq by fl
 Seven retina-organoid libraries were used: two week-26 10x 3' v4 nuclei preps (1417, 1419), one week-26 10x 3' v4 cells prep (1179), one week-26 BD Rhapsody FLIGHT-seq cells prep on the same cell pool as 1179 (BD67), and three week-26 BD Rhapsody FLIGHT-seq nuclei preps on three donors (BD_nuc_211, 213, 215, with 211 sharing the donor of 1419). Templated-share burden was estimated per library with a logit-OLS correction and a gene-cluster bootstrap. A 2x2 interaction model fits chemistry (10x vs BD) crossed with material (cells vs nuclei) and reports the contrasts and the interaction coefficient. Site-level agreement is reported as Spearman correlation of per-site usage over shared sites, both at full depth and depth-matched by downsampling the deeper member of each pair.
 </p>
 <p>
-Headline. The templated burden falls from 10x cells (49.7%) to BD cells (25.9%) and rises from both to the matched nuclei preps (89.2% on 10x, 40.2% on BD). The chemistry effect averaged over material is a 36 point absolute drop (BD below 10x); the material effect averaged over chemistry is a 27 point absolute rise (nuclei above cells); the interaction is a 25 point attenuation of the material effect on BD. Site-level agreement between materials, depth-matched, is 0.849 on 10x and 0.843 on BD; the within-material baseline is 0.885 on 10x (1417 vs 1419) and 0.892 on BD (BD_nuc_213 vs BD_nuc_215). The chemistry effect is large and consistent; the material effect is present on both chemistries but much smaller on BD, and the matched-site structure is preserved at comparable fidelity.
+Headline. The raw templated burden falls from 10x cells (49.7%) to BD cells (25.9%) and rises from both to the matched nuclei preps (89.2% on 10x, 40.2% on BD). The chemistry effect averaged over material is a 36 point absolute drop (BD below 10x); the material effect averaged over chemistry is a 27 point absolute rise (nuclei above cells); the interaction is a 25 point attenuation of the material effect on BD. Site-level agreement between materials, depth-matched per-gene to the minimum of the two sides, is 0.854 on 10x and 0.886 on BD; the within-material baseline is 0.885 on 10x (1417 vs 1419) and 0.892 on BD (BD_nuc_213 vs BD_nuc_215). The chemistry effect is large and consistent; the material effect is present on both chemistries but much smaller on BD, and the FLIGHT matched-site structure is preserved at near-baseline fidelity once depth is controlled on both sides.
 </p>
 </section>
 
@@ -202,7 +202,10 @@ Within-group variability is small. The two 10x nuclei libraries sit at 0.859 and
 <section>
 <h2>3. Chemistry by material interaction (Panel F)</h2>
 <p>
-The 2x2 model is a logit-OLS fit of corrected templated share on chemistry (10x, BD) crossed with material (cells, nuclei), with each library a replicate within its cell. Standard errors come from 1000 gene-cluster bootstrap draws per library. Fitted cell means are back-transformed to the share scale for display; contrasts are reported on both the share scale and the logit scale.
+The 2x2 model is a logit-OLS fit of the <strong>raw</strong> templated share (<span class="mono">share_label</span> in Table 1, not the corrected column) on chemistry (10x, BD) crossed with material (cells, nuclei), with each library a replicate within its cell. Standard errors come from 1000 gene-cluster bootstrap draws per library with an independent random stream per library (derived from a parent seed via <span class="mono">numpy.random.SeedSequence.spawn</span>). Fitted cell means are back-transformed to the share scale for display; contrasts are reported on both the share scale and the logit scale.
+</p>
+<p>
+These intervals describe gene-resampling uncertainty <em>conditional on the observed libraries</em>. They do not estimate biological-replicate variability across donors or batches; with one whole-cell library per chemistry, the cell arms carry no between-donor spread. Read the interaction as descriptive, not as an isolated causal chemistry effect.
 </p>
 <div class="fig">
   <div id="fig-panel-f" style="width:100%; height:420px;"></div>
@@ -216,14 +219,14 @@ Figure 1. Fitted cell means from the 2x2 interaction model, with 95% bootstrap C
     <tr><th>Cell / contrast</th><th>Members</th><th class="num">Fitted share</th><th>95% CI</th><th class="num">logit</th></tr>
   </thead>
   <tbody>
-    <tr><td>10x cells</td><td>1179</td><td class="num">0.497</td><td class="ci">0.474 to 0.523</td><td class="num ci">&minus;0.01</td></tr>
+    <tr><td>10x cells</td><td>1179</td><td class="num">0.497</td><td class="ci">0.474 to 0.524</td><td class="num ci">&minus;0.01</td></tr>
     <tr><td>10x nuclei</td><td>1417, 1419</td><td class="num">0.892</td><td class="ci">0.885 to 0.899</td><td class="num ci">+2.11</td></tr>
-    <tr><td>BD cells</td><td>BD67</td><td class="num">0.259</td><td class="ci">0.238 to 0.282</td><td class="num ci">&minus;1.05</td></tr>
-    <tr><td>BD nuclei</td><td>BD_nuc_211, 213, 215</td><td class="num">0.402</td><td class="ci">0.376 to 0.428</td><td class="num ci">&minus;0.40</td></tr>
+    <tr><td>BD cells</td><td>BD67</td><td class="num">0.259</td><td class="ci">0.238 to 0.283</td><td class="num ci">&minus;1.05</td></tr>
+    <tr><td>BD nuclei</td><td>BD_nuc_211, 213, 215</td><td class="num">0.402</td><td class="ci">0.377 to 0.428</td><td class="num ci">&minus;0.40</td></tr>
     <tr><td colspan="5" style="padding-top:14px; border-bottom: none; color: var(--fg-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em;">Contrasts</td></tr>
-    <tr><td>Chemistry (BD &minus; 10x, averaged over material)</td><td></td><td class="num">&minus;0.364</td><td class="ci">&minus;0.386 to &minus;0.343</td><td class="num ci">&minus;1.77 [&minus;1.88, &minus;1.68]</td></tr>
-    <tr><td>Material (nuclei &minus; cells, averaged over chemistry)</td><td></td><td class="num">+0.269</td><td class="ci">+0.247 to +0.289</td><td class="num ci">+1.39 [+1.28, +1.48]</td></tr>
-    <tr><td>Interaction (BD &times; nuclei)</td><td></td><td class="num">&minus;0.252</td><td class="ci">&minus;0.294 to &minus;0.209</td><td class="num ci">&minus;1.47 [&minus;1.67, &minus;1.26]</td></tr>
+    <tr><td>Chemistry (BD &minus; 10x, averaged over material)</td><td></td><td class="num">&minus;0.364</td><td class="ci">&minus;0.384 to &minus;0.344</td><td class="num ci">&minus;1.77 [&minus;1.87, &minus;1.68]</td></tr>
+    <tr><td>Material (nuclei &minus; cells, averaged over chemistry)</td><td></td><td class="num">+0.269</td><td class="ci">+0.247 to +0.288</td><td class="num ci">+1.39 [+1.28, +1.48]</td></tr>
+    <tr><td>Interaction (BD &times; nuclei)</td><td></td><td class="num">&minus;0.252</td><td class="ci">&minus;0.295 to &minus;0.210</td><td class="num ci">&minus;1.47 [&minus;1.66, &minus;1.27]</td></tr>
   </tbody>
 </table>
 <p>
@@ -237,7 +240,7 @@ Both main effects are in the same direction across the other factor. BD cells (0
 <section>
 <h2>4. Site-level agreement (Panel G)</h2>
 <p>
-Templated share is one summary. The matched-sites analysis asks a harder question: do the two sides of a pair recover the same 3' sites with the same relative usage. Sites are matched within a 5 nt tolerance; shared sites keep a usage count on each side; genes with at least 20 molecules on both sides are retained; Spearman correlation is computed on the per-site usage across the shared gene set. For cross-material pairs the deeper member is downsampled 100 times to the shallower member's molecule count, and the depth-matched rho is the mean across draws with a 95% range.
+Templated share is one summary. The matched-sites analysis asks a harder question: do the two sides of a pair recover the same 3' sites with the same relative usage. Sites are matched within a 5 nt tolerance; shared sites keep a usage count on each side; genes with at least 20 molecules on both sides are retained; Spearman correlation is computed on the per-site usage across the shared gene set. For cross-material pairs both sides are drawn to <span class="mono">min(count_a, count_b)</span> molecules per gene over 100 draws (per-gene minimum downsampling); the depth-matched rho is the mean across draws with a 95% range. The earlier one-sided version drew only the second argument down, which was a no-op when the first argument was deeper and produced depth-matched values that were not actually depth-matched.
 </p>
 <p>
 Within-material baselines are reported alongside the cross-material pair to anchor what "good" looks like.
@@ -250,7 +253,7 @@ Within-material baselines are reported alongside the cross-material pair to anch
   </thead>
   <tbody>
     <tr><td>1417 vs 1419 (within nuclei)</td><td class="num">562</td><td class="num">4,076</td><td class="num">0.885</td><td class="num ci">n/a</td></tr>
-    <tr><td>nuclei vs cells</td><td class="num">1,649</td><td class="num">18,209</td><td class="num">0.661</td><td class="num">0.849 [0.846, 0.852]</td></tr>
+    <tr><td>nuclei vs cells</td><td class="num">1,649</td><td class="num">18,209</td><td class="num">0.661</td><td class="num">0.854 [0.850, 0.857]</td></tr>
   </tbody>
 </table>
 <h3>FLIGHT pair</h3>
@@ -261,11 +264,11 @@ Within-material baselines are reported alongside the cross-material pair to anch
   </thead>
   <tbody>
     <tr><td>BD_nuc_213 vs BD_nuc_215 (within nuclei)</td><td class="num">4,900</td><td class="num">43,963</td><td class="num">0.892</td><td class="num ci">n/a</td></tr>
-    <tr><td>flight_nuclei vs BD67 (nuclei vs cells)</td><td class="num">1,584</td><td class="num">11,780</td><td class="num">0.841</td><td class="num">0.843 [0.843, 0.844]</td></tr>
+    <tr><td>flight_nuclei vs BD67 (nuclei vs cells)</td><td class="num">1,584</td><td class="num">11,780</td><td class="num">0.841</td><td class="num">0.886 [0.882, 0.890]</td></tr>
   </tbody>
 </table>
 <p class="note">
-<strong>Interpretation.</strong> The within-material baselines are nearly identical across chemistries (0.885 on 10x, 0.892 on BD), so the two systems resolve 3' sites with comparable per-donor reproducibility. The cross-material correlation on 10x drops to 0.661 at full depth because 1179 is 11 to 13&times; deeper than each of the two nuclei libraries at the library level; once downsampled to match, it recovers to 0.849. On BD the full-depth and depth-matched values are essentially equal (0.841 and 0.843), because the pooled flight_nuclei side at shared sites is only about 9&times; deeper than BD67. The matched-site structure is preserved by polyAfilter at comparable fidelity across the two chemistries.
+<strong>Interpretation.</strong> The within-material baselines are nearly identical across chemistries (0.885 on 10x, 0.892 on BD), so the two systems resolve 3' sites with comparable per-donor reproducibility. Under per-gene minimum downsampling, the 10x cross-material correlation rises from 0.661 at full depth to 0.854 (close to the within-material 10x baseline), and the BD cross-material correlation rises from 0.841 at full depth to <strong>0.886</strong>, which exceeds the 10x depth-matched value and sits just under the FLIGHT within-material baseline. BD has the larger depth-matched cross-material rho despite the lower-depth comparison because the depth asymmetry runs the opposite direction (flight_nuclei deeper than BD67, 1179 deeper than 1417+1419), and the 10x shared-site set is noisier at the depth-matched point. The matched-site structure is preserved by polyAfilter at comparable fidelity across the two chemistries.
 </p>
 </section>
 
@@ -275,7 +278,7 @@ Within-material baselines are reported alongside the cross-material pair to anch
   <li><strong>Internal priming is the dominant 3' artefact on oligo-dT scRNA-seq nuclei.</strong> On 10x nuclei it accounts for about 86% of molecules after correction. Any downstream analysis that treats a 3' end as evidence of a cleavage-polyadenylation site needs filtering.</li>
   <li><strong>Chemistry sets the baseline burden.</strong> At the same material, BD Rhapsody FLIGHT-seq runs 24 to 49 points below 10x in corrected templated share. A filter calibrated on 10x will be more aggressive than needed on BD; a filter calibrated on BD will under-correct on 10x.</li>
   <li><strong>Material matters more on 10x than on BD.</strong> Moving from cells to nuclei adds 40 points on 10x and 14 on BD. If a reader is choosing between cells and nuclei for a mixed workflow, the UMI cost of filtering will be more sensitive to that choice on 10x.</li>
-  <li><strong>Matched-site structure is preserved across chemistries.</strong> Depth-matched Spearman &rho; between nuclei and cells is 0.849 on 10x and 0.843 on BD, both close to the within-material baselines. polyAfilter does not reshape the 3' site landscape in a chemistry-specific way at the depth these libraries carry.</li>
+  <li><strong>Matched-site structure is preserved across chemistries.</strong> Per-gene-minimum depth-matched Spearman &rho; between nuclei and cells is 0.854 on 10x and 0.886 on BD, both within reach of the within-material baselines (0.885 and 0.892). polyAfilter does not reshape the 3' site landscape in a chemistry-specific way at the depth these libraries carry.</li>
   <li><strong>Per-library settings are tabulated in</strong> <a href="parameter_choices.md"><span class="mono">docs/parameter_choices.md</span></a>, with sens/spec/UMI-cost/ARI for the two chosen cut-offs on each prep.</li>
 </ul>
 </section>
@@ -338,8 +341,8 @@ The reader-facing summary above is a trimmed view. The complete m3 report (22 se
       error_y: {
         type: 'data',
         symmetric: false,
-        array:      [0.023, 0.027],
-        arrayminus: [0.021, 0.026],
+        array:      [0.024, 0.026],
+        arrayminus: [0.021, 0.025],
         color: '#2a3f5f',
         thickness: 1.3,
         width: 6

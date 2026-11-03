@@ -39,9 +39,12 @@ def load_burden(base):
 def load_ari(base):
     rows = []
     for lib in LIBS:
-        d = pd.read_parquet(base / lib / "impact" / "clustering.parquet", columns=["tag", "ari"])
+        d = pd.read_parquet(base / lib / "impact" / "clustering.parquet", columns=["tag", "kind", "ari"])
         for tag in TAGS:
-            sub = d[d.tag == tag]
+            if tag == "unfiltered":
+                sub = d[d.kind == "unfiltered"]
+            else:
+                sub = d[(d.tag == tag) & (d.kind == "filtered")]
             if len(sub):
                 rows.append({"library": lib, "tag": tag, "ari_median": sub.ari.median(), "n": len(sub)})
     return pd.DataFrame(rows)

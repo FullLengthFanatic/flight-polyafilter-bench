@@ -510,36 +510,55 @@ def downsampling_summary(draws):
 
 
 def downsample_sets(sa, sb, genes, draws=DOWNSAMPLE_DRAWS, seed=0):
-    """Set sizes of site_sets after drawing, in each gene of genes, as many of the second table's molecules as the first table
-    has there (all of them where it has fewer), without replacement; draws draws from numpy.random.default_rng(seed). The
-    second table's sites of a draw are those with a drawn molecule. One row per draw: draw, molecules (drawn), shared,
-    first_only, second_only, first_only_near and second_only_near (set_counts' near), then usage_comparison of the draw, the
-    second table's usage taken over the drawn molecules: spearman_rho, median_all (median log2 ratio) and median_<x> for
-    every label and region x (NaN without a value)."""
+    """Set sizes of site_sets after downsampling BOTH tables to min(sum(n_a), sum(n_b)) per gene of genes, drawn without
+    replacement; draws draws from numpy.random.default_rng(seed). The sites of a draw are those with a drawn molecule.
+    Matching to the per-gene minimum on both sides makes the depth-matched rho symmetric in the argument order; the
+    previous one-sided version only brought the second table down and silently did nothing when the first table was the
+    deeper one. One row per draw: draw, molecules (drawn per side, equal on the two sides by construction), shared,
+    first_only, second_only, first_only_near and second_only_near (set_counts' near), then usage_comparison of the draw
+    with usage recomputed on the drawn molecules of each side: spearman_rho, median_all (median log2 ratio) and
+    median_<x> for every label and region x (NaN without a value)."""
     a = sa[sa.gene.isin(genes)].reset_index(drop=True)
     b = sb[sb.gene.isin(genes)].reset_index(drop=True)
     ca, cb = _coords(a, b)
-    ua, label, region = usage(a), a.label.to_numpy(object), a.region.to_numpy(object)
-    names, code = np.unique(b.gene.to_numpy(object), return_inverse=True)
-    target = a.groupby("gene").n.sum().reindex(names, fill_value=0).to_numpy(np.int64)
-    site = np.repeat(np.arange(len(b)), b.n.to_numpy(np.int64))
-    gene = code[site]
+    label, region = a.label.to_numpy(object), a.region.to_numpy(object)
+    names = np.array(sorted(set(a.gene.to_numpy(object)) | set(b.gene.to_numpy(object))), dtype=object)
+    name_to_i = {g: i for i, g in enumerate(names)}
+    code_a = np.array([name_to_i[g] for g in a.gene.to_numpy(object)], dtype=np.int64)
+    code_b = np.array([name_to_i[g] for g in b.gene.to_numpy(object)], dtype=np.int64)
+    count_a = np.bincount(code_a, weights=a.n.to_numpy(np.int64), minlength=len(names)).astype(np.int64)
+    count_b = np.bincount(code_b, weights=b.n.to_numpy(np.int64), minlength=len(names)).astype(np.int64)
+    target = np.minimum(count_a, count_b)
+    site_a = np.repeat(np.arange(len(a)), a.n.to_numpy(np.int64))
+    site_b = np.repeat(np.arange(len(b)), b.n.to_numpy(np.int64))
+    gene_mol_a = code_a[site_a]
+    gene_mol_b = code_b[site_b]
     rng = np.random.default_rng(seed)
     out = []
     for k in range(draws):
-        order = np.lexsort((rng.random(len(site)), gene))
-        g = gene[order]
-        drawn = order[np.arange(len(g)) - np.searchsorted(g, g) < target[g]]
-        n = np.bincount(site[drawn], minlength=len(b))
-        kept = np.flatnonzero(n)
-        ia, jb = _mutual(ca, cb[kept], SITE_TOL)
-        ib = kept[jb]
-        near_a, near_b = _near(ca, cb[kept])
-        ub = n / np.bincount(code, weights=n)[code]
+        order_a = np.lexsort((rng.random(len(site_a)), gene_mol_a))
+        ga = gene_mol_a[order_a]
+        drawn_a = order_a[np.arange(len(ga)) - np.searchsorted(ga, ga) < target[ga]]
+        n_a = np.bincount(site_a[drawn_a], minlength=len(a))
+        kept_a = np.flatnonzero(n_a)
+        order_b = np.lexsort((rng.random(len(site_b)), gene_mol_b))
+        gb = gene_mol_b[order_b]
+        drawn_b = order_b[np.arange(len(gb)) - np.searchsorted(gb, gb) < target[gb]]
+        n_b = np.bincount(site_b[drawn_b], minlength=len(b))
+        kept_b = np.flatnonzero(n_b)
+        ia_idx, jb_idx = _mutual(ca[kept_a], cb[kept_b], SITE_TOL)
+        ia = kept_a[ia_idx]
+        ib = kept_b[jb_idx]
+        near_a, near_b = _near(ca[kept_a], cb[kept_b])
+        ua = n_a / np.where(np.bincount(code_a, weights=n_a, minlength=len(names))[code_a] > 0,
+                            np.bincount(code_a, weights=n_a, minlength=len(names))[code_a], 1)
+        ub = n_b / np.where(np.bincount(code_b, weights=n_b, minlength=len(names))[code_b] > 0,
+                            np.bincount(code_b, weights=n_b, minlength=len(names))[code_b], 1)
         u = usage_comparison(pd.DataFrame({"set": "shared", "usage_a": ua[ia], "usage_b": ub[ib], "label": label[ia],
                                            "region": region[ia]}))
         r = u["log2_ratio"]
-        out.append((k, len(drawn), len(ia), len(a) - len(ia), len(kept) - len(ia), near_a - len(ia), near_b - len(ia),
+        out.append((k, len(drawn_a), len(ia), len(kept_a) - len(ia), len(kept_b) - len(ia),
+                    near_a - len(ia), near_b - len(ia),
                     u["spearman_rho"], r["all"]["median"], *(r["label"][x]["median"] for x in LABELS),
                     *(r["region"][x]["median"] for x in REGION_NAMES)))
     return pd.DataFrame(out, columns=["draw", "molecules", "shared", "first_only", "second_only", "first_only_near",
