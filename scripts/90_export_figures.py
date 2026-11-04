@@ -50,7 +50,8 @@ def _despine(ax):
 def figure_1(base, out):
     rows = []
     for lib in LIBS:
-        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet", columns=["label"])
+        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet", columns=["label", "in_cell"])
+        d = d[d.in_cell]
         c = d.label.value_counts(normalize=True)
         rows.append({"library": lib} | {k: c.get(k, 0) for k in LABEL_ORDER})
     df = pd.DataFrame(rows).set_index("library")
@@ -80,7 +81,9 @@ def figure_1(base, out):
 def figure_2(base, out):
     rows = []
     for lib in LIBS:
-        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet", columns=["label", "region"])
+        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet",
+                            columns=["label", "region", "in_cell"])
+        d = d[d.in_cell]
         for region in REGIONS:
             sub = d[d.region == region]
             if len(sub) < 100:

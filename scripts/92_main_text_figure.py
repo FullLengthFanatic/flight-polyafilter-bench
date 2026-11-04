@@ -29,7 +29,9 @@ LABEL_COLORS = {"templated": "#d62728", "nontemplated": "#2ca02c", "ambiguous": 
 def load_burden(base):
     rows = []
     for lib in LIBS:
-        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet", columns=["label"])
+        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet",
+                            columns=["label", "in_cell"])
+        d = d[d.in_cell]
         c = d.label.value_counts(normalize=True)
         rows.append({"library": lib, "templated": c.get("templated", 0), "nontemplated": c.get("nontemplated", 0),
                      "ambiguous": c.get("ambiguous", 0), "n": len(d)})

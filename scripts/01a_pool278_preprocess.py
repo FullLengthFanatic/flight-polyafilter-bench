@@ -146,10 +146,29 @@ def process_sample(sample, threads=4):
     libs = SAMPLES[sample]
     sm = f"BD_nuc_{sample}"
     PARTS_DIR.mkdir(parents=True, exist_ok=True)
-    first_lib_dir = BD_DIR / libs[0][0]
-    mex = first_lib_dir / f"{libs[0][1]}_RSEC_MolsPerCell_MEX.zip"
-    sym_to_ensg = load_sym_to_ensg_from_mex_zip(mex)
-    print(f"[{sm}] loaded {len(sym_to_ensg):,} gene_name -> ENSG mappings from {mex.name}",
+    # Union the three replicates' features.tsv.gz; BD's MEX feature lists differ by replicate and a first-replicate-only
+    # map would leave reads from symbols present only in replicate b or c with an empty GX. Guard against conflicting
+    # mappings (same symbol -> different ENSG across replicates) since we have no rule for resolving them.
+    sym_to_ensg = {}
+    conflicts = {}
+    for lib_dir_name, prefix in libs:
+        mex = BD_DIR / lib_dir_name / f"{prefix}_RSEC_MolsPerCell_MEX.zip"
+        rep_map = load_sym_to_ensg_from_mex_zip(mex)
+        for sym, ensg in rep_map.items():
+            prior = sym_to_ensg.get(sym)
+            if prior is None:
+                sym_to_ensg[sym] = ensg
+            elif prior != ensg:
+                conflicts.setdefault(sym, set()).add(prior)
+                conflicts[sym].add(ensg)
+        print(f"[{sm}] replicate {lib_dir_name}: {len(rep_map):,} mappings",
+              file=sys.stderr, flush=True)
+    if conflicts:
+        head = list(conflicts.items())[:5]
+        raise SystemExit(f"[{sm}] {len(conflicts)} symbols map to different ENSG across replicates; "
+                         f"no resolution rule in place. Examples: " +
+                         "; ".join(f"{s} -> {sorted(v)}" for s, v in head))
+    print(f"[{sm}] union of {len(libs)} replicates: {len(sym_to_ensg):,} gene_name -> ENSG mappings",
           file=sys.stderr, flush=True)
     part_bams = []
     for lib_dir_name, prefix in libs:

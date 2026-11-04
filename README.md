@@ -25,7 +25,7 @@ uv sync                    # pipeline runtime
 uv sync --extra report     # also installs beautifulsoup4 + cairosvg for figure export
 ```
 
-polyAfilter is vendored at a pinned commit (`5ce0098`) in `vendor/`. If you clone without `--recurse-submodules`, run `git submodule update --init` after cloning.
+polyAfilter is vendored at a pinned commit (`5ce0098`) under `vendor/polyAfilter/` as checked-in files, not a git submodule. No submodule init is needed after cloning.
 
 Stage 30 (long-read context classification) calls [`tecap`](https://github.com/FullLengthFanatic/tecap) for 3' end structural buckets. Install it on PATH or run stage 30 with `--no-tecap` to skip that step; the rest of the long-read corroboration still runs.
 
@@ -33,20 +33,22 @@ Reference data: GRCh38-2024-A (10x Genomics), PolyASite 3.0 (GRCh38, GENCODE 42)
 
 ## Running the pipeline
 
-Stages are numbered. Run in order per library, or pass `--libs <name>` to filter. Each stage prints one JSON line of what it wrote and exits.
+Stages are numbered. Each stage prints one JSON line of what it wrote and exits. Per-library stages take a positional `library` argument (not `--lib`); multi-library stages take `--libs <name> ...`. Script filenames are the module names.
 
 ```bash
 python -m scripts.01_bd67_preprocess                   # BD67 only; 10x libraries skip this
-python -m scripts.11_molecules --lib 1179
-python -m scripts.13_grid --lib 1179                   # 14-setting sweep
-python -m scripts.16_long_read_sites --libs BD67 10x_FL
-python -m scripts.23_read_groups --lib 1179
-python -m scripts.24_recount --lib 1179
-python -m scripts.26_impact --lib 1179
+python -m scripts.11_m1_summary                         # aggregate milestone 1 (all libraries)
+python -m scripts.13_grid_flags 1179                    # positional library arg; grid sweeps all 396 settings
+python -m scripts.16_long_read_sites --libs BD67 10x_FL # plural --libs
+python -m scripts.23_read_groups 1179
+python -m scripts.24_recount 1179
+python -m scripts.26_impact 1179
 python -m scripts.30_long_read_context --libs BD67 10x_FL
-python -m scripts.34_m3_report
-python -m scripts.90_export_figures                    # PNG exports of the four SVG figures
+python -m scripts.34_m3_report                          # no args
+python -m scripts.90_export_figures                    # PNG + SVG + PDF exports of the four figures
 ```
+
+The impact-analysis pipeline runs on the 14 settings in `pafbench/config.py:IMPACT_SETTINGS` (two chosen + four published settings in both modes + two cells-tuned + two remove-all controls); stage 13 evaluates the full 396-setting grid first.
 
 Full stage inventory: `docs/stages.md` (TODO).
 

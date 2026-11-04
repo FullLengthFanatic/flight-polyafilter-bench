@@ -19,7 +19,7 @@ Scope: tested on retina organoid 10x 3' v4 (cells and nuclei) and FLIGHT-seq (BD
 - `covlen=250`: how far inward from the site the coverage window reaches.
 - `lmax=7`: minimum uninterrupted A-run length flagged for filtering.
 - `mmax=1`: one allowed mismatch inside the A-run.
-- `e`: introns excluded from the recount (standard 10x path).
+- `e`: filter surveys exonic transcript regions only when deciding which read groups to remove (introns excluded from the filter's annotation/coverage scope, `pafbench/flags.py:Setting.introns`). Not a recount switch: the recount runs on the surviving eligible read groups either way.
 
 Performance on the four libraries:
 
@@ -35,7 +35,7 @@ Performance on the four libraries:
 - `covlen=200`: narrower coverage window.
 - `lmax=10`: longer uninterrupted A-run flagged.
 - `mmax=2`: two mismatches allowed.
-- `i`: introns included in the recount.
+- `i`: filter surveys both exonic and intronic transcript regions when deciding which read groups to remove (introns included in the filter's annotation/coverage scope). On nuclei this flags a lot of pre-mRNA read groups that `e` leaves alone. Again not a recount switch.
 
 | Library | Sens | Spec | UMI cost | ARI |
 |---|---|---|---|---|
