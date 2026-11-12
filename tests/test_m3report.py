@@ -317,3 +317,12 @@ def test_m2_block_marks_the_wrapper(base):
     html = m2_block(m2report.grid_section, base, title="Milestone 2 grid")
     assert 'data-m2="grid_section"' in html
     assert "<table" in html
+
+
+def test_summary_names_the_population_and_molecules_of_the_burden_table(base):
+    (base / "burden" / "summary.json").write_text(json.dumps({"groups": {}, "population": "cells", "mapq_min": 255}))
+    assert "Burden (templated share, called cells, uniquely mapped molecules, 1417)" in m3report.section_0(base, Registry())
+    (base / "burden" / "summary.json").write_text(json.dumps({"groups": {}, "population": "all"}))
+    assert "Burden (templated share, all barcodes, 1417)" in m3report.section_0(base, Registry())
+    (base / "burden" / "summary.json").unlink()
+    assert "Burden (templated share, population not recorded, 1417)" in m3report.section_0(base, Registry())

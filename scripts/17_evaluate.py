@@ -9,7 +9,9 @@ selection.json. selection.json holds the rule, selection_population, selection_u
 metrics of the chosen and published settings, plus molecules (labeled and called-cell counts), cells_tuned (the rule run on
 the cells library), cap_sensitivity, cutoff_sweep, populations (the rule per population and units, and per entry the molecule-level
 metrics of the headline settings there under "headline"), mapq_sensitivity,
-ambiguous_tail_share and label_purity (hexamer-based estimates of the tail-primed share)."""
+ambiguous_tail_share and label_purity (hexamer-based estimates of the tail-primed share). label_purity is computed on the
+uniquely mapped molecules (mapq_min 255, pafbench.truth.uniquely_mapped; recorded as label_purity_mapq_min), the molecules
+the burden stages count; every other entry uses all molecules of the population."""
 import argparse
 import json
 import time
@@ -17,12 +19,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from pafbench.config import BD_NUC, CELLS, MEMBER_CAP, NUCLEI, OUT, POPULATIONS, SEL_POPULATION, SEL_UNITS, SENS_CAPS
+from pafbench.config import BD_NUC, CELLS, MEMBER_CAP, NUCLEI, OUT, POPULATIONS, SEL_POPULATION, SEL_UNITS, SENS_CAPS, UNIQUE_MAPQ
 from pafbench.evaluate import (COUNT_COLUMNS, ambiguous_tail_share, bootstrap, evaluate, hexamer_check, label_purity, relabel,
                                select_setting, spikein_metrics, tag_setting, units)
 from pafbench.flags import Setting, setting_tag
 from pafbench.grid import all_settings, published
-from pafbench.truth import in_population
+from pafbench.truth import in_population, uniquely_mapped
 
 RULE = ("On 1417, in each mode, the grid setting (remove-all control and off-grid published settings excluded) with the "
         "highest molecule-level sensitivity subject to specificity >= 0.95, at member cap 1000 nt and 8/4 labels; ties broken "
@@ -97,7 +99,7 @@ def main():
         mol_all, tr, fl, tags = _load(_files(args.base, lib))
         mol = _population(mol_all, args.population, lib)
         tail_share[lib] = ambiguous_tail_share(mol)
-        purity[lib] = label_purity(mol)
+        purity[lib] = label_purity(uniquely_mapped(mol) if "mapq_min" in mol else mol)
         unit_stats[lib] = {}
         for cap in SENS_CAPS:
             u = units(mol, tr, fl, tags, cap, all_labeled=sel_all_labeled)
@@ -246,6 +248,7 @@ def main():
            "spikein_units": spikein_units_stats}
     if mapq_sens:
         out["mapq_sensitivity"] = mapq_sens
+        out["label_purity_mapq_min"] = UNIQUE_MAPQ
     (args.out / "selection.json").write_text(json.dumps(out, indent=1))
     print(json.dumps({"libraries": libs, "chosen": chosen, "metrics_rows": len(metrics), "bootstrap_tags": len(boot_tags),
                       "spikein_libraries": [s.lib.iloc[0] for s in spikes], "selection_population": args.population,

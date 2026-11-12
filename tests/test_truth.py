@@ -13,7 +13,7 @@ import pytest
 from pafbench.molecules import MOL_COLUMNS, consolidate_sites
 from pafbench.regions import load_region_segments, regions_at
 from pafbench.sites import last_aligned_base, priming_site
-from pafbench.truth import check_pa_counts, label_truth_molecules, mark_in_cell, truth_reads, truth_summary
+from pafbench.truth import check_pa_counts, label_truth_molecules, mark_in_cell, truth_reads, truth_summary, uniquely_mapped
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -293,3 +293,11 @@ def test_script_checks_pa_counts_before_writing(tmp_path, data):
     base, r = _stage12(tmp_path, mol.assign(n_pa=mol.n_pa + (mol.mol == 1)), "--out", str(tmp_path / "out"))
     assert r.returncode == 1 and "1 molecules do not receive n_pa pa reads (first mol 1)" in r.stderr
     assert not (tmp_path / "out").exists()
+
+
+def test_uniquely_mapped_keeps_the_molecules_whose_pa_reads_all_have_mapq_255():
+    mol = pd.DataFrame({"mol": [0, 1, 2, 3, 4], "mapq_min": [255, 3, 255, 0, 1]})
+    got = uniquely_mapped(mol)
+    assert got.mol.tolist() == [0, 2] and got.index.tolist() == [0, 1]
+    with pytest.raises(ValueError, match="mapq_min"):
+        uniquely_mapped(mol.drop(columns="mapq_min"))

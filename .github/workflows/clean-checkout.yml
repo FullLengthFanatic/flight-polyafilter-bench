@@ -1,0 +1,42 @@
+name: clean-checkout
+
+# Runs the README "Getting started" block verbatim in an empty directory (the clone URL points at the commit under test),
+# then the test suite, which includes tests/test_readme.py: every "Running the pipeline" command is parsed by its script.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  readme:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      UV_LOCKED: "1"  # uv sync and uv run fail if uv.lock is out of date with pyproject.toml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: src/flight-polyafilter-bench
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.14"
+      - name: README install block
+        run: |
+          awk '/^## Getting started$/{s=1} s && /^```bash$/{f=1; next} f && /^```$/{exit} f' \
+            src/flight-polyafilter-bench/README.md \
+            | sed "s#https://github.com/FullLengthFanatic/flight-polyafilter-bench.git#$GITHUB_WORKSPACE/src/flight-polyafilter-bench#" \
+            > install.sh
+          cat install.sh
+          grep -q "flight-polyafilter-bench" install.sh || { echo "Getting started block not found in README.md" >&2; exit 1; }
+          mkdir fresh
+          cd fresh
+          bash -euxo pipefail ../install.sh
+      - name: Test suite
+        working-directory: fresh/flight-polyafilter-bench
+        # the two deselected tests read the VM inputs (reference FASTA/GTF, library BAMs, Cell Ranger features.tsv.gz)
+        run: >
+          uv run pytest -q -p no:cacheprovider -rs --durations=15
+          --deselect tests/test_setup.py::test_inputs_exist
+          --deselect tests/test_markers.py::test_every_symbol_is_in_the_reference_of_the_libraries

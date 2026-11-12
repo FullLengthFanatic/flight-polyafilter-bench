@@ -1,53 +1,113 @@
-# Why these cutoffs
+# How the benchmark works, and why
 
-Short answer: because we do not have the data Svoboda et al. 2022 have, and we had to find a different anchor.
+polyAfilter was tuned in its paper against random-primed bulk RNA-seq of the same sample. We had no such data for the retina libraries. This page explains what we used in its place, and the reason for each choice. Numbers are for called cells unless a line says otherwise.
 
-## The problem polyAfilter addresses
+## Internal priming
 
-Oligo-dT scRNA-seq assays prime on any run of adenines, template or genomic. When they prime on an mRNA poly-A tail, we count a real 3' end. When they prime on an intronic or exonic A-stretch inside the body of the transcript, we count a ghost: the read looks like a 3' end, maps to a legitimate exon, carries a UMI, but represents nothing. The ghost is indistinguishable from a short, poorly-expressed isoform at the read level. It is distinguishable at the site level if we look at the 20 nt downstream of the alignment's 3' end on the reference genome. Internal priming leaves a telltale genomic A-run there; a real poly-A tail does not.
+An oligo(dT) primer is meant to bind the poly(A) tail. It also binds A-rich stretches inside a transcript: in an intron of a pre-mRNA, in a coding exon, in a 3' UTR upstream of the real end. The read that follows carries a barcode and a UMI like any other. It looks like a 3' end and is not one.
 
-polyAfilter counts those downstream A's across every candidate 3' end in the library, labels sites, filters reads at the sites it does not trust, and recounts.
+## What polyAfilter does
 
-## Why 20 nt and why 8 and 4
+polyAfilter (Svoboda, Frost and Bosco 2022) works from the genome, not from the reads:
 
-The 20 nt downstream window is polyAfilter's design (Svoboda, Frost, and Bosco 2022, NAR Genomics and Bioinformatics). The tool evaluates genomic adenine content within that window to separate a real poly-A tail from oligo-dT mispriming on a genomic A-stretch, and we kept the window.
+1. It finds every stretch of A's in the genome that is at least `MINSNRLEN` long, allowing up to `MISM` mismatches inside it.
+2. It draws a window of `COVLEN` bp upstream of each stretch. A read primed at the stretch should start inside that window.
+3. It removes every read that touches a window inside an expressed transcript. The last `COVLEN` bp of each transcript are protected, because reads from the real tail sit there.
+4. By default only exons are searched. With `-i` the introns are searched too.
 
-The 8 and 4 split (templated at 8 or more, non-templated at 4 or fewer, ambiguous 5-7) comes from a hexamer-purity audit on 1417. At 8 A's downstream the fraction of sites carrying a canonical poly-A signal hexamer (AATAAA or ATTAAA) anywhere in the window 5 to 35 nt upstream of the site drops below one in ten. At 4 A's the hexamer rate is high and the sites behave like real cleavage-polyadenylation signals. 5-7 is a mixed band we keep separate rather than force into either side. In our hands cutoffs of 14/8 (the paper default) are too permissive on nuclei: a lot of mispriming slips into "non-templated" because the upstream signal is already strong. We tightened to 8/4.
+A setting is written `c250_l7_m1_e`: `COVLEN` 250, `MINSNRLEN` 7, `MISM` 1, exons only (`e`) or with introns (`i`). The filter never looks at an individual read's 3' end. It removes by position, so it also removes real reads that happen to lie upstream of an A stretch. That is why accuracy has to be measured.
 
-## Why we do not have a ground truth and what we use instead
+## Where the reference labels come from
 
-Svoboda et al. 2022 tune their polyAfilter settings against bulk random-primed RNA-seq. Random priming has no 3' bias: a gene with 1,000 real molecules produces about the same number of random-primed reads whether those molecules are poly-adenylated or stripped. If a scRNA-seq filter removes real signal, the gene's per-cell count drops out of correlation with the bulk count. If it removes only artefact, correlation goes up. The sweet spot is a filter aggressive enough to clean up but not so aggressive it eats real molecules.
+Some reads run into the poly(A). Cell Ranger clips those A's and writes their number in the `pa` tag, so for these reads the end of the alignment is the priming site. (BD Rhapsody BAMs have no such tag; stages 01 and 01a add it from the soft clip.)
 
-We did not have matched bulk random-primed RNA-seq for the retina organoid libraries. We needed a different anchor. Three substitutes carried us:
+We then ask one question of the genome: are the A's that the read ran into encoded there?
 
-**Hexamer purity.** On the long-read libraries we require that the rate of a canonical poly-A signal hexamer (AATAAA or ATTAAA, `pafbench/sites.py:HEXAMERS`) anywhere within a 5 to 35 nt window upstream of the site (`pafbench/sites.py:has_hexamer`, bounds `lo=5, hi=35`) be at least three times higher on non-templated sites than on templated ones. If a cutoff setting breaks that ratio, the labels are not splitting biology any more. Three is empirical, picked so that both 1417 and 1419 pass at 8/4 and fail at 14/8 by small margins. The ratio check is a smoke test, not a tune.
+- **8 or more A's in the 20 nt after the site: templated.** The primer bound A's that are in the genome. Internal priming.
+- **4 or fewer: non-templated.** The A's came from a poly(A) tail. A real 3' end.
+- **5 to 7: ambiguous.** Reported separately, left out of sensitivity and specificity.
 
-**Long-read corroboration.** Two independent PacBio Kinnex long-read runs agree with the 1179 short-read labels: 99.4% pooled for BD67 (FLIGHT-seq Rhapsody long-read on the same week-26 cell pool as 1179, cross-prep comparison) and 99.5% pooled for 10x_FL (Kinnex 8-fold on a week-29 10x retina organoid library, different pool from 1179; cross-platform check). The agreement is near-identical because the 20 nt A-count rule is a reference-sequence property, so cross-platform convergence is expected even without matched cells. This does not tune the cutoffs; it tells us the labels are stable across platforms.
+The window is 20 nt, the length of the shortest clipped poly(A) that gets a `pa` tag.
 
-**Known positive and negative controls.** On nuclei the templated share should dominate (pre-mRNA capture favours intronic A-stretches); it does, at 89% pooled across 1417 and 1419. On FLIGHT-seq cells the templated share should be lower (RT-on-bead with less secondary structure); it is, at 26% on BD67. The relative ordering across the four libraries matches the physics.
+### Why 8 and 4
 
-None of these substitutes is as clean as bulk random-primed data. We tell the reader this up front. We would prefer bulk for a future benchmark and would run it if we had the sample.
+Real cleavage sites have a poly(A) signal (AATAAA or ATTAAA) a few bases upstream; internal priming sites do not. So the share of sites with a signal 5 to 35 nt upstream tells the two apart without using A content. On library 1417 (all barcodes):
 
-## Why these two chosen settings
+| A's in the 20 nt after the site | Share with a poly(A) signal |
+|---|---|
+| 0 to 4 | 0.77 |
+| 5 | 0.54 |
+| 6 | 0.42 |
+| 7 | 0.27 |
+| 8 | 0.18 |
+| 9 | 0.11 |
+| 10 to 13 | 0.06 to 0.08 |
+| 14 to 20 | 0.01 to 0.06 |
 
-polyAfilter has three knobs: `covlen` (coverage window inward from the site), `lmax` (minimum uninterrupted A-run length to flag), and `mmax` (allowed mismatches). The paper default is `c300_l10_m1_e`. The `e`/`i` suffix is NOT about the recount: it controls the filter's annotation/coverage scope (`pafbench/flags.py:Setting.introns`, used by `start_pieces` and `expressed` to decide which transcript regions the filter surveys for A-stretches). In the `e` ("introns excluded") pass, the filter ignores intronic A-stretches when deciding which read groups to remove; in the `i` pass it includes them, which flags more read groups on nuclei. The recount then runs on the surviving eligible read groups regardless of suffix.
+The rate falls from a tail-like level (0.77) to a background level (0.02 at 18 to 20 A's). The cut-offs sit where the curve has covered a quarter of that distance from either end: the rate stays below 0.21 from 8 A's on, and above 0.58 up to 4 A's (`pafbench/labels.py:choose_cutoffs`). They were fixed on 1417 before any polyAfilter result was looked at, and the same pair is used in every library. A sweep (templated from 7 to 10, non-templated from 2 to 6) is in `eval/selection.json`.
 
-We did not want to pick on vibes, so we ran the full 396-setting grid per library (`pafbench/grid.py:grid` plus `published`: two intron modes x 7 `covlen` values x (1 remove-all control + 9 `lmax` x 3 `mmax`) + the four paper published settings in both modes, minus overlaps). The impact-analysis pipeline then runs on the 14 settings in `pafbench/config.py:IMPACT_SETTINGS`: the two chosen settings, four published settings in both modes, the cells-tuned settings, and a remove-all control per chosen setting. The two chosen settings read the extremes of the operating curve.
+### How pure the labels are
 
-- `mode-e: c250_l7_m1_e`, the sensitivity pick. Highest templated recovery at specificity above 0.95 on called cells. UMI cost 15.7% on 1417, 15.1% on 1419, 15.7% on 1179, 24.0% on BD67. ARI 0.42 / 0.49 / 0.66 / 0.65.
-- `mode-i: c200_l10_m2_i`, the introns-aware pick. Same spec band, higher specificity. UMI cost 54.7% on 1417, 51.3% on 1419, 21.9% on 1179, 17.5% on BD67. ARI 0.32 / 0.42 / 0.66 / 0.68.
+In nuclei the templated class is almost all internal priming: about 3% of it are real sites that happen to be followed by A's in the genome. In whole cells real 3' ends are far more common, so the same A count is weaker evidence: about 19% of the templated class of 1179 are real sites, most of them in the 8 to 9 band (66% of that band). The ACTB 3' end, followed by five encoded A's, is one example.
 
-Mode-i inverts between nuclei and cells. On nuclei it eats the intronic reads that are the whole point of a snRNA-seq library. On cells it is cheap and preserves clustering. We present both and let the sample decide, with a decision table in `docs/parameter_choices.md`.
+We therefore report two numbers per library: the raw templated share, and a corrected share that subtracts the estimated real sites (stage 29, from the poly(A) signal rate of each A band against the rate at 14 or more A's).
 
-## What this analysis cannot say
+### Multi-mapped reads are left out of the burden
 
-The pipeline was tested on four retina organoid libraries and one human reference build (GRCh38-2024-A). It makes no claim about:
-- Non-human organisms. The A-run geometry of a mouse genome is different and the 20 nt window may want a different cutoff.
-- Non-oligo-dT chemistries (random hexamer RT, pseudo-bulk random-primed). The whole label system is specific to oligo-dT priming geometry, so neither the templated nor the non-templated label is informative without poly-T priming at the RT step.
-- Spatial transcriptomics or multiome. The cell type we tune on changes the base rate of each label.
-- Datasets where the reference annotation is incomplete. A missed real 3' end looks like internal priming by this rule, because its downstream A-run has no annotation to the contrary.
+A read that fits several places in the genome still gets one primary alignment, and that place can be the wrong one. In the FLIGHT-seq libraries 13 to 17% of the labeled molecules rest on such reads (4 to 6% in 10x). Most of them carry the templated label, yet they do not look like internal priming: in BD67 the multi-mapped molecules with 14 or more A's have a poly(A) signal in 88% of cases, against 6% for the uniquely mapped ones. We read them as real 3' ends placed at a copy of their locus where the genome supplies the A's.
 
-What the pipeline DOES apply to, including some cases that may look like exceptions:
-- 3' chemistries from any oligo-dT RT: 10x 3' v3/v4, GEM-X, Fluent PIP-seq, BD Rhapsody standard. All share the same priming geometry.
-- 3' libraries built from SMART-seq-family full-length cDNA. SMART-seq2, FLASH-seq, and FLIGHT-seq (FLASH-seq chemistry done on BD Rhapsody beads) all use oligo-dT RT and inherit the same internal-priming risk as 10x. When the full-length cDNA is sequenced only at its 3' end (BD67's short-read library, this benchmark), polyAfilter applies exactly as to 10x.
-- Full-length long-read sequencing of the same cDNA (BD67 long-read, 10x_FL Kinnex). The internal-priming artefact is still there in the molecules, but the manifestation is different: a full-length read misassigned to a short truncated isoform rather than a 3' end at the wrong position. polyAfilter's read-level filter does not directly apply at this scale, but the same 20 nt downstream A-count labelling logic does, and is what this benchmark uses for long-read corroboration in stages 16 and 30.
+The burden figures therefore count only molecules whose poly(A) reads map uniquely (`mapq_min` 255 in `truth/molecules_labeled.parquet`; stages 18, 29, 29a, 31, 31b and the figures). With the multi-mapped molecules included, the templated share of BD67 would be 25.9% instead of 19.4%, and that of the FLIGHT-seq nuclei 3 to 4 points higher. The 10x libraries move by 1.3 points at most. The corrected share of BD67 moves further, from 21.9% to 11.7%: the multi-mapped molecules also sat in the band of 14 or more A's, which the correction takes as its reference for pure internal priming (poly(A) signal rate 0.50 with them, 0.06 without).
+
+Accuracy is still scored on all labeled molecules. Leaving the multi-mapped ones out changes sensitivity by 0.02 at most (BD67, mode-e: 0.193 to 0.209) and specificity by 0.001, and the rule picks the same two settings (`mapq_sensitivity` in `eval/selection.json`). The cut-offs do not move either: the rule gives 8 and 4 on the uniquely mapped molecules of 1417 as well.
+
+## How the filter is scored
+
+- **Test reads.** The other reads with the same cell barcode and UMI, up to 1,000 nt upstream of the site (measured along the exons when both lie in exons). polyAfilter judges these without seeing the site. The `pa` read alone would be too easy a test: it ends at the site by construction.
+- **Unit.** The molecule. It counts as removed when all its reads are removed, which is what changes a UMI count.
+- **Population.** Molecules from barcodes that Cell Ranger called as cells. Other barcodes are reported for comparison only; in the nuclei libraries they are a different population (45% of their labeled molecules lie in 3' UTRs, against 11% in called nuclei of 1417).
+- **Sensitivity.** Share of templated molecules removed. **Specificity.** Share of non-templated molecules kept.
+- **Uncertainty.** Bootstrap over genes, 1,000 resamples.
+
+### The selection rule
+
+Fixed before the results: on 1417, in each mode, take the setting with the highest sensitivity among those with specificity of at least 0.95. Then report that setting on every other library without retuning. 1419 is a second donor, so it is a donor-level hold-out.
+
+| Mode | Setting | Sensitivity / specificity on 1417 | On 1419 (hold-out) |
+|---|---|---|---|
+| Exons only | `c250_l7_m1_e` | 0.093 / 0.956 | 0.094 / 0.962 |
+| With introns | `c200_l10_m2_i` | 0.435 / 0.951 | 0.440 / 0.958 |
+
+The docs call these mode-e and mode-i. The example in the polyAfilter README, `c300_l10_m1_e`, is carried along as a third row everywhere; it is an example, not a tuned value. The paper's own tuned settings (275/9/1 and 180/11/2 for PBMC, 375/3/2 for mouse cortex nuclei) are part of the grid too.
+
+## Checks that do not rest on the A count
+
+**Poly(A) signal.** Used above to place the cut-offs, and reported per A band and library as a running check on label purity.
+
+**Long reads.** Two PacBio Kinnex libraries give priming sites from other molecules: BD67 long reads (same organoid cell pool as 1179, FLIGHT-seq) and 10x_FL (a 10x library of a week-29 organoid, a different pool). Of the 1179 short-read molecules, 95% have a 10x_FL site within 10 nt and 87% a BD67 site; with the sites moved 1 kb upstream the figures drop to 17% and 6%. So the priming sites recur across libraries and platforms. Where a site is matched the two labels agree in 99.4 to 99.5% of cases, which is expected and not independent evidence: both labels are read from the same genome sequence. Long reads are not ground truth either, since their oligo(dT) can also prime internally. A long-read library enters the analysis only if its tail-primed sites carry the poly(A) signal at least 3 times as often as its internally primed sites (5.3 times in BD67, 5.6 in 10x_FL).
+
+**Spike-ins.** 1417 and 1419 contain SIRV Set 4 and ERCC RNA, whose 3' ends are known. They test the chemistry on free RNA, and their results are in `docs/m2_results.md`.
+
+## The reimplementation
+
+The original tool takes about two hours per setting on 1417, after a one-off setup of about 15 hours, and holds the reads to remove in memory. Testing 396 settings that way was not practical. `pafbench` imports polyAfilter's own A-stretch scanner and flags every record at every setting in one streaming pass: 7 minutes for 1417, 23 for 1179 (8 workers).
+
+It is only useful if it is the same filter. We ran the original at ten settings on 1417, eight on 1419, eight on chr21 and chr22 of 1179 (the full library does not fit in memory) and one remove-all control. The removed records are identical in all 27 runs.
+
+## Measuring what filtering costs
+
+For 14 settings (the two picks, the README example and the paper's settings in both modes, two settings tuned on cells, two remove-all controls) the pipeline recounts UMIs with Cell Ranger's documented counting rule and clusters the cells again.
+
+- **UMI cost.** UMIs lost across called cells, divided by UMIs before filtering.
+- **ARI.** The adjusted Rand index between the Leiden clusters of the filtered matrix and those of the unfiltered matrix, median over 10 seeds and 3 resolutions. It measures how much the clusters change, not whether they got better.
+
+Two references are needed to read an ARI. The **ceiling** is what the unfiltered matrix scores against itself with another seed: 0.69 (1417), 0.68 (1419), 0.70 (1179), 0.89 (BD67). The **thinning control** removes the same number of UMIs per cell at random. A filtered ARI close to the thinned one means the clusters moved because the cells got shallower, not because of which reads were taken. In the four libraries with an impact analysis the two differ by 0.06 at most at the three reported settings, so filtering changes the clusters about as much as losing the same number of UMIs at random.
+
+## What this benchmark cannot say
+
+- **The labeled molecules are a subset.** A molecule gets a label only if one of its reads reaches the poly(A). The shares describe that subset. In 1179 it is more exonic than the library as a whole (stage 28).
+- **Material and tissue are confounded.** The nuclei are adult donor retina, the cells are retinal organoids. The nuclei against cells comparison is descriptive.
+- **Unique mapping does not catch every misplaced read.** A read can score best at a copy of its locus and count as uniquely mapped there. The burden leaves out multi-mapped reads only.
+- **No bulk reference.** The labels rest on the A count and the poly(A) signal. A real 3' end that is missing from the annotation and followed by A's is counted as internal priming.
+- **One tissue, one genome.** Human retina, GRCh38-2024-A, 10x 3' v4 and FLIGHT-seq. Other organisms and tissues are untested.
+
+The approach should carry over to any oligo(dT)-primed 3' library whose reads can reach the poly(A): other 10x 3' versions, BD Rhapsody, and 3' libraries made from full-length cDNA such as FLIGHT-seq. It does not apply to random-primed libraries.

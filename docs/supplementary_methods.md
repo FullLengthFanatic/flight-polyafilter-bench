@@ -1,43 +1,43 @@
 # Supplementary Methods
 
-One-page summary for the FLIGHT-seq manuscript supplementary section. For the full narrative see `docs/rationale.md`; for the per-library decision table see `docs/parameter_choices.md`.
+One-page summary for the supplementary section of the FLIGHT-seq manuscript. The full account is in `docs/rationale.md`, the per-library tables in `docs/parameter_choices.md`.
 
 ## Rationale
 
-polyAfilter (Svoboda, Frost, and Bosco 2022, NAR Genomics and Bioinformatics) flags reads whose alignment 3' end falls over a genomic adenine run, under the assumption that oligo-dT primes on such runs more often than on real poly-A tails. The 20 nt downstream window is polyAfilter's design (Svoboda et al. 2022); the 8/4 A-count labelling cutoffs come from a hexamer-purity audit on 1417 (ratio of canonical poly-A signal hexamer presence between non-templated and templated sites below 3 at cutoffs looser than 8/4).
+polyAfilter (Svoboda, Frost and Bosco 2022, NAR Genomics and Bioinformatics) removes reads that lie within `COVLEN` bp upstream of a genome-encoded A stretch of at least `MINSNRLEN` nt (up to `MISM` mismatches) inside an expressed transcript, on the assumption that oligo(dT) primed there. The paper tunes these parameters against random-primed bulk RNA-seq of the same sample. No such data exist for the retina libraries, so the reference was taken from the libraries themselves.
 
-## Parameter choice without matched bulk
+## Reference labels without bulk data
 
-Svoboda et al. 2022 tune polyAfilter against bulk random-primed RNA-seq. We do not have matched bulk data for the retina organoid libraries. Three substitutes carried the choice:
+1. **Molecules with a known priming site.** A read whose poly(A) was clipped ends at the priming site of its molecule.
+2. **Label from the genome.** Adenines in the 20 nt downstream of the site: 8 or more is templated (internal priming), 4 or fewer is non-templated (tail priming), 5 to 7 is ambiguous. The cut-offs were set on library 1417 from the rate of the poly(A) signal hexamer by adenine count (0.77 at 0 to 4 adenines, 0.18 at 8, 0.02 at 18 to 20) and fixed before any filter result was examined.
+3. **Test on the rest of the molecule.** polyAfilter is scored on the other reads of each labelled molecule, at the molecule level, in called cells.
 
-1. **Hexamer purity ratio > 3x** between non-templated and templated sites at 8/4. All four libraries pass.
-2. **Long-read corroboration** from two independent PacBio Kinnex runs. Pooled label agreement with 1179 short-read labels: 99.4% for BD67 (FLIGHT-seq Rhapsody long-read, same week-26 cell pool as 1179, cross-prep comparison), 99.5% for 10x_FL (Kinnex 8-fold on a week-29 10x retina organoid library, different pool from 1179). The 10x_FL agreement reflects that the 20 nt A-count rule is a reference-sequence property, so cross-platform convergence is expected even without matched cells. Null (1 kb shift upstream) collapses pooled agreement to 44%, confirming the signal is not geometric.
-3. **Prep-ordering sanity.** Nuclei are expected to carry more intronic A-stretches (pre-mRNA capture) than cells, and FLIGHT-seq on bead is expected to have lower internal-priming burden than oligo-dT in solution. Measured ordering (89% pooled nuclei, 50% on 1179, 26% on BD67 templated share) matches.
+Checks that do not use the adenine count: the hexamer rate per adenine band in every library, spike-ins with known 3' ends in the two 10x nuclei libraries, and long reads. A long-read priming site lies within 10 nt of 87% (BD67 long reads, same cell pool) and 95% (10x_FL, a week-29 organoid 10x library) of the labelled 1179 molecules, against 6% and 17% for sites moved 1 kb upstream.
 
-## Chosen settings
+## Settings
 
-Three settings reported:
+Selection rule, fixed in advance: on 1417, per mode, the most sensitive of 189 grid settings with specificity of at least 0.95. Other libraries are reported without retuning.
 
-| Tag | covlen | lmax | mmax | introns | What it does |
+| Setting | COVLEN | MINSNRLEN | MISM | Introns | Origin |
 |---|---|---|---|---|---|
-| `c250_l7_m1_e` (mode-e) | 250 | 7 | 1 | excluded | Sensitivity pick for cells; moderate specificity gain on nuclei |
-| `c200_l10_m2_i` (mode-i) | 200 | 10 | 2 | included | Specificity pick for cells; eats intronic reads on nuclei |
-| `c300_l10_m1_e` (paper default) | 300 | 10 | 1 | excluded | Svoboda et al.'s starting point |
+| `c250_l7_m1_e` (mode-e) | 250 | 7 | 1 | no | selected by the rule |
+| `c200_l10_m2_i` (mode-i) | 200 | 10 | 2 | yes | selected by the rule |
+| `c300_l10_m1_e` | 300 | 10 | 1 | no | example in the polyAfilter README |
 
-Per-library performance in Table S1 (or `docs/parameter_choices.md`). ARI reported as the median across 10 seeds and 3 Leiden resolutions.
+Sensitivity, specificity, UMI cost and ARI per library are in Table S1 (`docs/parameter_choices.md`). ARI is the median over 10 seeds and 3 Leiden resolutions against the unfiltered clustering, reported with its ceiling and a random-thinning control.
+
+## Validation of the reimplementation
+
+All settings were flagged by a reimplementation that reuses polyAfilter's A-stretch scanner (commit `5ce0098`). Its removed records are identical to those of the original tool in 27 runs: ten settings on 1417, eight on 1419, eight on chr21 and chr22 of 1179, one remove-all control.
 
 ## Long-read acceptance
 
-Stage 16 of the benchmark accepts a long-read record if its terminal A run on the aligned sense strand has length >= 10 (one non-A allowed) AND is followed by `MIN_AFTER` or more non-A clipped bases. `MIN_AFTER` is per-library because FLNC conventions differ: BD-style FLIGHT-seq FLNC retains the bead tail (`MIN_AFTER=30`), 10x Kinnex FLNC has the PR1+CB+UMI primer pre-stripped by `isoseq refine` into the CB/XM tags (`MIN_AFTER=0`). On BD67 chr1 this accepts 93% of reads; on 10x_FL chr1 it accepts 84%.
+A long read is used when its terminal adenine run (aligned plus clipped, one other base allowed) is at least 10 nt and is followed by at least `MIN_AFTER` nt of clipped sequence. `MIN_AFTER` is 30 for BD67, whose FLNC reads keep the bead sequence after the poly(A), and 0 for 10x_FL, where `isoseq refine` has removed it. This accepts 88% of BD67 reads and 84% of 10x_FL reads. A library is analysed only if its non-templated sites carry the hexamer at least 3 times as often as its templated sites (5.3 in BD67, 5.6 in 10x_FL).
 
-## Dependencies
+## Environment
 
-polyAfilter vendored at commit `5ce0098`. All analysis in Python 3.11 with pinned package versions (`uv.lock`, 90 packages). Scanpy with `leiden_flavor=igraph`, `leiden_n_iterations=2`, `n_pcs=30`, `k=15`, `blas_threads=1` (the thread count affects PCA coordinates).
-
-## Reproduction
-
-Full pipeline from raw BAMs, 12-core / 128 GB machine: approximately 8 h wall-clock. Deterministic given the pinned environment and the per-stage seeds.
+Python 3.11 with pinned package versions (`uv.lock`). Scanpy with the igraph Leiden flavour, 2 iterations, 30 principal components, 15 neighbours and 1 BLAS thread (the thread count changes the PCA coordinates). Seeds are fixed per stage.
 
 ## Caveats
 
-Scope limits apply (`docs/rationale.md`): tested on retina organoid, human, oligo-dT 3' chemistries, GRCh38-2024-A reference. Non-human organisms and non-oligo-dT chemistries are outside scope.
+Human retina, GRCh38-2024-A, 10x 3' v4 and FLIGHT-seq. The labelled molecules are a subset of each library. Nuclei are adult donor retina and cells are retinal organoids, so comparisons between them are descriptive. The templated shares count uniquely mapped molecules only (STAR MAPQ 255): multi-mapped reads would raise the share of the FLIGHT-seq libraries (25.9% instead of 19.4% in BD67) without the hexamer profile of internal priming. Sensitivity and specificity are scored on all labelled molecules and change by 0.02 at most without the multi-mapped ones.

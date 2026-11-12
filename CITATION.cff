@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this benchmark, please cite the FLIGHT-seq manuscript and this archive."
-title: "flight-polyafilter-bench: a reproducible evaluation of polyAfilter on retina organoid single-cell libraries"
+title: "flight-polyafilter-bench: a reproducible evaluation of polyAfilter on human retina single-cell and single-nucleus libraries"
 authors:
   - family-names: Picelli
     given-names: Simone
@@ -28,7 +28,8 @@ keywords:
   - internal priming
   - single-cell RNA-seq
   - FLIGHT-seq
-  - retina organoid
+  - human retina
+  - retinal organoid
   - PacBio Kinnex
 references:
   - type: article

@@ -3,6 +3,9 @@ PolyASite 3.0 proximity of the labeled sites (reported only, not a label check: 
 https://polyasite.unibas.ch/atlas_sc; the v3.0 documentation describes no filter on A content downstream of a site; the A content downstream
 of the atlas sites is counted by scripts/22_polyasite_a_content.py).
 
+Every table counts uniquely mapped molecules only (mapq_min 255, pafbench.truth.uniquely_mapped); summary.json records
+it in the key "mapq_min".
+
 --population (default cells, config.SEL_POPULATION) picks the barcodes of all tables except templated_share_population.parquet,
 which holds every population. summary.json records it in the key "population". Other files: same_site.parquet,
 same_gene.parquet, selection_bias.parquet (labeled_share, records_share and, when stage 13 wrote total_nondup,
@@ -31,12 +34,12 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from pafbench.burden import near_shares, proximity_table, same_gene, same_site, selection_bias, share_ci, share_table
-from pafbench.config import BD_NUC, CELLS, NUCLEI, OUT, POLYASITE, POPULATIONS, SEL_POPULATION
+from pafbench.config import BD_NUC, CELLS, NUCLEI, OUT, POLYASITE, POPULATIONS, SEL_POPULATION, UNIQUE_MAPQ
 from pafbench.polyasite import NULL_SHIFT, load_polyasite, site_distances
-from pafbench.truth import in_population
+from pafbench.truth import in_population, uniquely_mapped
 
 KINDS = (None, "region", "a_band", "has_ts")
-COLUMNS = ["mol", "ref", "strand", "site", "label", "a_band", "region", "gene", "has_ts", "re"]
+COLUMNS = ["mol", "ref", "strand", "site", "label", "a_band", "region", "gene", "has_ts", "re", "mapq_min"]
 
 
 def _num(x):
@@ -56,7 +59,7 @@ def main():
     for lib in NUCLEI + CELLS + BD_NUC:
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if p.exists():
-            m = pd.read_parquet(p, columns=COLUMNS + (["in_cell"] if "in_cell" in pq.read_schema(p).names else []))
+            m = uniquely_mapped(pd.read_parquet(p, columns=COLUMNS + (["in_cell"] if "in_cell" in pq.read_schema(p).names else [])))
             by_population[lib] = {pop: in_population(m, pop) for pop in POPULATIONS} if "in_cell" in m else {"all": m}
             try:
                 m = in_population(m, args.population)
@@ -152,7 +155,8 @@ def main():
         matched = s[s.label_b != "none"]
         site_summary[s.pair.iloc[0]] = {"sites_a": n, "matched": int(matched.n.sum()),
                                         "same_label": int(matched[matched.label_a == matched.label_b].n.sum())}
-    out = {"population": args.population, "selection_bias_population": "all", "libraries": list(mols), "groups": members, "share": headline,
+    out = {"population": args.population, "mapq_min": UNIQUE_MAPQ, "selection_bias_population": "all", "libraries": list(mols),
+           "groups": members, "share": headline,
            "same_gene": {d["pair"]: {"n_genes": d["n_genes"], "spearman_rho": _num(d["spearman_rho"]),
                                      "p_value": _num(d["p_value"])} for d in genes},
            "same_site": site_summary,

@@ -1,8 +1,8 @@
 """Stage 92: build the manuscript's main-text figure (two panels, publication-ready PNG + SVG).
 
 Panel A: Templated / non-templated / ambiguous burden across four libraries, read from
-<lib>/truth/molecules_labeled.parquet.
-Panel B: Clustering ARI across the four libraries at unfiltered, mode-e, mode-i, and paper default,
+<lib>/truth/molecules_labeled.parquet (uniquely mapped molecules of called cells, as stage 18).
+Panel B: Clustering ARI across the four libraries at unfiltered, mode-e, mode-i, and the README example,
 median across seeds x resolutions, read from <lib>/impact/clustering.parquet.
 
 The script does not use the artifact's SVG; it rebuilds from the parquet files so the manuscript
@@ -16,12 +16,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from pafbench.truth import uniquely_mapped
+
 BASE = Path("/data/element_runs/polyafilter_bench")
 OUT = BASE / "report" / "figures"
 LIBS = ("1417", "1419", "1179", "BD67")
 LIB_LABELS = {"1417": "1417\nnuclei", "1419": "1419\nnuclei", "1179": "1179\ncells", "BD67": "BD67\nFLIGHT-seq cells"}
 TAGS = ("unfiltered", "c300_l10_m1_e", "c250_l7_m1_e", "c200_l10_m2_i")
-TAG_LABELS = {"unfiltered": "unfiltered", "c300_l10_m1_e": "paper default", "c250_l7_m1_e": "mode-e", "c200_l10_m2_i": "mode-i"}
+TAG_LABELS = {"unfiltered": "unfiltered", "c300_l10_m1_e": "README example", "c250_l7_m1_e": "mode-e", "c200_l10_m2_i": "mode-i"}
 TAG_COLORS = {"unfiltered": "#bdbdbd", "c300_l10_m1_e": "#9ecae1", "c250_l7_m1_e": "#4292c6", "c200_l10_m2_i": "#08519c"}
 LABEL_COLORS = {"templated": "#d62728", "nontemplated": "#2ca02c", "ambiguous": "#999999"}
 
@@ -30,8 +32,8 @@ def load_burden(base):
     rows = []
     for lib in LIBS:
         d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet",
-                            columns=["label", "in_cell"])
-        d = d[d.in_cell]
+                            columns=["label", "in_cell", "mapq_min"])
+        d = uniquely_mapped(d[d.in_cell])
         c = d.label.value_counts(normalize=True)
         rows.append({"library": lib, "templated": c.get("templated", 0), "nontemplated": c.get("nontemplated", 0),
                      "ambiguous": c.get("ambiguous", 0), "n": len(d)})
@@ -69,7 +71,7 @@ def plot(base, out):
     ax.set_ylabel("Share of labeled molecules")
     ax.set_ylim(0, 1)
     ax.set_title("A. Internal-priming burden")
-    ax.legend(loc="upper right", frameon=False, fontsize=8)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=2, frameon=False, fontsize=8)
     for i, (t, _lib) in enumerate(zip(tpl, LIBS)):
         ax.text(i, t / 2, f"{t * 100:.1f}%", ha="center", va="center", color="white", fontsize=9, fontweight="bold")
 

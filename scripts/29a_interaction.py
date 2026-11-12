@@ -5,7 +5,8 @@ Rows (7 total): 1417 and 1419 (10x nuclei, chem=10x, mat=nuclei), 1179 (10x cell
 (BD nuclei). 1416 is in LIBRARIES but not in NUCLEI and does not enter here (addendum decision outside this scope).
 
 Response: logit of the per-library RAW templated share, "all" region, on called cells. The raw share is templated
-molecules divided by all labeled molecules on called cells (truth/molecules_labeled.parquet, in_cell); this is
+molecules divided by all uniquely mapped labeled molecules on called cells (truth/molecules_labeled.parquet, in_cell,
+mapq_min 255); this is
 `share_label` in `burden/templated_share_corrected.parquet`, NOT `share_corrected`. The ambiguous-label correction from
 stage 29 is a per-library linear offset in the logit domain and would propagate through the 2x2 fit, but applying it
 during the gene-cluster bootstrap requires the per-cluster hexamer-rate inputs stage 29 uses; stage 29a keeps the simpler
@@ -40,9 +41,9 @@ import pandas as pd
 
 from pafbench.config import BD_NUC, CELLS, NUCLEI, OUT
 from pafbench.evaluate import gene_clusters, interval, resample_counts
-from pafbench.truth import in_population
+from pafbench.truth import in_population, uniquely_mapped
 
-COLUMNS = ["gene", "ref", "strand", "site", "label", "in_cell"]
+COLUMNS = ["gene", "ref", "strand", "site", "label", "in_cell", "mapq_min"]
 ROWS = [
     ("1417", "10x", "nuclei"),
     ("1419", "10x", "nuclei"),
@@ -134,7 +135,7 @@ def main():
         if not p.exists():
             raise SystemExit(f"{lib}: missing {p}")
         mol = pd.read_parquet(p, columns=COLUMNS)
-        mol = in_population(mol, "cells")
+        mol = in_population(uniquely_mapped(mol), "cells")
         s = per_library_shares(mol, args.n_draws, child_seeds[i])
         shares.append(s)
         n_labeled[lib] = int(len(mol))

@@ -132,7 +132,7 @@ def _lib_mol(shift):
     return pd.DataFrame({"mol": i, "ref": "chr1", "strand": "+", "site": 100 + 50 * i + shift, "label": lab,
                          "a_band": np.where(lab == "templated", "14-20", np.where(lab == "nontemplated", "0-4", "5-7")),
                          "region": np.where(i < 40, "3UTR", "intron"), "gene": [f"g{x}" for x in i // 20],
-                         "has_ts": i % 5 == 0, "re": np.where(i < 40, "E", "I"), "in_cell": True})
+                         "has_ts": i % 5 == 0, "re": np.where(i < 40, "E", "I"), "in_cell": True, "mapq_min": 255})
 
 
 def _atlas(tmp_path):
@@ -236,6 +236,38 @@ def test_stage18_population_selects_barcodes_and_reports_all_three(tmp_path):
     assert len(r) == 0  # 1179 cells are mol < 40: all 3UTR
     r = t[(t.lib == "1179") & (t.population == "noncells") & (t.stratum_kind == "region")]
     assert r.stratum.tolist() == ["intron"] and r.total.tolist() == [20]
+
+
+def _multimapped(mol, n=12):
+    """mol plus n copies of its first templated row with mapq_min 0, 1 or 3, at sites and in a gene of their own."""
+    extra = pd.concat([mol[mol.label == "templated"].iloc[[0]]] * n, ignore_index=True)
+    extra = extra.assign(site=900_000 + 100 * np.arange(n), gene="gx", mapq_min=np.tile([0, 1, 3], n // 3), in_cell=True)
+    if "mol" in extra:
+        extra = extra.assign(mol=int(mol.mol.max()) + 1 + np.arange(n))
+    return pd.concat([mol, extra], ignore_index=True)
+
+
+def test_stage18_counts_uniquely_mapped_molecules_only(tmp_path):
+    tables = {}
+    for name, add in (("unique", False), ("with_multimapped", True)):
+        base = tmp_path / name
+        for lib in ("1417", "1419", "1179"):
+            mol = _lib_mol(3 if lib == "1179" else 0)
+            (base / lib / "truth").mkdir(parents=True)
+            (_multimapped(mol) if add else mol).to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
+        (base / "1417" / "grid").mkdir()
+        pd.DataFrame({"tag": "t1", "re": ["E", "I"], "removed": [1, 2], "total": [30, 70], "total_nondup": [15, 70]}).to_parquet(
+            base / "1417" / "grid" / "region_counts.parquet")
+        r = _stage18(base, tmp_path / f"out_{name}", tmp_path)
+        assert r.returncode == 0, r.stderr
+        tables[name] = {p.name: pd.read_parquet(p) for p in sorted((tmp_path / f"out_{name}").glob("*.parquet"))}
+    assert set(tables["unique"]) == {"templated_share.parquet", "templated_share_population.parquet", "same_site.parquet",
+                                     "same_gene.parquet", "selection_bias.parquet", "polyasite.parquet"}
+    for name, t in tables["unique"].items():
+        pd.testing.assert_frame_equal(tables["with_multimapped"][name], t)
+    a = tables["with_multimapped"]["templated_share.parquet"]
+    assert a[(a.group == "1417") & (a.stratum_kind == "all")].total.iloc[0] == 60
+    assert json.loads((tmp_path / "out_with_multimapped" / "summary.json").read_text())["mapq_min"] == 255
 
 
 def test_stage18_selection_bias_uses_all_barcodes_whatever_the_population(tmp_path):
@@ -619,7 +651,7 @@ def _stage29_base(base, in_cell=True):
     label_purity of the called cells as stage 17 writes it."""
     libs, purity = {}, {}
     for seed, lib in enumerate(("1417", "1419", "1179")):
-        mol = _purity_frame(seed=seed).assign(in_cell=np.arange(612) % 4 != 0)
+        mol = _purity_frame(seed=seed).assign(in_cell=np.arange(612) % 4 != 0, mapq_min=255)
         libs[lib] = mol if in_cell else mol.drop(columns="in_cell")
         (base / lib / "truth").mkdir(parents=True)
         libs[lib].to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
@@ -675,3 +707,22 @@ def test_stage29_acceptance_failure_and_missing_in_cell(tmp_path):
     _stage29_base(base, in_cell=False)
     r = _stage29(base, tmp_path / "out2")
     assert r.returncode != 0 and "in_cell" in r.stderr
+
+
+def test_stage29_counts_uniquely_mapped_molecules_only(tmp_path):
+    base, out = tmp_path / "base", tmp_path / "burden"
+    libs = _stage29_base(base)
+    purity = {}
+    for lib, mol in libs.items():
+        _multimapped(mol).to_parquet(base / lib / "truth" / "molecules_labeled.parquet")
+        purity[lib] = label_purity(mol[mol.in_cell])
+    (base / "eval" / "selection.json").write_text(json.dumps({"label_purity": purity}))
+    r = _stage29(base, out)
+    assert r.returncode == 0, r.stderr
+    s = json.loads(r.stdout.strip().splitlines()[-1])
+    assert s["molecules"] == {"1417": 459, "1419": 459, "1179": 459}
+    got = pd.read_parquet(out / "templated_share_corrected.parquet")
+    for lib, mol in libs.items():
+        want = purity_by_region(mol[mol.in_cell].reset_index(drop=True))[1]
+        pd.testing.assert_frame_equal(got[got.group == lib].drop(columns="group").reset_index(drop=True), want)
+        assert s["acceptance"][lib]["pass"]

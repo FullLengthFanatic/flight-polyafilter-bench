@@ -436,6 +436,11 @@ def test_truth_section_label_purity(base):
     assert "labeled molecules of called cells)" in m2report.burden_section(base)
     assert "tail-primed share over the labeled molecules of called cells, with and without a member read" in \
         m2report.truth_section(base)
+    # stage 17 records label_purity_mapq_min when label purity counts the uniquely mapped molecules only
+    (base / "eval/selection.json").write_text(json.dumps(sel | {"label_purity_mapq_min": 255}))
+    assert "over the uniquely mapped (mapq_min 255) labeled molecules of called cells" in m2report.truth_section(base)
+    assert "uniquely mapped (mapq_min 255) labeled molecules of called cells)" in m2report.burden_section(base)
+    (base / "eval/selection.json").write_text(json.dumps(sel))
     assert "ACTB" not in s and "1,976" not in s and "annotated 3' end" not in s
     p = base / "eval/selection.json"
     sel = json.loads(p.read_text())
@@ -1136,10 +1141,13 @@ def test_burden_section_population_and_groups(base):
     assert "Population of the burden tables: not recorded (stage 18 predates it)." in s
     assert "Groups (burden/summary.json): nuclei = 1417 + 1419; cells = 1179. A group with one library holds the same " \
            "molecules as that library: cells = 1179." in s
+    _write(base / "burden/summary.json", {"groups": groups, "population": "cells", "mapq_min": 255})
+    assert "Molecules of the burden tables (burden/summary.json): uniquely mapped only (mapq_min 255)." in m2report.burden_section(base)
     for pop, name in (("all", "all barcodes"), ("cells", "called cells"), ("noncells", "other barcodes")):
         _write(base / "burden/summary.json", {"groups": groups, "population": pop, "selection_bias_population": "all"})
         s = m2report.burden_section(base)
         assert f"Population of the burden tables (burden/summary.json): {name}." in s
+        assert "uniquely mapped only" not in s
         assert "not recorded" not in s and "inferred" not in s
     # no inference from eval/selection.json any more, and no mismatch warning
     _add_populations(base)

@@ -3,7 +3,7 @@ import gzip
 import numpy as np
 import pandas as pd
 
-from .config import LABEL_CUTOFFS, MEMBER_CAP, SENS_CAPS
+from .config import LABEL_CUTOFFS, MEMBER_CAP, SENS_CAPS, UNIQUE_MAPQ
 from .labels import label_molecules
 from .molecules import select_members
 from .regions import REGION_NAMES, regions_at
@@ -33,6 +33,15 @@ def in_population(mol, population):
     if "in_cell" not in mol:
         raise ValueError(f"no in_cell column (rerun stage 12), needed for population {population}")
     return mol[mol.in_cell.to_numpy(bool) == (population == "cells")].reset_index(drop=True)
+
+
+def uniquely_mapped(mol):
+    """The molecules whose pa reads all map uniquely (mapq_min == UNIQUE_MAPQ). The burden stages count these only: a
+    multi-mapped pa read can be placed on a copy of its locus where the genome supplies the A's, and the molecule is then
+    labeled templated whatever primed it."""
+    if "mapq_min" not in mol:
+        raise ValueError("no mapq_min column (rerun stages 06 and 12)")
+    return mol[mol.mapq_min.to_numpy() == UNIQUE_MAPQ].reset_index(drop=True)
 
 
 def label_truth_molecules(mol, pa, members, segments, cutoffs=LABEL_CUTOFFS):

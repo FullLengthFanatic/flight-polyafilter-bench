@@ -331,8 +331,8 @@ def truth_section(base):
                        "Estimated tail-primed share (reference: a20 >= 14)", "Hexamer rate templated",
                        "Hexamer rate non-templated", "Hexamer rate ambiguous", "Hexamer rate a20 >= 14"] + nkeys, rows)
 
-    out += ["", "Label purity: molecules, AATAAA/ATTAAA rate and estimated tail-primed share per A band over the labeled "
-                f"molecules of {POP_NAMES[(sel or {}).get('selection_population', 'all')]} (`eval/selection.json` label_purity, "
+    out += ["", "Label purity: molecules, AATAAA/ATTAAA rate and estimated tail-primed share per A band over the "
+                f"{_purity_molecules(sel)} (`eval/selection.json` label_purity, "
                 "stage 17); the last row of a library is the templated class "
                 "as a whole:", ""]
     if sel is None:
@@ -1002,6 +1002,14 @@ def _dup_flag_caveat(base):
             "way in every region.")
 
 
+def _purity_molecules(sel):
+    """The molecules behind label_purity of eval/selection.json: uniquely mapped ones when stage 17 recorded
+    label_purity_mapq_min."""
+    pop = POP_NAMES[(sel or {}).get("selection_population", "all")]
+    q = (sel or {}).get("label_purity_mapq_min")
+    return f"uniquely mapped (mapq_min {q}) labeled molecules of {pop}" if q else f"labeled molecules of {pop}"
+
+
 def _burden_population(base):
     """Lines naming the population of the burden tables (burden/summary.json "population", written by stage 18) and the
     groups of libraries."""
@@ -1013,6 +1021,8 @@ def _burden_population(base):
         lines.append("Population of the burden tables: not recorded (stage 18 predates it).")
     else:
         lines.append(f"Population of the burden tables (burden/summary.json): {POP_NAMES[summary['population']]}.")
+    if summary is not None and "mapq_min" in summary:
+        lines.append(f"Molecules of the burden tables (burden/summary.json): uniquely mapped only (mapq_min {summary['mapq_min']}).")
     if summary is None:
         lines.append(f"Groups: {_not_run(base, [base / 'burden' / 'summary.json'])}")
     else:
@@ -1066,8 +1076,8 @@ def burden_section(base):
                   [[k, s] + [cell(g, k, s, lambda r: _r(r.share_resolved)) for g in groups] for k, s in strata])
     ps = base / "eval" / "selection.json"
     sel = _json(ps)
-    out += ["", "Templated share by label and corrected (`eval/selection.json` label_purity, stage 17; labeled molecules of "
-                f"{POP_NAMES[(sel or {}).get('selection_population', 'all')]}). The corrected share removes the estimated tail-primed part of the templated class, an estimate "
+    out += ["", "Templated share by label and corrected (`eval/selection.json` label_purity, stage 17; "
+                f"{_purity_molecules(sel)}). The corrected share removes the estimated tail-primed part of the templated class, an estimate "
                 "from the hexamer rates (see the label purity table in section 2):", ""]
     if sel is None:
         out[-2:] = [f"Templated share corrected: {_not_run(base, [ps])}"]

@@ -2,9 +2,9 @@
 1419 as the same-material baseline (design of 2026-10-12, section 3.9). Descriptive only: tissue, maturity, cell mix and
 nucleus against cell are confounded.
 
-Site tables (burden.site_table), one per group (1417, 1419, nuclei, cells), from the labeled molecules of called cells
-(<lib>/truth/molecules_labeled.parquet, in_cell): one row per site (ref, strand, site) with its molecules, label, A band,
-a20, down20, up40, hexamer, region, gene and genes (gene is the first of genes, truth.label_truth_molecules), which take one
+Site tables (burden.site_table), one per group (1417, 1419, nuclei, cells), from the uniquely mapped labeled molecules of
+called cells (<lib>/truth/molecules_labeled.parquet, in_cell, mapq_min 255): one row per site (ref, strand, site) with its
+molecules, label, A band, a20, down20, up40, hexamer, region, gene and genes (gene is the first of genes, truth.label_truth_molecules), which take one
 value per site in these tables (our observation, 2026-10-14 and for genes 2026-10-15: no site of 1417, 1419 or 1179 has two
 values of any of them), and dist_end, dist_mode (burden.end_distances): the signed distance to the nearest annotated 3' end
 of a gene of the site, > 0 when that end lies downstream in transcript sense. The ends are the 3' ends of every transcript
@@ -78,13 +78,13 @@ from pafbench.burden import (SETS, downsample_sets, downsampling_summary, gene_e
                              set_summary, shared_genes, site_sets, site_table, usage_comparison)
 from pafbench.config import DIST_END_BINS, DOWNSAMPLE_DRAWS, GTF, NUCLEI, OUT, SITE_TOL
 from pafbench.exons import load_collapsed_exons
-from pafbench.truth import in_population
+from pafbench.truth import in_population, uniquely_mapped
 
 # Stage 31's nuclei_vs_cells pair is a 10x within-chemistry comparison by design (see 2026-10-12 spec §3.9). The FLIGHT
 # nuclei-vs-BD67 pair runs separately in stage 31b. CELLS now carries BD67 for other stages, so we pin the 10x members
 # here rather than let the Pool278 addition silently pool chemistries.
 TENX_CELLS = ("1179",)
-COLUMNS = ["ref", "strand", "site", "label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "genes", "in_cell"]
+COLUMNS = ["ref", "strand", "site", "label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "genes", "in_cell", "mapq_min"]
 PAIRS = (("1417_vs_1419", "1417", "1419"), ("nuclei_vs_cells", "nuclei", "cells"))
 MIN_GENE = 20  # burden.same_gene's min_n
 SEED = 0
@@ -106,7 +106,7 @@ def main():
     for lib in NUCLEI + TENX_CELLS:
         p = args.base / lib / "truth" / "molecules_labeled.parquet"
         if p.exists():
-            libs[lib] = in_population(pd.read_parquet(p, columns=COLUMNS), "cells")
+            libs[lib] = in_population(uniquely_mapped(pd.read_parquet(p, columns=COLUMNS)), "cells")
         else:
             print(f"{lib}: skipped, missing {p}", file=sys.stderr)
     groups = {lib: [lib] for lib in NUCLEI if lib in libs}

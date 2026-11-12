@@ -1,8 +1,8 @@
 """Stage 29: the templated share corrected for label purity, by region (design of 2026-10-12, section 3.7).
 
-On the labeled molecules of called cells (in_cell) of each library and group (nuclei = 1417 + 1419, cells = 1179), over all
-regions ("all") and per region value that truth/molecules_labeled.parquet holds: the reference rates h_tail (A band 0-4)
-and h_ref (a20 >= 14), the tail-primed share per A band and the corrected templated share, once with the library-wide
+On the uniquely mapped (mapq_min 255) labeled molecules of called cells (in_cell) of each library and group (nuclei = 1417 +
+1419, cells = 1179), over all regions ("all") and per region value that truth/molecules_labeled.parquet holds: the
+reference rates h_tail (A band 0-4) and h_ref (a20 >= 14), the tail-primed share per A band and the corrected templated share, once with the library-wide
 rates and once with the region's own, a gene bootstrap of 1,000 resamples (seed 0) with every rate recomputed in each
 resample, and the headline version of each region by the rule of 3.7 (config.REGION_REF_MIN). The library-wide rates of a
 group are those of the group. pafbench.burden.purity_by_region.
@@ -34,9 +34,9 @@ import pyarrow.parquet as pq
 
 from pafbench.burden import purity_acceptance, purity_by_region
 from pafbench.config import BD_NUC, CELLS, NUCLEI, OUT
-from pafbench.truth import in_population
+from pafbench.truth import in_population, uniquely_mapped
 
-COLUMNS = ["a20", "hexamer", "label", "region", "gene", "ref", "strand", "site"]
+COLUMNS = ["a20", "hexamer", "label", "region", "gene", "ref", "strand", "site", "mapq_min"]
 OUTPUTS = ("purity_reference_by_region", "templated_share_corrected", "purity_by_region")
 
 
@@ -52,7 +52,7 @@ def main():
         if not p.exists():
             print(f"{lib}: skipped, missing {p}")
             continue
-        m = pd.read_parquet(p, columns=COLUMNS + (["in_cell"] if "in_cell" in pq.read_schema(p).names else []))
+        m = uniquely_mapped(pd.read_parquet(p, columns=COLUMNS + (["in_cell"] if "in_cell" in pq.read_schema(p).names else [])))
         try:
             mols[lib] = in_population(m, "cells")
         except ValueError as e:

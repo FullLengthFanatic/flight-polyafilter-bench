@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -68,7 +69,7 @@ def _mols(spec, in_cell=True):
         down20 = "A" * a20 + "C" * (20 - a20)
         rows += [(ref, strand, site, gene, a20, down20, "G" * 40, a20 == 0, region, in_cell)] * n
     m = pd.DataFrame(rows, columns=["ref", "strand", "site", "gene", "a20", "down20", "up40", "hexamer", "region", "in_cell"])
-    return m.assign(genes=m.gene, label=[classify(x, 8, 4) for x in m.a20], a_band=[a_band(x) for x in m.a20])
+    return m.assign(genes=m.gene, label=[classify(x, 8, 4) for x in m.a20], a_band=[a_band(x) for x in m.a20], mapq_min=255)
 
 
 def _brute_mutual(a, b, tol):
@@ -548,3 +549,54 @@ def test_stage31_is_decoupled_from_stage18_same_site_parquet(tmp_path):
     j = json.loads((out / "matched_sites.json").read_text())
     assert j["acceptance"]["pass"] is True and j["acceptance"]["source"].startswith("internal")
     assert (out / "matched_sites.parquet").exists() and (out / "matched_sites_summary.parquet").exists()
+
+
+def _add_multimapped(base, lib):
+    """25 molecules of called cells with mapq_min 3 at a gP site of their own (chr1 plus 1250), appended to the library."""
+    f = base / lib / "truth" / "molecules_labeled.parquet"
+    m = pd.read_parquet(f)
+    extra = _mols([("chr1", "+", 1250, "gP", 25, 12, "CDS")]).assign(mapq_min=3, mol=len(m) + np.arange(25))
+    pd.concat([m, extra], ignore_index=True).to_parquet(f)
+
+
+def test_stage31_counts_uniquely_mapped_molecules_only(tmp_path):
+    got = {}
+    for name in ("unique", "with_multimapped"):
+        base, out = tmp_path / name, tmp_path / f"out_{name}"
+        _stage_libs(base)
+        if name == "with_multimapped":
+            _add_multimapped(base, "1417")
+            _add_multimapped(base, "1179")
+        r = _stage31(base, out, _gtf(tmp_path))
+        assert r.returncode == 0, r.stderr
+        got[name] = pd.read_parquet(out / "matched_sites.parquet"), json.loads((out / "matched_sites.json").read_text())["sites"]
+    pd.testing.assert_frame_equal(got["with_multimapped"][0], got["unique"][0])
+    assert got["with_multimapped"][1] == got["unique"][1] == {"1417": 5, "1419": 3, "nuclei": 6, "cells": 5}
+
+
+def _flight_libs(base):
+    """The libraries of _stage_libs under the FLIGHT-seq names: BD_nuc_211 and 213 as 1417, BD_nuc_215 as 1419, BD67 as 1179."""
+    _stage_libs(base)
+    for src, dst in (("1417", "BD_nuc_211"), ("1417", "BD_nuc_213"), ("1419", "BD_nuc_215"), ("1179", "BD67")):
+        (base / dst / "truth").mkdir(parents=True)
+        shutil.copy(base / src / "truth" / "molecules_labeled.parquet", base / dst / "truth" / "molecules_labeled.parquet")
+
+
+def test_stage31b_counts_uniquely_mapped_molecules_only(tmp_path):
+    got = {}
+    for name in ("unique", "with_multimapped"):
+        base, out = tmp_path / name, tmp_path / f"out_{name}"
+        _flight_libs(base)
+        if name == "with_multimapped":
+            _add_multimapped(base, "BD_nuc_213")
+            _add_multimapped(base, "BD67")
+        r = subprocess.run([sys.executable, str(REPO / "scripts" / "31b_matched_sites_flightpair.py"), "--base", str(base),
+                            "--out", str(out), "--gtf", str(_gtf(tmp_path))], capture_output=True, text=True,
+                           env=dict(os.environ, PYTHONPATH=str(REPO)), cwd=REPO)
+        assert r.returncode == 0, r.stderr
+        j = json.loads((out / "matched_sites_flightpair.json").read_text())
+        got[name] = pd.read_parquet(out / "matched_sites_flightpair.parquet"), j["sites"], j["molecules"]
+    pd.testing.assert_frame_equal(got["with_multimapped"][0], got["unique"][0])
+    assert got["with_multimapped"][1] == got["unique"][1] and got["with_multimapped"][2] == got["unique"][2]
+    # called cells of the 1417, 1419 and 1179 fixtures: 54, 49 and 152 molecules
+    assert got["unique"][2] == {"BD_nuc_211": 54, "BD_nuc_213": 54, "BD_nuc_215": 49, "BD67": 152, "flight_nuclei": 157}

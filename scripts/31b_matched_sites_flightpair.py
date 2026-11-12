@@ -2,8 +2,8 @@
 within their shared genes, with BD_nuc_213 against BD_nuc_215 as the same-material baseline (addendum 2026-10-31, section 3.3).
 Chemistry-controlled analogue of stage 31 (which pairs 10x nuclei 1417+1419 against 10x cells 1179 and 1417 against 1419).
 
-Same code and thresholds as stage 31. The two chemistry sides use the same SITE_TOL, MIN_GENE, DOWNSAMPLE_DRAWS and SEED, so
-stage 31 (10x) and stage 31b (BD) output tables are directly comparable. Descriptive only: donor and bead-split layout are
+Same code and thresholds as stage 31, on the same molecules (uniquely mapped, called cells). The two chemistry sides use the
+same SITE_TOL, MIN_GENE, DOWNSAMPLE_DRAWS and SEED, so stage 31 (10x) and stage 31b (BD) output tables are directly comparable. Descriptive only: donor and bead-split layout are
 confounded on the baseline pair; BD67 (wk26 organoid pool) and the FLIGHT nuclei (D29 and two Graz adult donors) differ on
 tissue and maturity as well as material.
 
@@ -34,9 +34,9 @@ from pafbench.burden import (SETS, downsample_sets, downsampling_summary, gene_e
                              set_summary, shared_genes, site_sets, site_table, usage_comparison)
 from pafbench.config import BD_NUC, DIST_END_BINS, DOWNSAMPLE_DRAWS, GTF, OUT, SITE_TOL
 from pafbench.exons import load_collapsed_exons
-from pafbench.truth import in_population
+from pafbench.truth import in_population, uniquely_mapped
 
-COLUMNS = ["ref", "strand", "site", "label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "genes", "in_cell"]
+COLUMNS = ["ref", "strand", "site", "label", "a_band", "a20", "down20", "up40", "hexamer", "region", "gene", "genes", "in_cell", "mapq_min"]
 PAIRS = (("BD_nuc_213_vs_BD_nuc_215", "BD_nuc_213", "BD_nuc_215"), ("flight_vs_bd67", "flight_nuclei", "BD67"))
 DOWNSAMPLE_PAIR = "flight_vs_bd67"
 MIN_GENE = 20
@@ -52,8 +52,8 @@ def main():
     ap.add_argument("--gtf", type=Path, default=GTF)
     args = ap.parse_args()
     t0 = time.time()
-    libs = {lib: in_population(pd.read_parquet(args.base / lib / "truth" / "molecules_labeled.parquet", columns=COLUMNS),
-                               "cells") for lib in (*BD_NUC, "BD67")}
+    libs = {lib: in_population(uniquely_mapped(pd.read_parquet(args.base / lib / "truth" / "molecules_labeled.parquet",
+                                                               columns=COLUMNS)), "cells") for lib in (*BD_NUC, "BD67")}
     groups = {lib: [lib] for lib in BD_NUC} | {"BD67": ["BD67"], "flight_nuclei": list(BD_NUC)}
     mols = {g: pd.concat([libs[lib] for lib in members], ignore_index=True) for g, members in groups.items()}
     exons, ends = load_collapsed_exons(args.gtf), gene_ends(args.gtf)

@@ -39,6 +39,9 @@ SENS_CAPS = (500, 1000, 2000)
 POPULATIONS = ("all", "cells", "noncells")
 SEL_POPULATION = "cells"  # barcodes the headline selection and burden are computed on
 SEL_UNITS = "with_member"  # molecule units of the headline selection
+# mapq_min of a molecule whose pa reads all map to one locus. The BAMs of all seven libraries hold the values 0, 1, 3 and
+# 255 (our observation on truth/molecules_labeled.parquet, 2026-11-10); 255 is the value for a uniquely mapped read.
+UNIQUE_MAPQ = 255
 NUCLEI = ("1417", "1419")
 CELLS = ("1179", "BD67")
 BD_NUC = ("BD_nuc_211", "BD_nuc_213", "BD_nuc_215")

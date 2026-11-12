@@ -1,5 +1,7 @@
 # polyAfilter benchmark, milestone 1: exit note
 
+Record of milestone 1, kept as written. Its shares cover all barcodes of 1417 and include multi-mapped molecules; the current figures (called cells, uniquely mapped molecules) are in the README.
+
 Date: 2026-10-08. Branch `m1-implementation`. Numbers come from `docs/m1_results.md` and the JSON files under `/data/element_runs/polyafilter_bench/` unless a line says otherwise.
 
 Milestone 1 had to show four things before the full benchmark: that polyAfilter can be reproduced exactly and fast enough for a parameter grid, that a truth set can be built without bulk, that the 3k aliquots stand in for the 20k libraries, and that spike-ins and long reads can serve as extra checks.

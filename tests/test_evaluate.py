@@ -446,6 +446,8 @@ def test_stage17_population_and_units_options(tmp_path):
         runs[pop, um] = sel = json.loads((out / "selection.json").read_text())
         assert (sel["selection_population"], sel["selection_units"], sel["spikein_barcodes"]) == (pop, um, "all")
         sub = mol[mol.mol.isin(POP_MOLS[pop])].reset_index(drop=True)
+        # label purity leaves out the multi-mapped m2; the metrics keep it
+        assert sel["label_purity"]["1417"] == label_purity(sub[sub.mapq_min == 255]) and sel["label_purity_mapq_min"] == 255
         m = pd.read_parquet(out / "metrics.parquet")
         got = m[(m.lib == "1419") & (m.cap == 1000)].reset_index(drop=True)
         u = units(sub, tr, fl, tags, 1000, all_labeled=um == "all_labeled")
@@ -533,7 +535,7 @@ def test_stage17_population_without_in_cell_is_refused(tmp_path):
     _run_stage("17_evaluate.py", base, out, "--population", "all")
     sel = json.loads((out / "selection.json").read_text())
     assert set(pd.read_parquet(out / "populations.parquet").population) == {"all"}
-    assert set(sel["populations"]) == {"all"} and "mapq_sensitivity" not in sel
+    assert set(sel["populations"]) == {"all"} and "mapq_sensitivity" not in sel and "label_purity_mapq_min" not in sel
     assert sel["molecules"]["1417"]["in_cell"] is None
 
 

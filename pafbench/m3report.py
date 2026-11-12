@@ -363,7 +363,10 @@ def section_0(base, reg):
             burden_span = reg.num(float(r.share_all), source={"file": "burden/templated_share.parquet",
                                                               "column": "share_all", "filter": "stratum=all",
                                                               "function": "section_0"}, fmt="{:.3f}")
-            paras.append(f'<p>Burden (templated share, all barcodes, {_html.escape(str(r.group))}): {burden_span}.</p>')
+            summary = _json_load(base / "burden" / "summary.json") or {}
+            pop = m2report.POP_NAMES.get(summary.get("population"), "population not recorded")
+            uniq = ", uniquely mapped molecules" if "mapq_min" in summary else ""
+            paras.append(f'<p>Burden (templated share, {pop}{uniq}, {_html.escape(str(r.group))}): {burden_span}.</p>')
     headline_html = m2_block(m2report.headline, base, title="Milestone 2 headline (wrapped)")
     body = "".join(paras) + headline_html
     inputs = [("eval/selection.json", []), ("burden/templated_share.parquet", []),

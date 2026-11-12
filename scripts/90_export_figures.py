@@ -7,12 +7,13 @@ styling when extracted standalone; this script bypasses that failure mode entire
 Figures:
   1. Internal-priming burden by library (stacked bars, 4 libraries, 3 labels).
   2. Internal-priming share by compartment (grouped bars, 4 libraries x region).
+     Figures 1 and 2 count the uniquely mapped molecules of called cells, as stage 18 does.
   4. UMI loss by library and setting (grouped bars, 4 libraries x 3 settings).
 
 Numbering matches the m3_summary artifact (figures 3 and 6 are HTML tables; figure 5 was dropped
 because its intron-share source in per_cell.parquet is empty for this benchmark run).
 
-Dependencies: pandas, matplotlib. Both are in the pafbench environment.
+Dependencies: pandas, matplotlib, pafbench. Run as a module from the repository root.
 """
 import argparse
 from pathlib import Path
@@ -20,12 +21,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from pafbench.truth import uniquely_mapped
+
 BASE = Path("/data/element_runs/polyafilter_bench")
 OUT = BASE / "report" / "figures"
 LIBS = ("1417", "1419", "1179", "BD67")
 LIB_LABELS = {"1417": "1417\nnuclei", "1419": "1419\nnuclei", "1179": "1179\n10x cells", "BD67": "BD67\nFLIGHT-seq"}
 TAGS = ("c300_l10_m1_e", "c250_l7_m1_e", "c200_l10_m2_i")
-TAG_LABELS = {"c300_l10_m1_e": "paper default", "c250_l7_m1_e": "mode-e", "c200_l10_m2_i": "mode-i"}
+TAG_LABELS = {"c300_l10_m1_e": "README example", "c250_l7_m1_e": "mode-e", "c200_l10_m2_i": "mode-i"}
 TAG_COLORS = {"c300_l10_m1_e": "#9ecae1", "c250_l7_m1_e": "#4292c6", "c200_l10_m2_i": "#08519c"}
 LABEL_COLORS = {"templated": "#d62728", "nontemplated": "#2ca02c", "ambiguous": "#999999"}
 LABEL_ORDER = ("templated", "nontemplated", "ambiguous")
@@ -50,8 +53,8 @@ def _despine(ax):
 def figure_1(base, out):
     rows = []
     for lib in LIBS:
-        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet", columns=["label", "in_cell"])
-        d = d[d.in_cell]
+        d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet", columns=["label", "in_cell", "mapq_min"])
+        d = uniquely_mapped(d[d.in_cell])
         c = d.label.value_counts(normalize=True)
         rows.append({"library": lib} | {k: c.get(k, 0) for k in LABEL_ORDER})
     df = pd.DataFrame(rows).set_index("library")
@@ -82,8 +85,8 @@ def figure_2(base, out):
     rows = []
     for lib in LIBS:
         d = pd.read_parquet(base / lib / "truth" / "molecules_labeled.parquet",
-                            columns=["label", "region", "in_cell"])
-        d = d[d.in_cell]
+                            columns=["label", "region", "in_cell", "mapq_min"])
+        d = uniquely_mapped(d[d.in_cell])
         for region in REGIONS:
             sub = d[d.region == region]
             if len(sub) < 100:

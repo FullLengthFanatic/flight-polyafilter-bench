@@ -1,88 +1,94 @@
 # Choosing settings for a new library
 
-Scope: tested on retina organoid 10x 3' v4 (cells and nuclei) and FLIGHT-seq (BD Rhapsody) with GRCh38-2024-A. Treat the recommendations below as a starting point outside that scope, and run the hexamer-purity smoke test (`docs/rationale.md`) before trusting any of it.
+These numbers come from human retina libraries (10x 3' v4 and FLIGHT-seq, GRCh38-2024-A). Outside that scope treat them as a starting point. How the numbers are produced is in [`rationale.md`](rationale.md).
 
-## Decision table
+A setting is written `c<COVLEN>_l<MINSNRLEN>_m<MISM>_<e or i>`:
 
-| Your sample | Chemistry | Starting setting | UMI cost | ARI | Rationale |
+- `COVLEN`: reads up to this many bp upstream of an A stretch are removed. The last `COVLEN` bp of each transcript are protected.
+- `MINSNRLEN`: shortest A stretch that counts.
+- `MISM`: mismatches allowed inside the stretch.
+- `e` searches exons only (polyAfilter's default). `i` searches introns too (`-i`).
+
+## Where to start
+
+| Your library | Start with | Internal priming removed | UMIs lost | Why |
+|---|---|---|---|---|
+| Whole cells, 10x 3', counted without introns | `c200_l10_m2_i` | 32% (1179) | 22% | Beats the exon-only pick on every measure in 1179: more removed, more real molecules kept, fewer UMIs lost. Intronic reads are not in the matrix, so removing them costs nothing. |
+| Whole cells, FLIGHT-seq | `c200_l10_m2_i`, or `c300_l10_m1_e` for a lighter touch | 19% or 8% (BD67) | 17% or 7% | The burden is already less than half that of 10x, so there is less to gain. |
+| Nuclei, counted with introns | `c250_l7_m1_e` | 9% (1417) | 16% | Leaves intronic reads alone. With introns (`c200_l10_m2_i`) the filter removes 44% but takes 55% of the UMIs. |
+| Anything, no time to tune | `c300_l10_m1_e` | 3 to 8% | 5 to 8% | The polyAfilter README example. Almost never removes a real molecule, and removes little internal priming. |
+
+Two things to know before filtering.
+
+**No setting removes most of the internal priming.** Among the 189 grid settings per mode that keep at least 95% of the tail-primed molecules, the most sensitive one removes 44% of the internally primed molecules in nuclei, 48% in 10x cells and 27% in FLIGHT-seq cells. The filter looks for A stretches of a fixed minimum length and removes by genomic position, so it misses priming on interrupted A runs, reads of spliced molecules that sit in an upstream exon (the window does not follow splicing), and anything in the protected last `COVLEN` bp of a transcript.
+
+**In nuclei the choice is uncomfortable.** Intronic reads make up about two thirds of the UMIs of a 10x nucleus, and 94% of the labeled intronic molecules are internally primed. Gene counting in nuclei is built on those reads. The exon-only setting leaves them alone and trims 16% of UMIs for a 9% gain. The intron setting halves the matrix. If the analysis is gene-level counting, weigh whether to filter nuclei at all; if it reads 3' ends as poly(A) sites, filtering is needed and the cost has to be accepted.
+
+## Reading the tables
+
+- **Sens**: share of internally primed (templated) molecules removed.
+- **Spec**: share of tail-primed (non-templated) molecules kept.
+- **UMI cost**: UMIs lost across called cells, as a share of UMIs before filtering.
+- **ARI**: agreement between the clusters before and after filtering (1 means identical clusters), median over 10 seeds and 3 resolutions. It says how much the clusters moved, not whether they improved.
+- **ARI, thinned**: the same after removing the same number of UMIs per cell at random. If the two ARI columns are close, the clusters moved because the cells got shallower, not because of which reads were removed.
+
+The ARI ceiling, from clustering the unfiltered matrix again with another seed, is 0.69 (1417), 0.68 (1419), 0.70 (1179) and 0.89 (BD67).
+
+## The two selected settings
+
+Both come from one rule, fixed before the results: on 1417, the most sensitive setting with specificity of at least 0.95, one per mode. The other libraries are reported without retuning.
+
+### mode-e: `c250_l7_m1_e` (exons only)
+
+| Library | Sens | Spec | UMI cost | ARI | ARI, thinned |
 |---|---|---|---|---|---|
-| Dissociated cells | 10x 3' v4 | `c200_l10_m2_i` (mode-i) | 21.9% on 1179 | 0.63 | Cells read short, filter needs the introns-aware pass to catch internal-priming on short intronic A-stretches. Even if your pipeline does not count introns, the filter decides reads before counting. |
-| Nuclei | 10x 3' v4 | `c250_l7_m1_e` (mode-e) for safety | 15.7% / 15.8% on 1417 / 1419 | 0.39 / 0.48 | Nuclei carry real intronic reads from pre-mRNA that mode-i will eat. Mode-e is the compromise: moderate specificity gain, intronic reads kept. If sensitivity matters more than UMI budget, run mode-i and know the UMI cost (55% on these libraries). |
-| Dissociated cells | FLIGHT-seq (BD Rhapsody) | `c200_l10_m2_i` (mode-i) | 17.5% on BD67 | 0.64 | FLIGHT-seq baseline burden is already lower (27% templated vs 48.5% on 10x cells). The filter still improves clustering. The paper default (`c300_l10_m1_e`) at UMI cost 6.8% is also defensible if you want a lighter touch; ARI 0.69. |
-| No bulk, no long reads | any | mode-e as the safer starting point | see per-row | see per-row | Mode-e is harder to over-correct. If the hexamer-purity ratio comes out below 3x on your library, step up to tighter cutoffs or run the sweep. |
-| Have matched long reads | any | tune `min_after` per prep | n/a | n/a | BD-style FLIGHT-seq FLNC keeps the bead tail in sequence: `min_after=30`. 10x Kinnex FLNC has primer stripped by `isoseq refine`: `min_after=0`. |
+| 1417 (10x nuclei) | 0.093 | 0.956 | 15.7% | 0.39 | 0.41 |
+| 1419 (10x nuclei) | 0.094 | 0.962 | 15.8% | 0.48 | 0.49 |
+| 1179 (10x cells) | 0.164 | 0.975 | 31.7% | 0.60 | 0.61 |
+| BD67 (FLIGHT-seq cells) | 0.193 | 0.968 | 24.0% | 0.65 | 0.65 |
 
-## The two chosen settings, verbatim
+### mode-i: `c200_l10_m2_i` (with introns)
 
-### mode-e: `c250_l7_m1_e`
+| Library | Sens | Spec | UMI cost | ARI | ARI, thinned |
+|---|---|---|---|---|---|
+| 1417 (10x nuclei) | 0.435 | 0.951 | 54.7% | 0.36 | 0.32 |
+| 1419 (10x nuclei) | 0.440 | 0.958 | 55.3% | 0.42 | 0.42 |
+| 1179 (10x cells) | 0.315 | 0.988 | 21.9% | 0.63 | 0.67 |
+| BD67 (FLIGHT-seq cells) | 0.190 | 0.985 | 17.5% | 0.64 | 0.70 |
 
-- `covlen=250`: how far inward from the site the coverage window reaches.
-- `lmax=7`: minimum uninterrupted A-run length flagged for filtering.
-- `mmax=1`: one allowed mismatch inside the A-run.
-- `e`: filter surveys exonic transcript regions only when deciding which read groups to remove (introns excluded from the filter's annotation/coverage scope, `pafbench/flags.py:Setting.introns`). Not a recount switch: the recount runs on the surviving eligible read groups either way.
+The UMI cost flips between nuclei and cells. The nuclei matrices count intronic reads (about two thirds of the UMIs per nucleus), and mode-i removes many of them. The cell matrices count exons only, so the intronic removals are free; and this setting asks for a longer A stretch than mode-e (10 against 7), so on balance it removes fewer exonic reads.
 
-Performance on the four libraries:
+### The README example: `c300_l10_m1_e`
 
-| Library | Sens | Spec | UMI cost | ARI |
-|---|---|---|---|---|
-| 1417 (nuclei) | 0.093 | 0.956 | 15.7% | 0.39 |
-| 1419 (nuclei) | 0.094 | 0.962 | 15.8% | 0.48 |
-| 1179 (cells) | 0.164 | 0.975 | 31.7% | 0.60 |
-| BD67 (cells) | 0.193 | 0.968 | 24.0% | 0.65 |
+| Library | Sens | Spec | UMI cost | ARI | ARI, thinned |
+|---|---|---|---|---|---|
+| 1417 (10x nuclei) | 0.028 | 0.995 | 4.7% | 0.49 | 0.51 |
+| 1419 (10x nuclei) | 0.028 | 0.997 | 4.8% | 0.55 | 0.56 |
+| 1179 (10x cells) | 0.056 | 0.997 | 8.4% | 0.69 | 0.70 |
+| BD67 (FLIGHT-seq cells) | 0.081 | 0.994 | 6.8% | 0.69 | 0.74 |
 
-### mode-i: `c200_l10_m2_i`
+The three FLIGHT-seq nuclei libraries (BD_nuc_211, 213, 215) are in the burden comparison only. Their sensitivity and specificity are in `eval/selection.json` (0.06 and 0.97 to 0.98 at mode-e, 0.19 to 0.20 and 0.99 at mode-i). Their matrices count exonic reads only, at a median of roughly 100 UMIs per nucleus, which is too shallow for the clustering comparison to mean much.
 
-- `covlen=200`: narrower coverage window.
-- `lmax=10`: longer uninterrupted A-run flagged.
-- `mmax=2`: two mismatches allowed.
-- `i`: filter surveys both exonic and intronic transcript regions when deciding which read groups to remove (introns included in the filter's annotation/coverage scope). On nuclei this flags a lot of pre-mRNA read groups that `e` leaves alone. Again not a recount switch.
+## Tuning on your own library
 
-| Library | Sens | Spec | UMI cost | ARI |
-|---|---|---|---|---|
-| 1417 (nuclei) | 0.435 | 0.951 | 54.7% | 0.36 |
-| 1419 (nuclei) | 0.440 | 0.958 | 55.3% | 0.42 |
-| 1179 (cells) | 0.315 | 0.988 | 21.9% | 0.63 |
-| BD67 (cells) | 0.190 | 0.985 | 17.5% | 0.64 |
+The pipeline reads its libraries from `pafbench/config.py`. Add the BAM to `LIBRARIES` and the name to `NUCLEI` or `CELLS`, then:
 
-The nuclei UMI cost in mode-i is the warning. If your pipeline includes introns and your sample is nuclei, mode-i will eat about half the UMI budget. Not necessarily wrong, but it must be a conscious choice.
+1. BD Rhapsody only: convert the BAM to 10x-style tags (stage 01 is the template).
+2. Stages 05, 06 and 07 find the reads with a known priming site, group them into molecules and write the poly(A) signal curve (`hexamer_curve.tsv`). Look at the curve first: the rate should fall from a high level at 0 to 4 A's to a low one at 14 or more.
+3. Stage 12 builds the labeled molecules. Stage 13 flags all 396 settings in one pass.
+4. Stage 17 writes `eval/selection.json` with sensitivity and specificity of every setting. The selection library is set at the top of `scripts/17_evaluate.py` (`SEL_LIB`).
+5. Stages 23 to 26 add UMI cost and ARI for the 14 settings in `config.IMPACT_SETTINGS`.
 
-### The paper default: `c300_l10_m1_e`
+The grid pass took 7 minutes on 1417 (97 M reads) and 23 minutes on 1179 (581 M reads) with 8 workers.
 
-Kept as a sanity row.
+## If the poly(A) signal curve looks wrong
 
-| Library | UMI cost | ARI |
-|---|---|---|
-| 1417 (nuclei) | 4.7% | 0.49 |
-| 1419 (nuclei) | 4.8% | 0.55 |
-| 1179 (cells) | 8.4% | 0.69 |
-| BD67 (cells) | 6.8% | 0.69 |
+A flat curve, or a high rate at 14 or more A's, means the labels cannot be trusted as they are. Causes we know of:
 
-Light-touch filter. If you have no idea where to start and no long reads to tune against, this is a defensible default.
+- **Multi-mapped reads.** In the BD libraries, reads placed at loci where the genome encodes a poly(A) signal followed by A's raise the rate at 14 or more A's (0.50 in BD67 against 0.04 to 0.05 in 10x; 0.06 on uniquely mapped molecules of BD67). `hexamer_curve.tsv` includes them, so compute the curve again on uniquely mapped molecules (`mapq_min == 255` in `truth/molecules_labeled.parquet`). The burden stages leave them out already. Sensitivity and specificity barely move without them (`mapq_sensitivity` in `eval/selection.json`).
+- **An incomplete annotation or a different reference build.** The label is read from the genome, so reads and labels must use the same build.
+- **A library that is not oligo(dT)-primed.** The method does not apply.
 
-## The sweep, if you want to tune
+## If you have long reads
 
-`scripts/13_grid.py` runs a 14-setting grid. On a new library:
-
-1. Preprocess the BAM with `scripts/01_bd67_preprocess.py` (BD) or feed Cell Ranger output directly (10x).
-2. Run stages 11 to 15 to label molecules and classify cells.
-3. Run `scripts/23_read_groups.py` and `scripts/24_recount.py` for every grid setting.
-4. Run `scripts/26_impact.py` to get UMI cost and ARI per setting per population.
-5. Read `impact/summary.json` and pick the setting that keeps specificity above 0.95 and ARI within one point of the ceiling at the lowest UMI cost.
-
-Reasonable budget per library: about 90 min of wall-clock on 12 cores for the four libraries we tested; your mileage varies by read depth.
-
-## When the hexamer-purity ratio fails
-
-If stage 16 reports `ratio_8_4 < 3` on your library at the 8/4 cutoff, something is off. Either:
-- The reference annotation is missing a lot of real 3' ends and real sites look templated.
-- The library prep is non-standard (not oligo-dT) and the whole label system does not apply.
-- The read depth is too low for a stable per-site A-count.
-
-Fix the first by using a current annotation (GRCh38 2024-A or newer). The second kills polyAfilter entirely; use something else or do not filter. The third asks for more reads or site pooling.
-
-## When long reads disagree with short reads
-
-In our data, cross-prep agreement between BD67 long-read and 1179 short-read (same week-26 cell pool) is 99.4% pooled, and cross-platform agreement between a week-29 10x Kinnex 8-fold run (10x_FL) and 1179 short-read is 99.5% pooled. If you see sub-99% agreement, it is usually one of:
-- Long-read primer-trimming settings. BD67 FLNC retains the bead tail; 10x Kinnex FLNC strips it. The `min_after` parameter must match.
-- Reference build mismatch. The 20 nt downstream window is reference-dependent.
-- Alignment to a different transcriptome (SIRV-only, pre-release GTF). Keep the long reads and short reads on the same reference.
+Stage 16 reads priming sites from PacBio FLNC reads and compares them with the short-read molecules. Set `MIN_AFTER` in `config.py` to match how the reads were processed: BD FLIGHT-seq FLNC reads keep the bead sequence after the poly(A) (`MIN_AFTER = 30`), 10x Kinnex FLNC reads have it removed by `isoseq refine` (`MIN_AFTER = 0`). In our data 87 to 95% of the 1179 molecules have a long-read site within 10 nt, against 6 to 17% for sites moved 1 kb upstream.
