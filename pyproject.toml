@@ -1,6 +1,6 @@
 [project]
 name = "pafbench"
-version = "0.1.0"
+version = "1.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "pysam", "numpy", "numba", "pandas", "pyarrow", "gffutils", "biopython", "dill", "pytest",
