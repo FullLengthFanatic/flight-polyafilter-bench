@@ -14,6 +14,9 @@ identifiers:
     value: "10.5281/zenodo.23562408"
     description: "Zenodo concept DOI (resolves to the latest version)"
   - type: doi
+    value: "10.5281/zenodo.24165040"
+    description: "Zenodo archive of v1.1.0"
+  - type: doi
     value: "10.5281/zenodo.23735161"
     description: "Zenodo archive of v1.0.2"
   - type: doi
@@ -46,6 +49,13 @@ references:
     volume: 4
     doi: "10.1093/nargab/lqac035"
   - type: software
+    authors:
+      - family-names: Svoboda
+        given-names: Marek
+      - family-names: Frost
+        given-names: H. Robert
+      - family-names: Bosco
+        given-names: Giovanni
     title: "polyAfilter"
     repository-code: "https://github.com/MarekSvob/polyAfilter"
     notes: "Vendored at commit 5ce0098"
