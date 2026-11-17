@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pysam
 
-from .config import LABEL_CUTOFFS
+from .config import LABEL_CUTOFFS, LONG_READ_MIN_MAPQ, LONG_READ_RUN_MIN, LONG_READ_RUN_TOLERANCE
 from .genes import genes_at
 from .labels import label_molecules
 from .regions import regions_at
@@ -68,7 +68,7 @@ def inward_pairs(a):
             r += step * n
 
 
-def terminal_a_run(a, tolerance=1):
+def terminal_a_run(a, tolerance=LONG_READ_RUN_TOLERANCE):
     """Terminal A run around the aligned 3' end in transcript sense, with up to `tolerance` interior non-A bases.
 
     Grows rightwards over the 3' clip, then leftwards over the aligned bases, from one shared non-A budget; a non-A is
@@ -112,11 +112,11 @@ def terminal_a_run(a, tolerance=1):
     return site, aligned_a, clip[:j].count("A"), n - j
 
 
-def accept_long_read(aligned_a, clip_a, after_len, min_run=10, min_after=30):
+def accept_long_read(aligned_a, clip_a, after_len, min_run=LONG_READ_RUN_MIN, min_after=30):
     return aligned_a + clip_a >= min_run and after_len >= min_after
 
 
-def read_outcome(aligned_a, clip_a, after_len, min_run=10, min_after=30):
+def read_outcome(aligned_a, clip_a, after_len, min_run=LONG_READ_RUN_MIN, min_after=30):
     """accepted, short_run (run too short), short_after (too little clip after the run) or both."""
     if aligned_a + clip_a >= min_run:
         return "accepted" if after_len >= min_after else "short_after"
@@ -127,7 +127,7 @@ def _digest(name):
     return int.from_bytes(hashlib.blake2b(name.encode(), digest_size=8).digest(), "little")
 
 
-def scan_long_reads(bam_path, ref, min_mapq=20, min_after=30):
+def scan_long_reads(bam_path, ref, min_mapq=LONG_READ_MIN_MAPQ, min_after=30):
     """Terminal A run (tolerance 1) of every primary record with MAPQ >= min_mapq on one reference.
 
     Returns the unique sites (strand, site, n_reads, n_accepted), record and read outcome counts, and a 64-bit

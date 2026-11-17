@@ -33,6 +33,13 @@ SIRV_FASTA = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta_20250402.fasta"
 SIRV_GTF = SIRV_DIR / "SIRV_ERCC_longSIRV_multi-fasta-annotation_20250402.gtf"
 ERCC_CONC_URL = "https://assets.thermofisher.com/TFS-Assets/LSG/manuals/cms_095046.txt"
 LABEL_CUTOFFS = {"templated_min": 8, "nontemplated_max": 4}
+# The rest of the internal-priming definition; pafbench.definition exports it to docs/definition.json (stage 91).
+SITE_WINDOW = 20  # nt of genome after the site, transcript sense, whose A's give the label
+SHORT_READ_CLIP_MIN = 20  # pa tag: A's in the 3' soft clip (stages 01 and 01a, Cell Ranger convention)
+SHORT_READ_CLIP_PURITY = 0.9  # pa tag: share of A's in that clip
+LONG_READ_RUN_MIN = 10  # A's in the terminal run of an accepted long read
+LONG_READ_RUN_TOLERANCE = 1  # non-A bases allowed inside that run
+LONG_READ_MIN_MAPQ = 20
 A_BANDS = (("0-4", 0, 4), ("5-7", 5, 7), ("8-9", 8, 9), ("10-13", 10, 13), ("14-20", 14, 20))
 MEMBER_CAP = 1000
 SENS_CAPS = (500, 1000, 2000)

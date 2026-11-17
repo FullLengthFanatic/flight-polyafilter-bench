@@ -95,6 +95,7 @@ These are examples, not the full run order. Every stage, in order, is in [`docs/
 | File | What it answers |
 |---|---|
 | [`docs/rationale.md`](docs/rationale.md) | How the benchmark works and why each choice was made |
+| [`docs/definition.md`](docs/definition.md), [`docs/definition.json`](docs/definition.json) | The internal-priming definition (site, label, rate) as values that tecap and scNoiseMeter copy |
 | [`docs/parameter_choices.md`](docs/parameter_choices.md) | Which setting to start from on your own library, with the numbers per library |
 | [`docs/stages.md`](docs/stages.md) | Every pipeline stage in run order |
 | [`data/README.md`](data/README.md) | Libraries, references, file layout, run times |

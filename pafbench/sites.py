@@ -1,3 +1,4 @@
+from .config import SITE_WINDOW
 from .genes import genes_at
 
 COMP = str.maketrans("ACGTNacgtn", "TGCANtgcan")
@@ -15,7 +16,7 @@ def last_aligned_base(a):
     return a.reference_start if a.is_reverse else a.reference_end - 1
 
 
-def sense_context(fa, ref, site, is_reverse, down=20, up=40):
+def sense_context(fa, ref, site, is_reverse, down=SITE_WINDOW, up=40):
     """Genome after (down) and before (up) the site, transcript sense, uppercase."""
     L = fa.get_reference_length(ref)
     if is_reverse:
@@ -27,7 +28,7 @@ def sense_context(fa, ref, site, is_reverse, down=20, up=40):
     return d, u
 
 
-def context_from_seq(seq, site, is_reverse, down=20, up=40):
+def context_from_seq(seq, site, is_reverse, down=SITE_WINDOW, up=40):
     """sense_context on a preloaded uppercase chromosome sequence (seq = fa.fetch(ref).upper())."""
     if is_reverse:
         return seq[max(0, site - down):site].translate(COMP)[::-1], seq[site:site + up].translate(COMP)[::-1]

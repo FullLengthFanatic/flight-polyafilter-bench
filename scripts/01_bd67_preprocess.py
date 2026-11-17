@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pysam
 
+from pafbench.config import SHORT_READ_CLIP_MIN, SHORT_READ_CLIP_PURITY
+
 IN_BAM = Path("/data/element_runs/BD67/short_read/BD067_Lib1189_Bioproduct.bam")
 OUT_BAM = Path("/data/element_runs/BD67/short_read/BD067_as10x.bam")
 FEATURES_TSV = Path("/data/element_runs/BD67/short_read/filtered_feature_bc_matrix/features.tsv.gz")
@@ -64,7 +66,7 @@ def load_sym_to_ensg(features_tsv_gz):
     return out
 
 
-def polya_softclip_length(a, min_len=20):
+def polya_softclip_length(a, min_len=SHORT_READ_CLIP_MIN):
     """Length of the soft-clipped polyA at the ORIGINAL read 3' end, or 0 when below threshold.
 
     Cell Ranger STAR emits pa:i:N for N>=20 soft-clipped A's trimmed from the read's 3' end before
@@ -84,7 +86,7 @@ def polya_softclip_length(a, min_len=20):
             return 0
         clip = seq[:n]
         t_count = clip.count("T")
-        return t_count if t_count >= min_len and t_count >= 0.9 * n else 0
+        return t_count if t_count >= min_len and t_count >= SHORT_READ_CLIP_PURITY * n else 0
     if cig[-1][0] != 4:
         return 0
     n = cig[-1][1]
@@ -92,7 +94,7 @@ def polya_softclip_length(a, min_len=20):
         return 0
     clip = seq[-n:]
     a_count = clip.count("A")
-    return a_count if a_count >= min_len and a_count >= 0.9 * n else 0
+    return a_count if a_count >= min_len and a_count >= SHORT_READ_CLIP_PURITY * n else 0
 
 
 def process(in_bam=IN_BAM, out_bam=OUT_BAM, features_tsv=FEATURES_TSV, threads=4):

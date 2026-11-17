@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pysam
 
+from pafbench.config import SHORT_READ_CLIP_MIN, SHORT_READ_CLIP_PURITY
+
 POOL = Path("/data/element_runs/Pool278_FLIGHTseq_NucleiHsRetinaDonation")
 BD_DIR = POOL / "bd_pipeline"
 OUT_DIR = POOL / "merged"
@@ -74,7 +76,7 @@ def load_sym_to_ensg_from_mex_zip(mex_zip):
     return out
 
 
-def polya_softclip_length(a, min_len=20):
+def polya_softclip_length(a, min_len=SHORT_READ_CLIP_MIN):
     """Mirror of `01_bd67_preprocess.polya_softclip_length`."""
     cig = a.cigartuples
     if not cig:
@@ -88,7 +90,7 @@ def polya_softclip_length(a, min_len=20):
             return 0
         clip = seq[:n]
         t_count = clip.count("T")
-        return t_count if t_count >= min_len and t_count >= 0.9 * n else 0
+        return t_count if t_count >= min_len and t_count >= SHORT_READ_CLIP_PURITY * n else 0
     if cig[-1][0] != 4:
         return 0
     n = cig[-1][1]
@@ -96,7 +98,7 @@ def polya_softclip_length(a, min_len=20):
         return 0
     clip = seq[-n:]
     a_count = clip.count("A")
-    return a_count if a_count >= min_len and a_count >= 0.9 * n else 0
+    return a_count if a_count >= min_len and a_count >= SHORT_READ_CLIP_PURITY * n else 0
 
 
 def retag_one(in_bam, out_bam, rg_id, sm, sym_to_ensg, threads=4):
