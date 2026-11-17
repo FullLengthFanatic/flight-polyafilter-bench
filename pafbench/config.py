@@ -6,6 +6,7 @@ from .grid import published
 REPO = Path(__file__).resolve().parents[1]
 VENDOR_POLYAFILTER = REPO / "vendor" / "polyAfilter"
 POLYAFILTER_COMMIT = "5ce0098"
+TECAP_VERSION = "0.4.0"  # `tecap --version` of the tecap on PATH that stage 30 runs (tests/test_setup.py)
 REF_DIR = Path("/home/simone.picelli/Documents/Genome_ref/refdata-gex-GRCh38-2024-A")
 FASTA = REF_DIR / "fasta" / "genome.fa"
 GTF = REF_DIR / "genes" / "genes.gtf"

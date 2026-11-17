@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 
 import pandas as pd
@@ -70,16 +71,23 @@ def test_label_buckets_sum_the_sites_of_a_label(tmp_path):
 def test_run_classify_calls_tecap_with_the_options_of_the_design(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+    monkeypatch.setattr(tecap, "tecap_path", lambda: "/x/tecap")
     out = tmp_path / "BD67" / "tecap" / "out"
     got = run_classify(tmp_path / "accepted.bam", "BD67", out, 6)
     assert got == out / "BD67_terminal_exon.json" and out.is_dir()
     (cmd, kw), = calls
-    assert cmd == [str(tecap.TECAP), "classify", "--bam", str(tmp_path / "accepted.bam"), "--sample", "BD67", "--platform",
-                   "cdna-pacbio", "--gtf", str(GTF), "--polya-sites", str(POLYASITE), "--cell-barcode-tag", "XK",
-                   "--per-gene-table", "--threads", "6", "--out-dir", str(out)]
-    assert str(tecap.TECAP) == "/home/simone.picelli/.local/bin/tecap"
+    assert cmd[0] == "/x/tecap"
+    assert cmd[1:] == ["classify", "--bam", str(tmp_path / "accepted.bam"), "--sample", "BD67", "--platform",
+                       "cdna-pacbio", "--gtf", str(GTF), "--polya-sites", str(POLYASITE), "--cell-barcode-tag", "XK",
+                       "--per-gene-table", "--threads", "6", "--out-dir", str(out)]
     # tecap's own output goes to a log next to its folder, a failure stops the stage
     assert kw["check"] is True and kw["stdout"].name == str(out.parent / "classify.log") and kw["stderr"] == subprocess.STDOUT
+
+
+def test_tecap_path_raises_when_tecap_is_not_on_path(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(FileNotFoundError, match="PATH"):
+        tecap.tecap_path()
 
 
 def _parts(tmp_path):

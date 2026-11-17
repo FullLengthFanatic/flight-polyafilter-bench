@@ -1,8 +1,12 @@
+import shutil
 import subprocess
 import tomllib
 from importlib.metadata import version
 
-from pafbench.config import FASTA, GTF, LIBRARIES, POLYAFILTER_COMMIT, REPO, VENDOR_POLYAFILTER
+import pytest
+
+from pafbench.config import FASTA, GTF, LIBRARIES, POLYAFILTER_COMMIT, REPO, TECAP_VERSION, VENDOR_POLYAFILTER
+from pafbench.tecap import tecap_path
 from pafbench.vendor import polyafilter_modules
 
 
@@ -12,6 +16,13 @@ def test_vendor_commit():
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head == POLYAFILTER_COMMIT
+
+
+def test_tecap_version():
+    if shutil.which("tecap") is None:
+        pytest.skip("tecap is not on PATH (stage 30 is optional, --no-tecap)")
+    out = subprocess.run([tecap_path(), "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    assert out == f"tecap {TECAP_VERSION}"
 
 
 def test_vendor_imports():

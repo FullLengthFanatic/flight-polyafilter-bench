@@ -1,7 +1,8 @@
 """Stage 30, step 10 of design 3.8: tecap buckets per long-read site. The accepted reads go to one BAM with their site key in
 a tag, `tecap classify` breaks its buckets down by that tag, and its per-tag counts become tables per site and per label.
 
-tecap 0.4.0 (`tecap --version`). `tecap classify --help` (copy in design_m3_draft/design/checks/tecap_help.txt):
+tecap is the one on PATH (tecap_path), at config.TECAP_VERSION (`tecap --version`, checked by tests/test_setup.py).
+`tecap classify --help` (copy in design_m3_draft/design/checks/tecap_help.txt):
 "--cell-barcode-tag CELL_BARCODE_TAG  Per-cell breakdown via this BAM tag (e.g. CB). Opt-in; no-ops with a warning if the tag
 is absent." Its source, src/tecap/bam.py: per_cell_summary returns the "Compact per-cell dict: {cb: {counts: {cat: n}, total:
 N, fractions: ...}}", which cli.py writes as per_cell_metrics of <sample>_terminal_exon.json. A read is counted under its tag
@@ -9,6 +10,7 @@ value once it has a bucket (lines 200 to 203); a read without a CIGAR N, or that
 (lines 149 to 154 and 167 to 168).
 """
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -19,7 +21,6 @@ import pysam
 
 from .config import GTF, POLYASITE
 
-TECAP = Path("/home/simone.picelli/.local/bin/tecap")
 # Tag of ours for the site key. Our observation, 2026-10-13: the first 100,000 records of the BD67 BAM carry ML MM NM RG SA
 # bc bl bq bt bx cx di dl dr ds ec ls mg np qe ql qs qt rm rq sn we ws zm and no tag that starts with X.
 TAG = "XK"
@@ -28,6 +29,14 @@ _KEY = ["ref", "strand", "site"]
 
 def site_key(ref, minus, site):
     return f"{ref}:{'-' if minus else '+'}:{site}"
+
+
+def tecap_path():
+    """The path of the tecap on PATH. FileNotFoundError when there is none."""
+    path = shutil.which("tecap")
+    if path is None:
+        raise FileNotFoundError("tecap is not on PATH (stage 30 runs without it under --no-tecap)")
+    return path
 
 
 def merge_parts(parts, out):
@@ -48,7 +57,7 @@ def run_classify(bam, sample, out_dir, threads):
     output goes to classify.log next to out_dir. Returns the path of <sample>_terminal_exon.json."""
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir.parent / "classify.log", "w") as log:
-        subprocess.run([str(TECAP), "classify", "--bam", str(bam), "--sample", sample, "--platform", "cdna-pacbio",
+        subprocess.run([tecap_path(), "classify", "--bam", str(bam), "--sample", sample, "--platform", "cdna-pacbio",
                         "--gtf", str(GTF), "--polya-sites", str(POLYASITE), "--cell-barcode-tag", TAG, "--per-gene-table",
                         "--threads", str(threads), "--out-dir", str(out_dir)], check=True, stdout=log, stderr=subprocess.STDOUT)
     return out_dir / f"{sample}_terminal_exon.json"
