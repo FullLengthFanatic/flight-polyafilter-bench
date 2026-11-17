@@ -89,6 +89,13 @@ def _m3_inputs(base):
                   "site_b": [100.0, np.nan, 300.0],
                   "label": ["templated", "templated", "templated"]}).to_parquet(
         base / "burden" / "matched_sites.parquet", index=False)
+
+    # section 22: burden/conventional_rule.parquet and .json (stage 29b)
+    conv = pd.DataFrame({"lib": list(LIBS), "n": 1000, "n_conventional": 300, "share": 0.3, "share_all_8_4": 0.45})
+    conv.to_parquet(base / "burden" / "conventional_rule.parquet", index=False)
+    (base / "burden" / "conventional_rule.json").write_text(json.dumps(
+        {"rule": {"window": 20, "run_min": 6, "count_min": 12}, "population": "cells", "mapq_min": 255,
+         "libraries": {r.pop("lib"): r for r in conv.to_dict("records")}}))
     return base
 
 
@@ -121,11 +128,11 @@ def test_build_on_synthetic(base, tmp_path):
     paths = build(base, out)
     assert paths["html"].exists() and paths["numbers"].exists()
     text = paths["html"].read_text()
-    # every section 0..20 is rendered
-    for i in range(21):
+    # every section 0..22 is rendered
+    for i in range(23):
         assert f'id="section-{i}"' in text, f"section {i} missing"
-    # sections 2, 6, 9, 11..16 render the populated branch (not the _not_run paragraph) on the extended fixture
-    for i in (2, 6, 9, 11, 12, 13, 14, 15, 16):
+    # sections 2, 6, 9, 11..16 and 22 render the populated branch (not the _not_run paragraph) on the extended fixture
+    for i in (2, 6, 9, 11, 12, 13, 14, 15, 16, 22):
         body = _section_body(text, i)
         assert "not run (missing" not in body, f"section {i} still rendered _not_run paragraph on the m3 fixture"
         assert "<table>" in body or 'class="plotly"' in body, f"section {i} rendered neither a table nor a figure"
@@ -146,7 +153,7 @@ def test_build_on_empty_base(tmp_path):
     out = tmp_path / "out"
     paths = build(base, out)
     text = paths["html"].read_text()
-    for i in range(21):
+    for i in range(23):
         assert f'id="section-{i}"' in text
     assert text.count("not run (missing") >= 15
     # the digit test still passes
@@ -208,7 +215,17 @@ def test_registry_entries_name_stage_and_function(base, tmp_path):
         assert e["id"].startswith("n_")
 
 
-# every m3 section (2..18) with a missing-input branch, the files whose deletion triggers it, and extra files to delete
+def test_section_22_registers_every_value_of_the_conventional_rule_table(base):
+    reg = Registry()
+    html = m3report.section_22(base, reg)
+    entries = reg.dump()
+    assert len(entries) == 3 * len(LIBS) and html.count("data-num=") == len(entries)
+    assert {e["source"]["file"] for e in entries} == {"burden/conventional_rule.parquet"}
+    assert {e["source"]["column"] for e in entries} == {"n", "share", "share_all_8_4"}
+    assert [e["formatted"] for e in entries[:3]] == ["1,000", "0.300", "0.450"]
+
+
+# every m3 section (2..18 and 22) with a missing-input branch, the files whose deletion triggers it, and extra files to delete
 # that are not printed in the missing list (section 10 only).
 _MISSING_CASES = [
     (2,  [f"{lib}/outs/metrics_summary.csv" for lib in LIBS], []),
@@ -229,13 +246,14 @@ _MISSING_CASES = [
     (16, ["burden/matched_sites.parquet"], []),
     (17, [f"{lib}/long_read_acceptance.json" for lib in LONG_READS], []),
     (18, ["validation/exact_match_m2.json"], []),
+    (22, ["burden/conventional_rule.parquet"], []),
 ]
 
 
 @pytest.mark.parametrize("section_num,missing_rels,extras", _MISSING_CASES,
                          ids=[f"section_{c[0]}" for c in _MISSING_CASES])
 def test_section_missing_input_prints_not_run(tmp_path, section_num, missing_rels, extras):
-    """For every m3 section 2..18, remove its input(s) and assert 'not run (missing <rel paths>)' with the exact
+    """For every m3 section 2..18 and 22, remove its input(s) and assert 'not run (missing <rel paths>)' with the exact
     relative paths in the section's own body."""
     base = _full_m3_base(tmp_path)
     for rel in list(missing_rels) + list(extras):

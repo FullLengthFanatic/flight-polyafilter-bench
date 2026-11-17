@@ -60,6 +60,7 @@ Input paths are in `pafbench/config.py`. Outputs go under `config.OUT`, one fold
 | 28 | `28_selection_bias.py` | once (all libraries by default) | Compares labeled molecules with all counted molecules |
 | 29 | `29_purity_by_region.py` | once | Templated share corrected for label purity, overall and by region |
 | 29a | `29a_interaction.py` | once | Chemistry by material model on the seven libraries |
+| 29b | `29b_conventional_rule.py` | once | Internal-priming share under the conventional rule (6 or more consecutive adenines, or 12 or more adenines, in the 20 nt after the site), beside the templated share of the same molecules |
 | 30 | `30_long_read_context.py` | `--libs` | Where long-read 3' ends fall in the annotation, how many short-read sites they confirm (with a shifted-site null), and tecap classes |
 | 31 | `31_matched_sites.py` | once | Priming sites shared between 10x nuclei and 10x cells |
 | 31b | `31b_matched_sites_flightpair.py` | once | The same for FLIGHT-seq nuclei and FLIGHT-seq cells |
@@ -67,7 +68,7 @@ Input paths are in `pafbench/config.py`. Outputs go under `config.OUT`, one fold
 | 33 | `33_rerun.py` | optional | Reruns Cell Ranger on one filtered BAM and compares it with the recount |
 | 34 | `34_m3_report.py` | once | Writes the full report (`report/m3_report.html`) and `numbers.json` |
 
-The burden stages (18, 29, 29a, 31, 31b) and the figures count only molecules whose poly(A) reads map uniquely (`mapq_min` 255 in `truth/molecules_labeled.parquet`). The accuracy and selection stages (17, 27, 28) use all labeled molecules; stage 17 also reports the metrics without the multi-mapped ones (`mapq_sensitivity`).
+The burden stages (18, 29, 29a, 29b, 31, 31b) and the figures count only molecules whose poly(A) reads map uniquely (`mapq_min` 255 in `truth/molecules_labeled.parquet`). The accuracy and selection stages (17, 27, 28) use all labeled molecules; stage 17 also reports the metrics without the multi-mapped ones (`mapq_sensitivity`).
 
 ## Figures
 

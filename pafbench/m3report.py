@@ -22,7 +22,8 @@ import pandas as pd
 from . import m2report
 from .config import (A_BANDS, BD_NUC, BIAS_POINTS, CELLS, CELLS_TUNED_SETTINGS, CHOSEN_SETTINGS, CLASS_MARGIN, CLUSTER,
                      IMPACT_SETTINGS, JACCARD_DISSOLVED, JACCARD_STABLE, LABEL_CUTOFFS, LIBRARIES, LONG_READS, MEMBER_CAP,
-                     NUCLEI, SITE_TOL)
+                     NUCLEI, SITE_TOL, SITE_WINDOW)
+from .conventional import COUNT_MIN, RUN_MIN
 from .flags import setting_tag
 from .m2report import LIBS
 
@@ -32,8 +33,9 @@ CDN_PLOTLY = "https://cdnjs.cloudflare.com/ajax/libs/plotly.js/3.0.1/plotly.min.
 WRAPPED_M2 = tuple(f.__name__ for f in m2report.SECTIONS) + ("headline",)
 
 # numbers that may appear in prose without a registry span. Setting constants, the cut-offs, the Jaccard thresholds, the
-# library tags, the A bands, the member cap, the bias threshold. The test tokenises on `\d[\d.,/]*` and compares against
-# this set; a stray number that is not here and not inside a registry span raises the digit test.
+# library tags, the A bands, the member cap, the bias threshold, the conventional rule (section 22). The test tokenises
+# on `\d[\d.,/]*` and compares against this set; a stray number that is not here and not inside a registry span raises the
+# digit test.
 _ALLOW_NUMBERS = frozenset({
     *LIBS, *LONG_READS, "BD67", *BD_NUC, "flight_nuclei",
     str(LABEL_CUTOFFS["templated_min"]), str(LABEL_CUTOFFS["nontemplated_max"]),
@@ -43,6 +45,7 @@ _ALLOW_NUMBERS = frozenset({
     str(BIAS_POINTS), str(CLASS_MARGIN),
     str(JACCARD_DISSOLVED), str(JACCARD_STABLE),
     *(b for b, _, _ in A_BANDS),
+    str(RUN_MIN), str(COUNT_MIN), str(SITE_WINDOW),
 })
 
 
@@ -968,9 +971,34 @@ def section_21(base, reg):
     return _section(21, "Panel F: chemistry by material interaction", body, [("burden/interaction.json", [])])
 
 
+def section_22(base, reg):
+    """Internal priming under the conventional rule (stage 29b): per library the molecules, the share the conventional rule
+    flags and the templated share under the 8/4 labels of the same molecules. Reads burden/conventional_rule.parquet."""
+    base = Path(base)
+    title = "Internal priming under the conventional rule"
+    p = base / "burden" / "conventional_rule.parquet"
+    if not p.exists():
+        return _not_run_section(22, title, base, [p])
+    rows = []
+    for r in pd.read_parquet(p).itertuples():
+        def num(value, column, fmt):
+            return reg.num(value, source={"file": "burden/conventional_rule.parquet", "column": column,
+                                          "filter": f"lib={r.lib}", "function": "section_22"}, fmt=fmt)
+        rows.append([r.lib, num(int(r.n), "n", "{:,}"), num(float(r.share), "share", "{:.3f}"),
+                     num(float(r.share_all_8_4), "share_all_8_4", "{:.3f}")])
+    body = (f'<p>Share of the molecules that the conventional rule calls internally primed: {RUN_MIN} or more consecutive '
+            f'adenines anywhere in the {SITE_WINDOW} nt window downstream of the site, or {COUNT_MIN} or more adenines in '
+            f'that window. The rule is binary and has no ambiguous class. The molecules are those of the burden table '
+            f'(uniquely mapped, called cells), every one of them in the denominator; the {LABEL_CUTOFFS["templated_min"]}/'
+            f'{LABEL_CUTOFFS["nontemplated_max"]} share is their templated share (<code>share_all</code>).</p>'
+            + _html_table(["Library", "n", "Conventional share",
+                           f'{LABEL_CUTOFFS["templated_min"]}/{LABEL_CUTOFFS["nontemplated_max"]} share'], rows))
+    return _section(22, title, body, [("burden/conventional_rule.parquet", ["lib", "n", "share", "share_all_8_4"])])
+
+
 SECTIONS = (section_0, section_1, section_2, section_3, section_4, section_5, section_6, section_7, section_8, section_9,
             section_10, section_11, section_12, section_13, section_14, section_15, section_16, section_17, section_18,
-            section_19, section_20, section_21)
+            section_19, section_20, section_21, section_22)
 
 
 # ---------------------------------------------------------------------------------------------- top-level build
