@@ -14,7 +14,7 @@ import pandas as pd
 import pysam
 
 from .bd67 import accept_long_read, compare_labels, nearest_labels, terminal_a_run
-from .config import FIVE_PRIME_TOL, LONG_END_TOL, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT
+from .config import FIVE_PRIME_TOL, LONG_END_TOL, LONG_READ_MIN_MAPQ, MIN_INTRON, NEAR_INTRON_TOL, NULL_SHIFT
 from .tecap import TAG, site_key
 
 # The order is the tie order of the top class of a site: the eight classes with a model, then the three no_model reasons.
@@ -257,7 +257,7 @@ def classify(models, minus, body):
                        len(cands) > 1 and any(_klass(tx[k], p, bool(introns)) != klass for k in cands))
 
 
-def scan_context(bam_path, ref, models, min_mapq=20, min_after=30, tagged=None):
+def scan_context(bam_path, ref, models, min_mapq=LONG_READ_MIN_MAPQ, min_after=30, tagged=None):
     """Class and flags of every accepted read of one reference (READ_COLUMNS, in BAM order), and the record counts.
 
     The reads and their sites are those of stage 16 (bd67.scan_long_reads): primary records with MAPQ >= min_mapq whose

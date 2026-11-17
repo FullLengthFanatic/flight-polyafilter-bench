@@ -69,7 +69,7 @@ def spike_pa_row(a, fa, segments):
     aligned A's included), since spike-in reads keep their poly(A); context, a20, hexamer and genes (at the last cDNA
     base: site - 1 on plus, site on minus) follow that site."""
     row = dict(zip(PA_COLUMNS, pa_row(a, fa, segments)))
-    site = terminal_a_run(a, tolerance=1)[0]
+    site = terminal_a_run(a)[0]
     down, up = sense_context(fa, a.reference_name, site, a.is_reverse)
     last = site if a.is_reverse else site - 1
     row.update(site=site, down20=down, up40=up, a20=down.count("A"), hexamer=has_hexamer(up),
