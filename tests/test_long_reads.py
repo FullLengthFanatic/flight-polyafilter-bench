@@ -428,6 +428,7 @@ def stage30_inputs(tmp_path, monkeypatch):
     monkeypatch.setattr(stage, "LONG_READS", {"BD67": bam, "10x_FL": bam})
     monkeypatch.setattr(stage, "MIN_AFTER", {"BD67": 30, "10x_FL": 30})
     monkeypatch.setattr(stage, "GTF", gtf)
+    monkeypatch.setattr(stage, "check_version", lambda: "/x/tecap")
     monkeypatch.setattr(tecap, "run_classify", _fake_tecap)
     return stage, base, s16
 
@@ -581,6 +582,20 @@ def test_stage30_without_tecap_and_one_library(stage30_inputs, tmp_path, monkeyp
                                                                 "sites_no_model.parquet"]
     assert "tecap" not in json.loads((out / "BD67" / "isoform_context.json").read_text()) and not (out / "10x_FL").exists()
     assert list(pd.read_parquet(out / "1179" / "truth" / "long_read_context.parquet").columns) == ["mol", "context_BD67"]
+
+
+def test_stage30_checks_the_tecap_version_before_the_scan(stage30_inputs, tmp_path, monkeypatch, capsys):
+    stage, base, _ = stage30_inputs
+    out = tmp_path / "out"
+    # the real check against a tecap on PATH that prints another version
+    monkeypatch.setattr(stage, "check_version", tecap.check_version)
+    monkeypatch.setattr(tecap, "tecap_path", lambda: "/x/tecap")
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="tecap 0.0.0\n"))
+    with pytest.raises(SystemExit, match="/x/tecap prints 'tecap 0.0.0'"):
+        _run30(stage, monkeypatch, capsys, base, out)
+    assert not out.exists()     # stopped before the scan: no part BAM, no table
+    # --no-tecap does not ask for tecap
+    assert list(_run30(stage, monkeypatch, capsys, base, out, "--no-tecap")) == ["BD67", "10x_FL", "seconds"]
 
 
 def test_stage30_writes_the_context_outputs_before_tecap_runs(stage30_inputs, tmp_path, monkeypatch, capsys):

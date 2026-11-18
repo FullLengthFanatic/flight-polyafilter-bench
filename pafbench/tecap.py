@@ -1,13 +1,16 @@
 """Stage 30, step 10 of design 3.8: tecap buckets per long-read site. The accepted reads go to one BAM with their site key in
 a tag, `tecap classify` breaks its buckets down by that tag, and its per-tag counts become tables per site and per label.
 
-tecap is the one on PATH (tecap_path), at config.TECAP_VERSION (`tecap --version`, checked by tests/test_setup.py).
+tecap is the one on PATH (tecap_path), at config.TECAP_VERSION (`tecap --version`, checked by tests/test_setup.py and, before
+stage 30 scans, by check_version).
 `tecap classify --help` (copy in design_m3_draft/design/checks/tecap_help.txt):
 "--cell-barcode-tag CELL_BARCODE_TAG  Per-cell breakdown via this BAM tag (e.g. CB). Opt-in; no-ops with a warning if the tag
 is absent." Its source, src/tecap/bam.py: per_cell_summary returns the "Compact per-cell dict: {cb: {counts: {cat: n}, total:
 N, fractions: ...}}", which cli.py writes as per_cell_metrics of <sample>_terminal_exon.json. A read is counted under its tag
-value once it has a bucket (lines 200 to 203); a read without a CIGAR N, or that overlaps no gene, is skipped before that
-(lines 149 to 154 and 167 to 168).
+value once it has a bucket (0.5.0, lines 210 to 216); a read without a CIGAR N, or that overlaps no gene, is skipped before
+that (lines 156 to 157, 159 to 161 and 174 to 175). With --site-anchor a_run_start (lines 178 to 181) tecap places a read's
+3' end at the start of its terminal adenine run at the gene-strand 3' end, the benchmark's site for a read on its gene's
+strand; a read without such a run keeps the alignment end.
 """
 import json
 import shutil
@@ -19,7 +22,7 @@ import numpy as np
 import pandas as pd
 import pysam
 
-from .config import GTF, POLYASITE
+from .config import GTF, POLYASITE, TECAP_VERSION
 
 # Tag of ours for the site key. Our observation, 2026-10-13: the first 100,000 records of the BD67 BAM carry ML MM NM RG SA
 # bc bl bq bt bx cx di dl dr ds ec ls mg np qe ql qs qt rm rq sn we ws zm and no tag that starts with X.
@@ -36,6 +39,17 @@ def tecap_path():
     path = shutil.which("tecap")
     if path is None:
         raise FileNotFoundError("tecap is not on PATH (stage 30 runs without it under --no-tecap)")
+    return path
+
+
+def check_version():
+    """The path of the tecap on PATH. SystemExit unless its `tecap --version` prints config.TECAP_VERSION; stage 30 calls it
+    before its scan, so that another tecap stops the stage before accepted.bam is rewritten."""
+    path = tecap_path()
+    found = subprocess.run([path, "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    if found != f"tecap {TECAP_VERSION}":
+        raise SystemExit(f"stage 30 runs tecap {TECAP_VERSION}, and {path} prints {found!r}: put tecap {TECAP_VERSION} "
+                         "first on PATH, or run the stage with --no-tecap")
     return path
 
 

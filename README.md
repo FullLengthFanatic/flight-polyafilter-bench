@@ -67,7 +67,7 @@ The last two lines fetch the original polyAfilter at the commit this benchmark w
 
 Use Python 3.11, which `.python-version` pins. The results were produced with it; on 3.12 and later `uv.lock` resolves pandas 3 and seven tests fail on its string dtype.
 
-Stage 30 calls [`tecap`](https://github.com/FullLengthFanatic/tecap). Install it on PATH, or run stage 30 with `--no-tecap`; the rest of the long-read analysis still runs.
+Stage 30 calls [`tecap`](https://github.com/FullLengthFanatic/tecap) 0.5.0, the version `TECAP_VERSION` in `pafbench/config.py` names, and stops at its start when the `tecap` on PATH prints another. Install it on PATH, or run stage 30 with `--no-tecap`; the rest of the long-read analysis still runs.
 
 Inputs are Cell Ranger BAMs (BD Rhapsody BAMs are converted by stages 01 and 01a), the GRCh38-2024-A reference from 10x Genomics and the PolyASite 3.0 atlas. [`data/README.md`](data/README.md) lists the libraries and where each file comes from. Input paths are set in `pafbench/config.py`.
 

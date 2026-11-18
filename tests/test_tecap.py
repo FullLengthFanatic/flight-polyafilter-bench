@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 
@@ -7,7 +8,7 @@ import pysam
 import pytest
 
 from pafbench import tecap
-from pafbench.config import GTF, POLYASITE
+from pafbench.config import GTF, POLYASITE, TECAP_VERSION
 from pafbench.tecap import TAG, classify_library, label_buckets, label_counts, merge_parts, run_classify, site_buckets, site_key
 from tests.synth_long import HDR, long_read
 
@@ -21,7 +22,8 @@ def test_site_key():
 
 def _tecap_json(path, cells):
     """<sample>_terminal_exon.json as tecap 0.4.0 writes it, cut down to the keys around per_cell_metrics (our
-    observation: design_m3_draft/review/v3/lens_stage30_whole/tecap_site_tag_out/BD67_chr21_site_terminal_exon.json)."""
+    observation: design_m3_draft/review/v3/lens_stage30_whole/tecap_site_tag_out/BD67_chr21_site_terminal_exon.json).
+    0.5.0 writes schema 0.2, which adds site_anchor and site_counts and leaves per_cell_metrics as it was."""
     per_cell = {k: {"total": sum(c.values()), "counts": c, "fractions": {b: n / sum(c.values()) for b, n in c.items()}}
                 for k, c in cells.items()}
     total = {}
@@ -88,6 +90,24 @@ def test_tecap_path_raises_when_tecap_is_not_on_path(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(FileNotFoundError, match="PATH"):
         tecap.tecap_path()
+
+
+def test_check_version_stops_unless_tecap_prints_the_pinned_version(monkeypatch):
+    calls, printed = [], ["tecap 0.0.0\n"]
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw))
+        return subprocess.CompletedProcess(cmd, 0, stdout=printed[0])
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(tecap, "tecap_path", lambda: "/x/tecap")
+    with pytest.raises(SystemExit, match=rf"stage 30 runs tecap {re.escape(TECAP_VERSION)}, and /x/tecap prints "
+                                         r"'tecap 0\.0\.0'.*--no-tecap"):
+        tecap.check_version()
+    (cmd, kw), = calls
+    assert cmd == ["/x/tecap", "--version"] and kw["check"] is True and kw["capture_output"] and kw["text"]
+    printed[0] = f"tecap {TECAP_VERSION}\n"
+    assert tecap.check_version() == "/x/tecap"
 
 
 def _parts(tmp_path):

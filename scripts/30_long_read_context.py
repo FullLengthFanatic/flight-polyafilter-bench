@@ -41,7 +41,8 @@ those without a splice and those tecap classified.
 
 Options: --libs, --refs (default: the 23 references of stage 16), --workers (tecap gets as many, at most one per reference:
 `tecap classify --help` says "--threads THREADS  Number of worker processes (contig-level parallelism)."), --base, --out,
---no-tecap (no tagged BAM and no tecap run: the context tables alone).
+--no-tecap (no tagged BAM and no tecap run: the context tables alone). Without --no-tecap the stage first checks that the
+tecap on PATH prints config.TECAP_VERSION (pafbench.tecap.check_version) and stops before the scan when it does not.
 """
 import argparse
 import json
@@ -56,7 +57,7 @@ from pafbench.config import (FIVE_PRIME_TOL, GTF, LONG_END_TOL, LONG_READS, MIN_
 from pafbench.lrcontext import (CONTEXT_COLUMNS, NOVEL_JUNCTION, VERSIONS, attach_stage16, context_tables, intron_sites_off_model,
                                 link_1179, load_models, reduce_sites, scan_context, totals)
 from pafbench.pool import map_forked
-from pafbench.tecap import classify_library
+from pafbench.tecap import check_version, classify_library
 
 REFS = [f"chr{i}" for i in range(1, 23)] + ["chrX"]
 RECORD_KEYS = ("records", "secondary_supplementary", "low_mapq", "used", "accepted", "empty_body")
@@ -85,6 +86,8 @@ def main():
     ap.add_argument("--no-tecap", action="store_true", help="skip the tagged BAM and the tecap run")
     args = ap.parse_args()
     out = args.out or args.base
+    if not args.no_tecap:
+        check_version()
     t0 = time.time()
     size = {}
     for lib in args.libs:
