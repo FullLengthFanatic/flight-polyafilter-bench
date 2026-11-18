@@ -59,7 +59,8 @@ def run_classify(bam, sample, out_dir, threads):
     with open(out_dir.parent / "classify.log", "w") as log:
         subprocess.run([tecap_path(), "classify", "--bam", str(bam), "--sample", sample, "--platform", "cdna-pacbio",
                         "--gtf", str(GTF), "--polya-sites", str(POLYASITE), "--cell-barcode-tag", TAG, "--per-gene-table",
-                        "--threads", str(threads), "--out-dir", str(out_dir)], check=True, stdout=log, stderr=subprocess.STDOUT)
+                        "--site-anchor", "a_run_start", "--threads", str(threads), "--out-dir", str(out_dir)], check=True,
+                       stdout=log, stderr=subprocess.STDOUT)
     return out_dir / f"{sample}_terminal_exon.json"
 
 

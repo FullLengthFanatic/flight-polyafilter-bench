@@ -79,7 +79,7 @@ def test_run_classify_calls_tecap_with_the_options_of_the_design(tmp_path, monke
     assert cmd[0] == "/x/tecap"
     assert cmd[1:] == ["classify", "--bam", str(tmp_path / "accepted.bam"), "--sample", "BD67", "--platform",
                        "cdna-pacbio", "--gtf", str(GTF), "--polya-sites", str(POLYASITE), "--cell-barcode-tag", "XK",
-                       "--per-gene-table", "--threads", "6", "--out-dir", str(out)]
+                       "--per-gene-table", "--site-anchor", "a_run_start", "--threads", "6", "--out-dir", str(out)]
     # tecap's own output goes to a log next to its folder, a failure stops the stage
     assert kw["check"] is True and kw["stdout"].name == str(out.parent / "classify.log") and kw["stderr"] == subprocess.STDOUT
 
