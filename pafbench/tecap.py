@@ -6,11 +6,15 @@ stage 30 scans, by check_version).
 `tecap classify --help` (copy in design_m3_draft/design/checks/tecap_help.txt):
 "--cell-barcode-tag CELL_BARCODE_TAG  Per-cell breakdown via this BAM tag (e.g. CB). Opt-in; no-ops with a warning if the tag
 is absent." Its source, src/tecap/bam.py: per_cell_summary returns the "Compact per-cell dict: {cb: {counts: {cat: n}, total:
-N, fractions: ...}}", which cli.py writes as per_cell_metrics of <sample>_terminal_exon.json. A read is counted under its tag
-value once it has a bucket (0.5.0, lines 210 to 216); a read without a CIGAR N, or that overlaps no gene, is skipped before
-that (lines 156 to 157, 159 to 161 and 174 to 175). With --site-anchor a_run_start (lines 178 to 181) tecap places a read's
-3' end at the start of its terminal adenine run at the gene-strand 3' end, the benchmark's site for a read on its gene's
-strand; a read without such a run keeps the alignment end.
+N, fractions: ...}}", which cli.py writes as per_cell_metrics of <sample>_terminal_exon.json. In 0.5.0 a read is counted
+under its tag value once it has a bucket (_process_chrom); gene_of_read drops a read without a CIGAR N, or that overlaps no
+gene, before that. run_classify passes no --strandedness, so tecap's default auto probes the BAM (probe_strandedness: stranded
+when 80% or more of the first 200,000 reads with a gene are on their best-overlap gene's strand). On stranded input
+choose_gene classifies a read antisense to its best-overlap gene against the best-overlap gene on its own strand
+(antisense_reassigned in the JSON), or skips it when no gene on its strand overlaps it (antisense_skipped); a skipped read is
+in no tag count. With --site-anchor a_run_start (read_site, src/tecap/site.py) tecap places a read's 3' end at the start of
+its terminal adenine run at the 3' end on its gene's strand, the benchmark's site for a read on its gene's strand; a read
+without such a run keeps the alignment end.
 """
 import json
 import shutil
