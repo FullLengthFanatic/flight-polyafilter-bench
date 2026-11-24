@@ -34,7 +34,7 @@ Count the adenines in the 20 nt of reference after the site, on the transcript s
 
 ## Rate
 
-The unit is the molecule (cell barcode, UMI, strand, gene), and the burden counts only uniquely mapped ones: every `pa` read of the molecule at MAPQ 255 (`mapq_min` in `truth/molecules_labeled.parquet`; stages 18, 29, 29a, 31, 31b and the figures). Sensitivity and specificity are scored on all labeled molecules. Long reads enter as primary records with MAPQ 20 or more (`bd67.scan_long_reads`, `lrcontext.scan_context`).
+The unit is the molecule (cell barcode, UMI, strand, gene), and the burden counts only uniquely mapped ones: every `pa` read of the molecule at MAPQ 255 (`mapq_min` in `truth/molecules_labeled.parquet`; stages 18, 29, 29a, 29b, 31, 31b and the figures). Sensitivity and specificity are scored on the templated and non-templated molecules at any MAPQ. Long reads enter as primary records with MAPQ 20 or more (`bd67.scan_long_reads`, `lrcontext.scan_context`).
 
 Two shares, both from `burden.share_table` (stage 18, `burden/templated_share.parquet`):
 
@@ -47,6 +47,6 @@ The corrected share is a benchmark-only quantity. Stage 29 (`evaluate.tail_share
 
 ## Why 8 and 4
 
-On library 1417, all barcodes, the share of sites with a poly(A) signal (AATAAA or ATTAAA) 5 to 35 nt upstream is 0.77 at 0 to 4 adenines, 0.54 / 0.42 / 0.27 at 5 / 6 / 7, 0.18 at 8, 0.06 to 0.08 at 10 to 13 and 0.02 at 18 to 20. The cut-offs sit where the curve has covered a quarter of the distance between 0.77 and 0.02 (`labels.choose_cutoffs`) and were fixed before any filter result was looked at. The full curve is in `docs/rationale.md`.
+On library 1417, all barcodes, the share of sites with a poly(A) signal (AATAAA or ATTAAA) 5 to 35 nt upstream is 0.77 at 0 to 4 adenines, 0.54 / 0.42 / 0.27 at 5 / 6 / 7, 0.18 at 8, 0.06 to 0.08 at 10 to 13 and 0.02 at 18 to 20. The cut-offs sit where the curve comes within a quarter of that distance of either end (`labels.choose_cutoffs`): from 8 adenines on the rate stays at or below 0.208, and up to 4 adenines it stays at or above 0.584. They were fixed before any filter result was looked at. The full curve is in `docs/rationale.md`.
 
 The 14/8 pair in `sites.classify`, `scripts/16_long_read_sites.py:18` and `scripts/08_scope_check.py:17` is the milestone 1 pair, kept for the old outputs; it is not part of this definition.

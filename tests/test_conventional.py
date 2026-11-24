@@ -23,6 +23,8 @@ def test_six_consecutive_anywhere_in_the_window():
 def test_twelve_of_twenty_without_a_run():
     assert conventional_flag(_mol(["AACAACAACAACAACAACAA"])).tolist() == [True]       # 14 A, longest run 2
     assert conventional_flag(_mol(["AACAACAACAACAACCCCCC"])).tolist() == [False]      # 10 A
+    assert conventional_flag(_mol(["AAAAACAAAAACAACCCCCC"])).tolist() == [True]       # 12 A, longest run 5
+    assert conventional_flag(_mol(["AAAAACAAAAACACCCCCCC"])).tolist() == [False]      # 11 A, longest run 5
 
 
 def test_share_uses_all_molecules_as_denominator():

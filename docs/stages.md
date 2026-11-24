@@ -75,6 +75,7 @@ The burden stages (18, 29, 29a, 29b, 31, 31b) and the figures count only molecul
 | Stage | Script | What it does |
 |---|---|---|
 | 90 | `90_export_figures.py` | Supplementary figures (burden by library, burden by region, UMI loss by setting) as PNG, SVG and PDF |
+| 91 | `91_export_definition.py` | Not a figure: writes `docs/definition.json` from `pafbench/config.py` (`pafbench.definition`; see `docs/definition.md`) |
 | 92 | `92_main_text_figure.py` | The two-panel main figure (burden and ARI) |
 
 ## Trying a stage on a subset
