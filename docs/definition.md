@@ -2,6 +2,8 @@
 
 How this benchmark finds a priming site, labels it and turns the labels into a rate. `docs/definition.json` carries the same values for tecap and scNoiseMeter, which copy it verbatim and name the benchmark version it came from (`source`, `version`). `pafbench/definition.py` builds it from `pafbench/config.py`, and stage 91 (`python -m scripts.91_export_definition`) writes it; `tests/test_definition.py` fails while the file and the code disagree.
 
+No test compares the tools' copies with `docs/definition.json`: each tool's `test_constants_equal_the_benchmark_definition` (tecap `tests/test_site.py`, scNoiseMeter `tests/test_priming_site.py`) checks its constants against its own copy. When a release changes any value of the definition, copy `docs/definition.json` to tecap's and scNoiseMeter's `tests/data/definition.json` and bump tecap's `DEFINITION_SOURCE` (`src/tecap/constants.py`) and scNoiseMeter's `PRIMING_DEFINITION_SOURCE` (`scnoisemeter/constants.py`) to that release, as those tests require. A release that changes only `version` leaves the copies as they are: they then differ from `docs/definition.json` in `version` alone, and they and the `definition_source` both tools write keep naming the release whose values they carry.
+
 | `definition.json` | Value | `pafbench/config.py` |
 |---|---|---|
 | `site.short_read.clip_min`, `clip_purity_min` | 20, 0.9 | `SHORT_READ_CLIP_MIN`, `SHORT_READ_CLIP_PURITY` |
