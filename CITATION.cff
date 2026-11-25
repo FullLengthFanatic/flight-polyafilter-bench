@@ -14,6 +14,9 @@ identifiers:
     value: "10.5281/zenodo.23562408"
     description: "Zenodo concept DOI (resolves to the latest version)"
   - type: doi
+    value: "10.5281/zenodo.24532821"
+    description: "Zenodo archive of v1.2.0"
+  - type: doi
     value: "10.5281/zenodo.24165040"
     description: "Zenodo archive of v1.1.0"
   - type: doi
