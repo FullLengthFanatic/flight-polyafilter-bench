@@ -32,6 +32,8 @@ Long reads follow the same convention at the run start. A plus-strand read with 
 
 Count the adenines in the 20 nt of reference after the site, on the transcript strand, as an integer. 8 or more is **templated** (internal priming). 4 or fewer is **non-templated** (tail priming, a real 3' end). 5 to 7 is **ambiguous**. The rule is the same for short and long reads (`labels.label_molecules`). The window is 20 nt because that is the shortest clipped poly(A) that gets a `pa` tag.
 
+When the site lies within 20 nt of a contig end, the benchmark counts the adenines in the bases that remain and labels the site from that count (`sites.sense_context`, `sites.context_from_seq`); in practice that is chrM, GL000220.1 and the ERCC and long-SIRV contigs, whose tail sites get forced calls (`docs/m2_results.md`). tecap and scNoiseMeter give such a site no label: scNoiseMeter does not count it as a read with a site, and tecap counts it as observed in `site_counts` but leaves it out of `n_site` and the label fractions.
+
 ## Rate
 
 The unit is the molecule (cell barcode, UMI, strand, gene), and the burden counts only uniquely mapped ones: every `pa` read of the molecule at MAPQ 255 (`mapq_min` in `truth/molecules_labeled.parquet`; stages 18, 29, 29a, 29b, 31, 31b and the figures). Sensitivity and specificity are scored on the templated and non-templated molecules at any MAPQ. Long reads enter as primary records with MAPQ 20 or more (`bd67.scan_long_reads`, `lrcontext.scan_context`).
