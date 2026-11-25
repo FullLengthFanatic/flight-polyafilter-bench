@@ -1,7 +1,8 @@
-"""Stage 29b: the internal-priming share under the conventional rule (Balázs et al. 2019, SQANTI3), for comparison with the
-8/4 labels. A molecule is flagged when the 20 nt window downstream of its site (down20, transcript sense) holds
-RUN_MIN or more consecutive adenines anywhere, or COUNT_MIN or more adenines in all. This is scNoiseMeter's `either`
-criterion at the benchmark site. The rule is binary: no ambiguous class."""
+"""Stage 29b: the internal-priming share under the conventional rule (Balázs et al. 2019; SQANTI3's default is its
+12-of-20 half, Pardo-Palacios et al. 2024), for comparison with the 8/4 labels. A molecule is flagged when the 20 nt
+window downstream of its site (down20, transcript sense) holds RUN_MIN or more consecutive adenines anywhere, or
+COUNT_MIN or more adenines in all. This is scNoiseMeter's `either` criterion at the benchmark site. The rule is binary:
+no ambiguous class."""
 import numpy as np
 
 RUN_MIN = 6

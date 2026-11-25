@@ -14,7 +14,7 @@ polyAfilter (Svoboda, Frost and Bosco 2022, NAR Genomics and Bioinformatics) rem
 
 Checks that do not use the adenine count: the hexamer rate per adenine band in every library, spike-ins with known 3' ends in the two 10x nuclei libraries, and long reads. A long-read priming site lies within 10 nt of 87% (BD67 long reads, same cell pool) and 95% (10x_FL, a week-29 organoid 10x library) of the labelled 1179 molecules, against 6% and 17% for sites moved 1 kb upstream.
 
-Under the rule most readers know (six or more consecutive adenines, or 12 or more adenines, in the same 20 nt window; Balázs et al. 2019, SQANTI3), the internal-priming share of the same molecules is 64.4% in library 1417, 31.7% in 1179 and 10.7% in BD67 (all libraries in Supplementary Table N). The rule is binary and, below 12 adenines, needs six in a row. It misses the templated molecules with 8 to 11 adenines and no run of six and flags almost no ambiguous ones, so the shares are lower than under the labels used here; the order of the libraries is the same.
+Under the rule most readers know (six or more consecutive adenines, or 12 or more adenines, in the same 20 nt window; Balázs et al. 2019, BMC Genomics; SQANTI3's default is the 12-adenine half alone, Pardo-Palacios et al. 2024, Nature Methods), the internal-priming share of the same molecules is 64.4% in library 1417, 31.7% in 1179 and 10.7% in BD67 (all libraries in Supplementary Table N). The rule is binary and, below 12 adenines, needs six in a row. It misses the templated molecules with 8 to 11 adenines and no run of six and flags almost no ambiguous ones, so the shares are lower than under the labels used here; the order of the libraries is the same.
 
 ## Settings
 
