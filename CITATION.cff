@@ -6,7 +6,7 @@ authors:
     given-names: Simone
     orcid: "https://orcid.org/0000-0002-1747-614X"
 version: "1.2.0"
-date-released: "<date of release, set by Simone>"
+date-released: "2026-11-25"
 repository-code: "https://github.com/FullLengthFanatic/flight-polyafilter-bench"
 doi: "10.5281/zenodo.23562408"
 identifiers:
